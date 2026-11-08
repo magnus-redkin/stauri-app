@@ -1,0 +1,86 @@
+# ==========================================
+# Node / SvelteKit
+# ==========================================
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.svelte-kit/
+build/
+dist/
+.vite/
+*.tsbuildinfo
+
+# ==========================================
+# Rust / Tauri
+# ==========================================
+src-tauri/target/
+src-tauri/gen/
+src-tauri/tmp/
+**/*.rs.bk
+
+# ==========================================
+# Бинарные sidecar-артефакты
+# ==========================================
+# status-backend и libsds.so собираются в Nix (см. BUILDING.md)
+# и НЕ хранятся в Git: они прикрепляются к GitHub Release как assets.
+src-tauri/binaries/status-backend*
+src-tauri/binaries/*.so
+src-tauri/binaries/*.dylib
+src-tauri/binaries/*.dll
+src-tauri/binaries/*.exe
+
+# ==========================================
+# Tauri build output
+# ==========================================
+src-tauri/target/release/bundle/
+src-tauri/target/debug/bundle/
+
+# ==========================================
+# Environment / secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+
+# ==========================================
+# Logs / runtime
+# ==========================================
+*.log
+logs/
+status.log
+*.pid
+
+# ==========================================
+# Testing / reports
+# ==========================================
+test-results/
+playwright-report/
+coverage/
+.vitest/
+
+# ==========================================
+# Editor / OS
+# ==========================================
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Misc
+# ==========================================
+*.tmp
+tmp/
+TMP/
+.cache/
