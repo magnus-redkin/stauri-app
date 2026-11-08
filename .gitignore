@@ -26,11 +26,24 @@ src-tauri/tmp/
 # ==========================================
 # status-backend и libsds.so собираются в Nix (см. BUILDING.md)
 # и НЕ хранятся в Git: они прикрепляются к GitHub Release как assets.
-src-tauri/binaries/status-backend*
-src-tauri/binaries/*.so
-src-tauri/binaries/*.dylib
-src-tauri/binaries/*.dll
-src-tauri/binaries/*.exe
+#
+# Исключается содержимое, а не каталог: сам `binaries/` должен существовать
+# в свежем клоне, иначе `BUILDING.md` («положите файлы сюда») и шаг CI,
+# создающий пустышки, расходятся с тем, что видит человек.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# ==========================================
+# Артефакты релиза
+# ==========================================
+# Сейчас `release.sh` кладёт их в `target/release/bundle/`, а он исключён
+# целиком. Правила ниже — страховка на случай, если путь изменится:
+# подписанный AppImage рядом с исходниками попадёт в Git незаметно, а
+# весит он десятки мегабайт.
+*.AppImage
+*.AppImage.sha256
+*.sig
+latest.json
 
 # ==========================================
 # Tauri build output
@@ -44,6 +57,10 @@ src-tauri/target/debug/bundle/
 .env
 .env.*
 !.env.example
+# Файл `env` без точки — не наш: это конфиг инструментов разработчика
+# (он был закоммичен при импорте). Правило `.env` его не ловит.
+env
+.aider.*
 *.pem
 *.key
 *.keystore
