@@ -282,5 +282,17 @@
   "at least": "не меньше",
   "Two transactions will be sent: a token approval and the swap itself.": "Уйдут две транзакции: разрешение токена и сам обмен.",
   "Swapping... this can take a while.": "Обмен... это может занять время.",
-  "Confirm and swap": "Подтвердить и обменять"
+  "Confirm and swap": "Подтвердить и обменять",
+  "Invite a contact": "Пригласить контакт",
+  "Join by invite": "Подключить по приглашению",
+  "Invite link": "Ссылка-приглашение",
+  "Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).": "Вставьте ссылку: канал (status.app/cc/…) или контакт (status.app/u/…).",
+  "Scan this code in SIM or send the key to add you as a contact.": "Отсканируйте код в SIM или отправьте ключ, чтобы добавить вас в контакты.",
+  "Profile key is not loaded yet": "Ключ профиля ещё не загружен",
+  "Copied": "Скопировано",
+  "Reject": "Отклонить",
+  "New channel": "Новый канал",
+  "Description (up to 140 bytes)": "Описание (до 140 байт)",
+  "Search": "Поиск",
+  "Contact request sent": "Запрос в контакты отправлен"
 }

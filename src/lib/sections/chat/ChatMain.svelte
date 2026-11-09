@@ -2,23 +2,131 @@
   import { i18n } from '$lib/i18n';
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+  import { untrack } from 'svelte';
   import {
     getChatMessages,
     sendChatMessage,
-    acceptContactRequest,
     isReply,
   } from '$lib/status/messaging';
   import { statusState } from '$lib/stores/statusStore.svelte';
-  import { chatsState, loadChats } from '$lib/stores/chatsStore.svelte';
+  import { scenarioLog, short } from '$lib/utils/scenario';
+  import { channelInviteLink } from '$lib/status/invite';
+  import { canRecord, canComment } from '$lib/status/channelRights';
+  import { chatsState, acceptRequestAndOpen, rejectRequest } from '$lib/stores/chatsStore.svelte';
   import { feedsState } from '$lib/stores/feedsStore.svelte';
-  import { formatMessageText } from '$lib/utils/user';
+  import { formatMessageText, getDisplayName } from '$lib/utils/user';
   import { formatError } from '$lib/utils/errors';
   import { debug, error } from '$lib/utils/log';
   import { invoke } from '@tauri-apps/api/core';
+  import {
+    pendingJoinRequests,
+    acceptJoinRequest,
+    declineJoinRequest,
+    type PendingJoinRequest,
+  } from '$lib/status/akk';
+  import CommentsPage from './CommentsPage.svelte';
+  import ContactInvitePanel from './ContactInvitePanel.svelte';
+  import JoinInvitePanel from './JoinInvitePanel.svelte';
+  import CreateChannelPanel from './CreateChannelPanel.svelte';
 
   let messages = $state<any[]>([]);
   let inputText = $state('');
+
+  /** Запись, чьи комментарии открыты на отдельной странице. `null` — лента. */
+  let openPostId = $state<string | null>(null);
+
+  /** Заявки на вступление, которые ждут решения автора. */
+  let joinRequests = $state<PendingJoinRequest[]>([]);
+
+  /**
+   * Заявки нужны только автору канала — тому, кто может их решать.
+   * Загружаем при смене чата; ошибка даёт пустой список (см. akk.ts).
+   */
+  $effect(() => {
+    const chat = chatsState.selected;
+    const port = statusState.backendPort;
+    if (!chat || chat.type !== 'community' || !chat.communityId || !port) {
+      joinRequests = [];
+      return;
+    }
+    if (!chatsState.communities.find((c) => c.id === chat.communityId)?.canManageUsers) {
+      joinRequests = [];
+      return;
+    }
+    pendingJoinRequests(port, chat.communityId).then((list) => (joinRequests = list));
+  });
+
+  /** Решение по заявке: принять или отклонить, затем перечитать список. */
+  async function decide(request: PendingJoinRequest, accept: boolean) {
+    const port = statusState.backendPort;
+    if (!port || !chatsState.selected?.communityId) return;
+    try {
+      const decision = accept ? 'accept' : 'decline';
+      scenarioLog('create-request', `owner-${decision}`, { request: short(request.id) });
+      if (accept) await acceptJoinRequest(port, request.id);
+      else await declineJoinRequest(port, request.id);
+      joinRequests = await pendingJoinRequests(port, chatsState.selected.communityId);
+      scenarioLog('create-request', `owner-${decision}-done`, { left: joinRequests.length });
+    } catch (e) {
+      error(`[chat] decide join request failed`, e);
+      statusState.errorMsg = formatError(e);
+    }
+  }
   let isLoading = $state(false);
+
+  /** Открыто ли меню «⋯» у канала. Меню открывается по кнопке, а не правым кликом. */
+  let menuOpen = $state(false);
+  let menuNotice = $state('');
+
+  /** Запись, у которой открыто меню «⋯». */
+  let postMenuId = $state<string | null>(null);
+
+  /**
+   * Ссылка на запись.
+   *
+   * В status-go ссылки на отдельное сообщение нет (`DeepLink` знает только
+   * канал), поэтому ссылка ведёт на канал целиком. SIM откроет канал, а
+   * запись в Stauri можно найти по тексту. Это сознательное ограничение.
+   */
+  async function copyPostLink() {
+    postMenuId = null;
+    const chat = chatsState.selected;
+    if (!chat?.communityId) return;
+    const channelId = chat.id.slice(chat.communityId.length);
+    const link = channelInviteLink(channelId, chat.communityId);
+    try {
+      await navigator.clipboard.writeText(link);
+      menuNotice = 'Ссылка скопирована';
+    } catch (e) {
+      menuNotice = 'Не удалось скопировать';
+      error('[chat] copy post link failed', e);
+    }
+    setTimeout(() => (menuNotice = ''), 2500);
+  }
+
+  /**
+   * Копирует ссылку-приглашение на канал.
+   *
+   * Ссылка строится из UUID канала и ключа сообщества (`channelInviteLink`).
+   * Ключ сообщества — тот же, что в `communityId`: у канала АКК сообщество
+   * одно и служебное, поэтому его ключ и есть ключ «канала».
+   */
+  async function copyInvite() {
+    menuOpen = false;
+    const chat = chatsState.selected;
+    if (!chat?.communityId) return;
+    const channelId = chat.id.slice(chat.communityId.length);
+    const link = channelInviteLink(channelId, chat.communityId);
+    try {
+      await navigator.clipboard.writeText(link);
+      menuNotice = 'Ссылка скопирована';
+      scenarioLog('create-auto', 'invite-copied', { channel: short(channelId) });
+    } catch (e) {
+      menuNotice = 'Не удалось скопировать';
+      error('[chat] copy invite failed', e);
+    }
+    setTimeout(() => (menuNotice = ''), 2500);
+  }
   let isAccepting = $state(false);
 
   /**
@@ -103,11 +211,29 @@
    * Без этой проверки в просмотре показывалось бы поле ввода, а отправка
    * падала бы на сервере.
    */
+  /**
+   * Можно ли комментировать в выбранный чат (всем, кому разрешено писать).
+   * Записи в канале — отдельное право: см. `canRecordHere`.
+   */
   const canWrite = $derived(
     !!chatsState.selected &&
       chatsState.selected.type !== 'external' &&
       !chatsState.selected.isPendingRequest &&
-      chatsState.selected.canPost !== false
+      canComment(chatsState.selected.canPost)
+  );
+
+  /**
+   * Можно ли написать новую запись в канал.
+   *
+   * В 1-1 чатах записи пишут обе стороны, поэтому правило только для каналов.
+   * В канале записи пишет только автор (`canPostRecord`).
+   */
+  const canRecordHere = $derived(
+    canWrite &&
+      canRecord(
+        chatsState.selected?.type === 'community' ? chatsState.selected.kind : undefined,
+        chatsState.communities.find((c) => c.id === chatsState.selected?.communityId)?.memberRole
+      )
   );
 
   /** Сообщество выбранного канала — нужно для отправки сообщения. */
@@ -125,6 +251,22 @@
     if (!chat || chat.type !== 'external') return null;
     const url = chat.sourceUrl || chat.id.replace(/^feed:/, '');
     return feedsState.subscriptions.get(url) ?? null;
+  });
+
+  // Загружаем историю при смене чата
+  // Диагностика ввода: при выборе чата пишем, какие условия открывают или
+  // закрывают форму ответа. Только чтение, побочных записей нет.
+  $effect(() => {
+    const chat = chatsState.selected;
+    if (!chat) return;
+    scenarioLog('reply-sync', 'input-state', {
+      chat: short(chat.id),
+      type: chat.type,
+      isPendingRequest: !!chat.isPendingRequest,
+      canPost: chat.canPost ?? null,
+      canWrite: canWrite,
+      canRecord: canRecordHere,
+    });
   });
 
   // Загружаем историю при смене чата
@@ -147,6 +289,44 @@
   });
 
   /**
+   * Обновление открытой ленты по сигналу `messages.new`.
+   *
+   * Раньше история грузилась только при смене чата, поэтому новый ответ из
+   * другого клиента появлялся в счётчике списка, но не в открытой ленте.
+   * Здесь перечитываем историю без очистки и без индикатора загрузки, чтобы
+   * лента не мигала. `untrack` вокруг записи в `messages` обязателен: иначе
+   * эффект, читающий и пишущий `messages`, перезапускал бы сам себя.
+   */
+  $effect(() => {
+    const signal = statusState.lastMessageSignal;
+    const chat = chatsState.selected;
+    const port = statusState.backendPort;
+    if (signal === 0 || !chat || chat.type === 'external' || chat.isPendingRequest || !port) return;
+
+    // Перечитываем, только если сообщение пришло именно в открытый чат.
+    // Сигналы из остальных чатов приходят постоянно (каналы, которых нет в
+    // списке), и без этой проверки открытая лента перечитывалась бы на каждый.
+    if (!statusState.pendingChatIds.has(chat.id)) return;
+
+    untrack(() => {
+      statusState.pendingChatIds.delete(chat.id);
+      scenarioLog('reply-sync', 'signal', { signal, chat: short(chat.id) });
+      getChatMessages(port, chat.id)
+        .then((res) => {
+          const before = messages.length;
+   messages = res.messages;
+   scenarioLog('reply-sync', 'reloaded', {
+     chat: short(chat.id),
+     before,
+     after: res.messages.length,
+     replies: res.messages.filter((m: any) => isReply(m)).length,
+          });
+        })
+        .catch((e) => scenarioLog('reply-sync', 'error', { error: formatError(e) }, 'warn'));
+    });
+  });
+
+  /**
    * Своё ли это сообщение.
    *
    * Бэкенд не пишет `from: 'me'` — там публичный ключ отправителя. Поэтому
@@ -158,6 +338,19 @@
    * после перезагрузки истории приходило с ключом и отрисовывалось как чужое —
    * справа, а потом слева.
    */
+  /**
+   * Имя автора сообщения для отображения.
+   *
+   * Своё сообщение подписываем «Вы». Чужое — по контакту, если он есть, иначе
+   * коротким ключом: контакт нам не обязан быть знаком.
+   */
+  function authorNameOf(msg: any): string {
+    if (isOwn(msg)) return i18n.t('You');
+    const contact = chatsState.contacts.find((c: any) => c.id === msg.from);
+    if (contact) return getDisplayName(contact);
+    return msg.from ? `${msg.from.slice(0, 10)}…` : i18n.t('Unknown');
+  }
+
   function isOwn(msg: any): boolean {
     if (!msg) return false;
     if (msg.from === 'me') return true;
@@ -172,7 +365,13 @@
     const text = inputText;
     inputText = '';
     try {
-      const res = await sendChatMessage(statusState.backendPort, chat.id, text, communityId);
+      const res = await sendChatMessage(
+        statusState.backendPort,
+        chat.id,
+ text,
+        communityId,
+        ''
+      );
       // Бэкенд возвращает в `result.messages` и новое сообщение, и родителя.
       // Для обычной записи просто добавляем оптимистичную копию: ответ
       // подтянется при следующей загрузке истории.
@@ -189,13 +388,25 @@
     }
   }
 
+  async function declineRequest() {
+    const chat = chatsState.selected;
+    if (!chat || !statusState.backendPort) return;
+    isAccepting = true;
+    try {
+      await rejectRequest(chat, statusState.backendPort, chat.id);
+    } catch (e: any) {
+      statusState.errorMsg = `Failed to reject request: ${formatError(e)}`;
+    } finally {
+      isAccepting = false;
+    }
+  }
+
   async function acceptRequest() {
     const chat = chatsState.selected;
     if (!chat || !statusState.backendPort) return;
     isAccepting = true;
     try {
-      await acceptContactRequest(statusState.backendPort, chat.id);
-      await loadChats(true); // Перезагружаем чаты
+      await acceptRequestAndOpen(chat, statusState.backendPort, chat.id);
     } catch (e: any) {
       statusState.errorMsg = `Failed to accept request: ${formatError(e)}`;
     } finally {
@@ -205,26 +416,79 @@
 </script>
 
 <div class="h-full flex flex-col bg-card">
-  {#if !chatsState.selected}
+  {#if chatsState.rightPanel === 'contactInvite'}
+    <ContactInvitePanel />
+  {:else if chatsState.rightPanel === 'joinInvite'}
+    <JoinInvitePanel />
+  {:else if chatsState.rightPanel === 'newChannel'}
+    <CreateChannelPanel />
+  {:else if !chatsState.selected}
     <div class="flex items-center justify-center h-full text-muted-foreground">
       {i18n.t('Select a chat')}
     </div>
   {:else}
     <!-- Заголовок -->
     <div class="p-4 border-b border-border flex items-center gap-2">
-      {#if chatsState.selected.communityName}
-        <span class="text-xs text-muted-foreground truncate">{chatsState.selected.communityName} /</span>
-      {/if}
       <span class="font-bold text-primary truncate">{chatsState.selected.name}</span>
+      {#if chatsState.selected.type === 'community' && chatsState.selected.communityId}
+        <div class="relative ml-auto">
+          <button
+            onclick={() => (menuOpen = !menuOpen)}
+     class="px-2 py-1 rounded hover:bg-secondary text-muted-foreground"
+     aria-label={i18n.t('Channel actions')}
+     aria-haspopup="menu"
+     aria-expanded={menuOpen}
+          >
+            ⋯
+          </button>
+          {#if menuOpen}
+     <div role="menu" class="absolute right-0 top-full mt-1 z-10 min-w-[12rem] rounded-md border border-border bg-card shadow-md py-1 text-sm">
+       <button role="menuitem" onclick={copyInvite} class="w-full text-left px-3 py-2 hover:bg-secondary">
+         {i18n.t('Copy invite link')}
+       </button>
+     </div>
+          {/if}
+        </div>
+      {/if}
+      {#if menuNotice}
+        <span class="text-xs text-muted-foreground">{menuNotice}</span>
+      {/if}
       {#if chatsState.selected.type === 'external'}
         <span class="text-xs bg-secondary text-muted-foreground px-2 py-0.5 rounded">
           {i18n.t('External source')}
+        </span>
+      {/if}
+      {#if joinRequests.length > 0}
+        <span class="ml-auto text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">
+          {i18n.t('Join requests')}: {joinRequests.length}
         </span>
       {/if}
       {#if chatsState.selected.isPendingRequest}
         <span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">{i18n.t('Contact Request')}</span>
       {/if}
     </div>
+
+    {#if joinRequests.length > 0}
+      <ul class="p-3 border-b border-border space-y-2 bg-secondary/40">
+        {#each joinRequests as request (request.id)}
+          <li class="flex items-center gap-2 text-sm">
+     <span class="truncate font-mono text-xs">{request.publicKey.slice(0, 16)}…</span>
+     <button
+       onclick={() => decide(request, true)}
+       class="ml-auto h-7 px-3 rounded-md bg-primary text-primary-foreground text-xs"
+     >
+       {i18n.t('Accept')}
+            </button>
+     <button
+       onclick={() => decide(request, false)}
+       class="h-7 px-3 rounded-md border border-border text-xs"
+     >
+       {i18n.t('Decline')}
+     </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
 
     {#if chatsState.selected.isPendingRequest}
       <!-- Экран запроса -->
@@ -235,6 +499,9 @@
           <button onclick={acceptRequest} disabled={isAccepting} class="px-4 py-2 bg-primary text-primary-foreground rounded-md">
             {isAccepting ? i18n.t('Accepting...') : i18n.t('Accept')}
           </button>
+   <button onclick={declineRequest} disabled={isAccepting} class="px-4 py-2 border border-border rounded-md hover:bg-secondary">
+     {i18n.t('Reject')}
+   </button>
         </div>
       </div>
     {:else if chatsState.selected.type === 'external'}
@@ -322,6 +589,16 @@
         {/if}
         </div>
       </ScrollArea>
+    {:else if openPostId && messages.find((m) => m.id === openPostId)}
+      {@const openPost = messages.find((m) => m.id === openPostId)}
+      <CommentsPage
+ post={openPost}
+        replies={repliesByParent.get(openPostId) || []}
+        authorNameOf={authorNameOf}
+ canWrite={canWrite}
+        onBack={() => (openPostId = null)}
+        onSent={(sent) => (messages = [...messages, sent])}
+      />
     {:else}
       <!-- История. Та же причина `min-h-0` и отступов на внутреннем `div`. -->
       <ScrollArea class="flex-1 min-h-0">
@@ -336,11 +613,35 @@
               {@const replies = repliesByParent.get(post.id) || []}
               <div class="space-y-1">
                 <!-- Запись канала -->
-                <div class="flex {isOwn(post) ? 'justify-end' : 'justify-start'}">
-                  <div class="max-w-[70%] p-2 rounded-lg {isOwn(post) ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground'}">
-                    {formatMessageText(post.text, chatsState.contacts)}
-                  </div>
-                </div>
+  {#if chatsState.selected.type === 'community'}
+    <div class="relative flex justify-end">
+      <button
+ onclick={() => (postMenuId = postMenuId === post.id ? null : post.id)}
+        class="px-1 text-xs text-muted-foreground hover:text-foreground"
+        aria-label={i18n.t('Post actions')}
+        aria-expanded={postMenuId === post.id}
+      >
+        ⋯
+      </button>
+      {#if postMenuId === post.id}
+ <div role="menu" class="absolute right-0 top-full z-10 min-w-[10rem] rounded-md border border-border bg-card shadow-md py-1 text-sm">
+   <button role="menuitem" onclick={copyPostLink} class="w-full text-left px-3 py-2 hover:bg-secondary">
+     {i18n.t('Copy link')}
+   </button>
+        </div>
+      {/if}
+    </div>
+         {/if}
+  <div class="text-sm">
+           <div class="font-bold">{authorNameOf(post)}</div>
+    <div class="whitespace-pre-wrap break-words">{formatMessageText(post.text, chatsState.contacts)}</div>
+  </div>
+  <button
+           onclick={() => (openPostId = post.id)}
+    class="text-xs text-muted-foreground hover:text-foreground mt-1"
+         >
+    {replies.length > 0 ? `${i18n.t('Comments')} (${replies.length})` : i18n.t('Comment')}
+  </button>
 
                 <!--
                   Комментарии под записью.
@@ -369,13 +670,15 @@
         </div>
       </ScrollArea>
 
-      <!-- Ввод -->
-      {#if canWrite}
+      <!-- Ввод ленты. На странице комментариев свой ввод. -->
+      {#if canRecordHere && !openPostId}
         <div class="p-4 border-t border-border flex gap-2">
           <input
             bind:value={inputText}
             placeholder={i18n.t('Type a message...')}
-            onkeydown={(e) => { if (e.key === 'Enter') send(); }}
+            onkeydown={(e) => {
+if (e.key === 'Enter') send();
+     }}
             class="flex-1 px-3 py-2 border border-input rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <button onclick={send} class="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium">

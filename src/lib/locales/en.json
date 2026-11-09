@@ -282,5 +282,17 @@
   "at least": "at least",
   "Two transactions will be sent: a token approval and the swap itself.": "Two transactions will be sent: a token approval and the swap itself.",
   "Swapping... this can take a while.": "Swapping... this can take a while.",
-  "Confirm and swap": "Confirm and swap"
+  "Confirm and swap": "Confirm and swap",
+  "Invite a contact": "Invite a contact",
+  "Join by invite": "Join by invite",
+  "Invite link": "Invite link",
+  "Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).": "Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).",
+  "Scan this code in SIM or send the key to add you as a contact.": "Scan this code in SIM or send the key to add you as a contact.",
+  "Profile key is not loaded yet": "Profile key is not loaded yet",
+  "Copied": "Copied",
+  "Reject": "Reject",
+  "New channel": "New channel",
+  "Description (up to 140 bytes)": "Description (up to 140 bytes)",
+  "Search": "Search",
+  "Contact request sent": "Contact request sent"
 }

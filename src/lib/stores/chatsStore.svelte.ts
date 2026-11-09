@@ -1,9 +1,13 @@
 import { statusState } from './statusStore.svelte';
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { debug, info, warn } from '$lib/utils/log';
 import {
   getChats,
   getContacts,
+  sendContactRequest,
+  acceptContactRequest as acceptContactRequestRpc,
+  declineContactRequest as declineContactRequestRpc,
+  markChatRead,
   getCommunities,
   fetchCommunity,
   communityChannels,
@@ -21,12 +25,20 @@ import {
   isCommunityChat,
   isDirectMessage,
 } from '$lib/status/messaging';
+import {
+  createChannel,
+  validateChannelInput,
+  type CreateChannelParams,
+} from '$lib/status/akk';
 import { getDisplayName } from '$lib/utils/user';
+import { scenarioLog, short } from '$lib/utils/scenario';
+import { parseKind } from '$lib/status/channelKind';
+import { ROLE_OWNER } from '$lib/status/channelRights';
+import { loadOpenedChannels, markChannelOpened } from '$lib/status/openedChannels';
 import { feedChatItems } from './feedsStore.svelte';
-import { isSubscribedChannel, unsubscribeChannel, subscribeChannel } from './chatSubscriptions.svelte';
 import { formatError } from '$lib/utils/errors';
 import type { ChatItem } from '$lib/sections/chat/ChatLeft.svelte';
-import type { Community } from '$lib/status/types';
+import type { Community, CommunityChat } from '$lib/status/types';
 
 export const chatsState = $state({
   items: [] as ChatItem[],
@@ -39,7 +51,12 @@ export const chatsState = $state({
   isJoining: false,
   /** Ошибка последнего вступления — показывается в диалоге. */
   joinError: '',
+  /** Что показывает правая панель: переписка или один из экранов левой панели. */
+  rightPanel: 'chat' as RightPanel,
 });
+
+/** Режимы правой панели раздела «Чат». */
+export type RightPanel = 'chat' | 'contactInvite' | 'joinInvite' | 'newChannel';
 
 /**
  * Результат подключения к сообществу — для интерфейса.
@@ -55,6 +72,7 @@ export type JoinResult =
   | { status: 'joined'; name: string }
   | { status: 'requested'; name: string }
   | { status: 'spectated'; name: string }
+  | { status: 'contact'; name: string }
   | { status: 'failed'; error: string };
 
 /**
@@ -64,8 +82,8 @@ export type JoinResult =
  *
  * Только то, что пользователь сознательно держит под рукой:
  *   * личные чаты (1-1) — всегда;
- *   * каналы сообществ — только отмеченные как добавленные
- *     (`subscribedChannels`, см. `chatSubscriptions`).
+ *   * каналы сообществ — только активные в status-go (`active`). Вступление
+ *     делает канал активным, удаление из списка — `deactivateChat`.
  *
  * ## Почему каналы сообществ больше не добавляются целиком
  *
@@ -79,6 +97,7 @@ export type JoinResult =
  * Сами `Chat`-записи при этом никуда не деваются: сообщения читаются,
  * канал открывается из каталога. Изменился только список.
  */
+
 function buildItems(
   previews: any[],
   contacts: any[],
@@ -89,62 +108,79 @@ function buildItems(
     return contact ? getDisplayName(contact) : getDisplayName(chat);
   };
 
-  const byChatId = new SvelteMap<string, ChatItem>();
-
-  // 1. Добавленные каналы сообществ: берём из самих сообществ, потому что
-  //    `ChatsPreview` не всегда содержит канал сразу после вступления, а
-  //    `Community.chats` заполнен и несёт `categoryID` для группировки.
+  // Метаданные каналов сообществ (имя, категория, право писать) — из сообществ.
+  // Сам состав списка — из превью: канал в списке, только если status-go
+  // считает его активным. Так удаление (`deactivateChat`) убирает канал сразу
+  // и не даёт ему вернуться при следующей загрузке.
+  const channelMeta = new SvelteMap<string, CommunityChat & { owned: boolean }>();
   for (const channel of communityChannels(communities)) {
-    if (!isSubscribedChannel(channel.id)) continue;
-    byChatId.set(channel.id, {
-      id: channel.id,
-      name: channel.name,
-      lastMessage: '',
-      type: 'community',
-      communityId: channel.communityId,
-      communityName: channel.communityName,
-      categoryId: channel.categoryID,
-      canPost: channel.canPost,
-    });
+    const community = communities.find((c) => c.id === channel.communityId);
+    channelMeta.set(channel.id, { ...channel, owned: community?.memberRole === ROLE_OWNER });
   }
 
-  // 2. Всё остальное из превью чатов.
-  const standalone: ChatItem[] = [];
+  const items: ChatItem[] = [];
+  const openedChannels = loadOpenedChannels();
   for (const chat of previews) {
-    if (byChatId.has(chat.id)) {
-      // Канал сообщества уже добавлен — дополняем последним сообщением.
-      const existing = byChatId.get(chat.id)!;
-      existing.lastMessage = chat.lastMessage?.text || '';
-      existing.unreadCount = chat.unviewedMessagesCount || 0;
+    // Неактивный чат — значит удалён (`deactivateChat`), и он не должен
+    // возвращаться в список. Исключение — входящий запрос в контакты: он тоже
+    // приходит как неактивный, но его надо показать, чтобы принять.
+    const pendingContactRequest = chat.lastMessage?.contactRequestState === 1;
+    if (chat.active === false && !pendingContactRequest) {
+      // Неактивный чат без запроса — удалённый; логируем, чтобы видеть, что скрыто.
+      if (!isCommunityChat(chat) && !isDirectMessage(chat)) continue;
+      scenarioLog('reply-sync', 'hidden-inactive', { chat: short(chat.id), type: chat.chatType }, 'info');
+      continue;
+    }
+    if (pendingContactRequest) {
+      scenarioLog('reply-sync', 'incoming-request', { chat: short(chat.id), type: chat.chatType }, 'info');
+    }
+
+    if (isCommunityChat(chat)) {
+      const meta = channelMeta.get(chat.id);
+      // Чужой канал показываем только если его открывали по ссылке. Спектация
+      // создаёт все каналы чужого сообщества активными, и без этого в списке
+      // оказались бы все они.
+      if (!meta?.owned && !openedChannels.has(chat.id)) continue;
+      items.push({
+        id: chat.id,
+        // Свой АКК-канал (владелец сообщества): имя сообщества и есть имя канала,
+        // служебный `general` скрыт. Чужой канал: своё имя канала, а название
+ // сообщества — в подписи, иначе все строки сообщества выглядели бы одинаково.
+        name: meta?.owned
+          ? meta?.communityName || chat.name
+   : `${chat.name} · ${meta?.communityName ?? ''}`.replace(/ · $/, ''),
+        lastMessage: chat.lastMessage?.text || '',
+        type: 'community',
+        communityId: chat.communityId || meta?.communityId || undefined,
+        communityName: meta?.communityName,
+        categoryId: chat.categoryId || meta?.categoryID || undefined,
+ canPost: meta?.canPost,
+        kind: parseKind(meta?.description).kind,
+        unreadCount: chat.unviewedMessagesCount || 0,
+      });
       continue;
     }
 
-    // Канал сообщества, который пользователь не добавлял, в списке не нужен.
-    // Личные чаты и уже существующие публичные каналы проходят дальше: их
-    // создаёт сам пользователь, а не просмотр сообщества.
-    if (isCommunityChat(chat) && !isSubscribedChannel(chat.id)) {
-      debug(`[chats] skipping unsubscribed community channel ${chat.id}`);
-      continue;
-    }
-
-    standalone.push({
+    items.push({
       id: chat.id,
       name: nameFor(chat),
       lastMessage: chat.lastMessage?.text || '',
-      type: isCommunityChat(chat) ? 'community' : isDirectMessage(chat) ? 'direct' : 'channel',
-      communityId: chat.communityId || undefined,
+      type: isDirectMessage(chat) ? 'direct' : 'channel',
       categoryId: chat.categoryId || undefined,
       unreadCount: chat.unviewedMessagesCount || 0,
       isPendingRequest:
-        chat.active === false && chat.lastMessage?.contactRequestState === 1,
+ chat.active === false && chat.lastMessage?.contactRequestState === 1,
     });
   }
 
-  // 3. Добавленные каналы сообществ идут первыми, как отдельная группа;
-  //    личные и публичные — после. Так внешний источник не сможет вытеснить
-  //    обычные чаты наверх.
-  const communityItems = [...byChatId.values()];
-  return [...communityItems, ...standalone];
+  // Один id — одна строка: дубль не должен стать вторым элементом, иначе
+  // удаление одной строки уберёт обе.
+  const seen = new SvelteSet<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 /**
@@ -236,6 +272,47 @@ export async function loadChats(force = false): Promise<void> {
 }
 
 /**
+ * Создаёт канал АКК и открывает его.
+ *
+ * Канал — это техническое сообщество с одним каналом (см. `status/akk.ts`).
+ * Пользователь этого не видит: он создал канал и сразу может в него писать.
+ *
+ * Канал сразу отмечаем как добавленный: иначе `buildItems` спрячет его,
+ * потому что каналы сообществ в список попадают только по отметке.
+ */
+export async function createAndOpenChannel(
+  params: CreateChannelParams
+): Promise<{ ok: boolean; error?: string }> {
+  const port = statusState.backendPort;
+  if (!port) return { ok: false, error: 'Backend is not running' };
+
+  const invalid = validateChannelInput(params.name, params.description);
+  if (invalid) return { ok: false, error: invalid };
+
+  const scenario = params.kind === 'news' ? 'create-auto' : 'create-request';
+  scenarioLog(scenario, '1-start', { name: params.name, kind: params.kind });
+
+  try {
+    const created = await createChannel(port, params);
+    scenarioLog(scenario, '2-created', {
+      communityId: short(created.communityId),
+      chatId: short(created.chatId),
+    });
+    await loadChats(true);
+    const inList = chatsState.items.some((c) => c.id === created.chatId);
+    scenarioLog(scenario, '3-in-list', { inList, items: chatsState.items.length },
+      inList ? 'info' : 'warn');
+    chatsState.selected =
+      chatsState.items.find((c) => c.id === created.chatId) ?? null;
+    return { ok: true };
+  } catch (e) {
+    scenarioLog(scenario, 'error', { error: formatError(e) }, 'warn');
+    warn('[chats] create channel failed:', e);
+    return { ok: false, error: formatError(e) };
+  }
+}
+
+/**
  * Выбирает чат по id (если он есть в списке).
  */
 export function selectChat(chatId: string) {
@@ -252,8 +329,47 @@ export function selectChat(chatId: string) {
 /**
  * Выбирает объект чата напрямую.
  */
+/**
+ * Принимает входящий запрос на 1-1 и открывает этот чат.
+ *
+ * После accept контакт становится активным, но список и выбор не обновляются
+ * сами: без явного `setSelectedChat` правая панель оставалась бы на экране
+ * запроса, а слева чат появлялся без выбора.
+ */
+export async function acceptRequestAndOpen(item: ChatItem, port: number, publicKey: string): Promise<void> {
+  await acceptContactRequestRpc(port, publicKey);
+  await loadChats(true);
+  const fresh = chatsState.items.find((c) => c.id === item.id) ?? null;
+  setSelectedChat(fresh);
+  scenarioLog('reply-sync', 'accepted', { chat: short(item.id), opened: !!fresh }, 'info');
+}
+
+/**
+ * Отклоняет входящий запрос. Запрос исчезает из списка, а правая панель
+ * возвращается к начальному состоянию «выберите чат».
+ */
+export async function rejectRequest(item: ChatItem, port: number, publicKey: string): Promise<void> {
+  await declineContactRequestRpc(port, publicKey);
+  if (chatsState.selected?.id === item.id) setSelectedChat(null);
+  await loadChats(true);
+  scenarioLog('reply-sync', 'rejected', { chat: short(item.id) }, 'info');
+}
+
+/** Переключает правую панель раздела «Чат». */
+export function setRightPanel(mode: RightPanel) {
+  chatsState.rightPanel = mode;
+}
+
 export function setSelectedChat(chat: ChatItem | null) {
   chatsState.selected = chat;
+  // Выбор чата возвращает правую панель к переписке.
+  if (chat) chatsState.rightPanel = 'chat';
+  // Открытие чата = прочитано: сбрасываем счётчик непрочитанных на бэкенде.
+  // Без этого «1» висит до перезагрузки списка и возвращается с ним.
+  if (chat && chat.unreadCount && statusState.backendPort) {
+    markChatRead(statusState.backendPort, chat.id).catch(() => {});
+    chatsState.items = chatsState.items.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
+  }
 }
 
 /** Сообщество, к которому относится выбранный чат (или null). */
@@ -300,6 +416,33 @@ export function selectedCommunity(): Community | null {
  *   ожидает оказаться в конкретном канале. Если канала нет (переименован,
  *   скрыт правами) — молча остаёмся на списке, это не ошибка подключения.
  */
+/**
+ * Заявка в контакты по ключу из ссылки `status.app/u/…#<ключ>`.
+ *
+ * Ключ — multibase base58btc, как у сообщества; разбираем тем же кодом.
+ * Заявку отправляет status-go. Чат появится после принятия контакта.
+ */
+export async function requestContactById(rawKey: string): Promise<JoinResult> {
+  if (!statusState.backendPort) return { status: 'failed', error: 'Backend is not running' };
+
+  const publicKey = communityIdFromInvite(`#${rawKey}`);
+  if (!/^0x[0-9a-fA-F]{66}$/.test(publicKey)) {
+    return { status: 'failed', error: 'Не удалось разобрать ключ контакта' };
+  }
+
+  scenarioLog('reply-sync', 'contact-request-1-start', { contact: short(publicKey) });
+  try {
+    await sendContactRequest(statusState.backendPort, publicKey, '');
+    scenarioLog('reply-sync', 'contact-request-2-sent', { contact: short(publicKey) });
+    await loadChats(true);
+    return { status: 'contact', name: short(publicKey) };
+  } catch (e) {
+    const error = formatError(e);
+    scenarioLog('reply-sync', 'contact-request-error', { error }, 'warn');
+    return { status: 'failed', error };
+  }
+}
+
 export async function spectateCommunityById(
   rawId: string,
   channelId?: string | null
@@ -325,18 +468,30 @@ export async function spectateCommunityById(
     // префиксу сообщества, а не сравнением с голым UUID.
     if (channelId) {
       const targetId = communityChatId(communityId, channelId);
-      // Ссылка ведёт к конкретному каналу — значит, пользователь хочет его
-      // видеть. Без отметки канал отфильтровался бы из списка, и переход по
-      // ссылке заканчивался бы ничем.
-      subscribeChannel(targetId);
+      // Отмечаем до поиска: иначе фильтр «чужой канал — только открытые» не
+      // пропустит канал, который пользователь только что открыл по ссылке.
+      markChannelOpened(targetId);
       await loadChats(true);
+      // Ссылка ведёт к конкретному каналу — пользователь хочет его видеть.
+      // Канал, удалённый у нас (`deactivateChat`), спектация сама не возвращает:
+      // она пропускает уже известное сообщество. Выход и повторная спектация
+      // снова создают его каналы активными. Выход деактивирует все каналы
+      // сообщества, поэтому делаем его только если нужного канала нет в списке.
+      if (!chatsState.items.some((i) => i.id === targetId)) {
+        scenarioLog('create-request', 'reopen-1-leave', { community: short(communityId) });
+        await leaveCommunity(statusState.backendPort, communityId);
+        await spectateCommunity(statusState.backendPort, communityId);
+        await loadChats(true);
+      }
 
       const target = chatsState.items.find((i) => i.id === targetId);
       if (target) {
+        // Отмечаем открытым: после перезагрузки канал останется в списке, а
+        // остальные каналы этого чужого сообщества — скрыты.
+        markChannelOpened(targetId);
         chatsState.selected = target;
         debug(`[chats] opened channel ${channelId} from invite link`);
       } else {
-        unsubscribeChannel(targetId);
         warn(`[chats] channel ${channelId} not found in ${communityId}`);
       }
     }
@@ -403,9 +558,15 @@ export async function requestJoinCommunity(
   const port = statusState.backendPort;
   chatsState.isJoining = true;
   chatsState.joinError = '';
+  scenarioLog('create-request', 'join-1-start', { community: short(communityId) });
   try {
     const community = await fetchCommunity(port, communityId).catch(() => null);
     const name = community?.name || communityId;
+    scenarioLog('create-request', 'join-2-fetched', {
+      name,
+      access: community?.permissions?.access ?? null,
+      canRequestAccess: community?.canRequestAccess ?? null,
+    });
 
     const toSign = await generateJoiningRequestsForSigning(
       port,
@@ -435,7 +596,12 @@ export async function requestJoinCommunity(
       ? addresses.airdropAddress
       : revealed[0];
 
-    await requestToJoinCommunity(port, communityId, revealed, signatures, airdrop);
+    scenarioLog('create-request', 'join-3-signed', { addresses: revealed.length });
+    const reqRes = await requestToJoinCommunity(port, communityId, revealed, signatures, airdrop);
+    scenarioLog('create-request', 'join-4-sent', {
+      ok: !!reqRes,
+      error: reqRes?.error?.message ?? null,
+    }, reqRes?.error ? 'warn' : 'info');
     await loadChats(true);
 
     // Открытое сообщество (`AUTO_ACCEPT`) принимает заявку само, но ответ
@@ -445,6 +611,7 @@ export async function requestJoinCommunity(
     return { status: 'requested', name };
   } catch (e) {
     const error = formatError(e);
+    scenarioLog('create-request', 'join-error', { error }, 'warn');
     chatsState.joinError = error;
     return { status: 'failed', error };
   } finally {
@@ -524,6 +691,13 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
   //
   // Сжатый вариант разбирает Rust (`parseChannelInvite`): в webview brotli
   // не декодируется.
+  // Контакт: профиль из «Share profile». Отправляем заявку в контакты; чат
+  // появится, когда контакт примет её (см. docs/ru/akk_scheme.md).
+  const contactMatch = value.match(/status\.app\/u\/[^#\s]*#(\S+)/i);
+  if (contactMatch) {
+    return await requestContactById(contactMatch[1]);
+  }
+
   if (/status\.app\/cc\//i.test(value)) {
     const parsed = await parseChannelInvite(value).catch(() => null);
     return await spectateCommunityById(
@@ -546,7 +720,7 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
   return {
     status: 'failed',
     error:
-      'Paste an invite link or a 0x community id. Public channels cannot be created: they have no owner and no way to restrict posting.',
+      'Вставьте ссылку на канал (status.app/cc/…). Найти канал по имени нельзя: каталога каналов нет.',
   };
 }
 
@@ -555,7 +729,8 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
  *
  * ## Что именно удаляется
  *
- * Для канала сообщества — **только наша отметка** (`unsubscribeChannel`).
+ * Для канала сообщества — `deactivateChat` без истории: канал перестаёт
+ * приходить и исчезает из списка. История не подтягивается заново.
  * Чат в status-go остаётся: канал можно снова открыть из каталога, и история
  * при этом цела. Так «убрать с глаз» и «стереть историю» перестают быть
  * одним действием, что важно — раньше удаление из списка необратимо стирало
@@ -574,10 +749,19 @@ export async function removeChat(item: ChatItem): Promise<{ ok: boolean; error?:
   // бэкенду. `deactivateChat` здесь был бы необратим: `preserveHistory` по
   // умолчанию не сохраняет историю.
   if (item.type === 'community') {
-    unsubscribeChannel(item.id);
+    if (!statusState.backendPort) return { ok: false, error: 'Backend is not running' };
+    // Деактивация в status-go: канал перестаёт приходить и исчезает из списка.
+    // История не сохраняется и заново не подтягивается (решение пользователя).
+    try {
+      await deactivateChat(statusState.backendPort, item.id, false);
+    } catch (e) {
+      const error = formatError(e);
+      scenarioLog('create-auto', 'remove-failed', { channel: short(item.id), error }, 'warn');
+      return { ok: false, error };
+    }
     chatsState.items = chatsState.items.filter((c) => c.id !== item.id);
     if (chatsState.selected?.id === item.id) chatsState.selected = null;
-    info(`[chats] unsubscribed channel ${item.id}`);
+    info(`[chats] deactivated channel ${short(item.id)}`);
     return { ok: true };
   }
 

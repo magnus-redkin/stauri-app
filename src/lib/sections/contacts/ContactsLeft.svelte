@@ -5,6 +5,7 @@
   import { contactsState, loadContacts, selectContact, acceptRequest } from '$lib/stores/contactsStore.svelte';
   import { statusState } from '$lib/stores/statusStore.svelte';
   import { getDisplayName } from '$lib/utils/user';
+  import { isIncomingRequest } from '$lib/status/contactState';
 
   // Теперь пропсов для данных нет, только для навигации (если нужно)
   let { onOpenChat }: { onOpenChat?: (chatId: string) => void } = $props();
@@ -57,7 +58,7 @@
                 <div class="text-xs text-muted-foreground font-mono truncate">{contact.id.substring(0, 10)}...</div>
               </div>
             </div>
-            {#if contact.contactRequestState === 3}
+            {#if isIncomingRequest(contact)}
               <button onclick={(e) => { e.stopPropagation(); acceptRequest(contact.id); }} class="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:opacity-90">
                 {i18n.t('Accept')}
               </button>

@@ -282,5 +282,17 @@
   "at least": "al menos",
   "Two transactions will be sent: a token approval and the swap itself.": "Se enviarán dos transacciones: la aprobación del token y el intercambio.",
   "Swapping... this can take a while.": "Intercambiando... esto puede tardar.",
-  "Confirm and swap": "Confirmar e intercambiar"
+  "Confirm and swap": "Confirmar e intercambiar",
+  "Invite a contact": "Invitar contacto",
+  "Join by invite": "Unirse por invitación",
+  "Invite link": "Enlace de invitación",
+  "Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).": "Pegue un enlace de invitación: canal (status.app/cc/…) o contacto (status.app/u/…).",
+  "Scan this code in SIM or send the key to add you as a contact.": "Escanee este código en SIM o envíe la clave para añadirle como contacto.",
+  "Profile key is not loaded yet": "La clave del perfil aún no está cargada",
+  "Copied": "Copiado",
+  "Reject": "Rechazar",
+  "New channel": "Nuevo canal",
+  "Description (up to 140 bytes)": "Descripción (hasta 140 bytes)",
+  "Search": "Buscar",
+  "Contact request sent": "Solicitud de contacto enviada"
 }

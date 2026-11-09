@@ -22,7 +22,7 @@ describe('ContactsLeft', () => {
   beforeEach(() => {
     contactsState.items = [
       { id: '0x123abc', displayName: 'Alice', mutual: true },
-      { id: '0x456def', displayName: 'Bob', contactRequestState: 3 },
+      { id: '0x456def', displayName: 'Bob', contactRequestRemoteState: 3, contactRequestLocalState: 0 },
     ];
     contactsState.isLoading = false;
   });
@@ -45,7 +45,7 @@ describe('ContactsLeft', () => {
 
   it('должен показывать кнопку Accept для pending-запроса', () => {
     render(ContactsLeft);
-    // У Bob contactRequestState === 3, значит, должна быть кнопка Accept
+    // Bob прислал запрос (RemoteState = Received), мы его не добавляли — кнопка Accept
     expect(screen.getAllByText(/Accept/i).length).toBeGreaterThan(0);
   });
 });

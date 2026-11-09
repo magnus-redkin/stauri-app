@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { markChannelOpened } from '$lib/status/openedChannels';
 import {
   chatsState,
   loadChats,
@@ -23,10 +24,6 @@ import {
   channelIdFromInvite,
   communityIdFromInvite,
 } from '$lib/status/messaging';
-import {
-  subscribeChannel,
-  resetChannelSubscriptions,
-} from './chatSubscriptions.svelte';
 
 // Мокаем API мессенджинга. `communityChannels` и предикаты оставляем
 // настоящими: они чистая логика, и мокать их значило бы проверять мок.
@@ -61,8 +58,8 @@ const TYPE_COMMUNITY = 6;
 
 describe('chatsStore', () => {
   beforeEach(() => {
+    localStorage.clear();
     resetChats();
-    resetChannelSubscriptions();
     vi.clearAllMocks();
     (getCommunities as any).mockResolvedValue([]);
   });
@@ -70,7 +67,8 @@ describe('chatsStore', () => {
   it('должен загружать чаты и контакты', async () => {
     const previews = [
       { id: '0x123', name: 'Chat 1', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'Hello' }, active: true },
-      { id: '0x456', name: 'Chat 2', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'World' }, active: false },
+      // Входящий запрос в контакты: неактивен, но показывается, чтобы принять.
+      { id: '0x456', name: 'Chat 2', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'World', contactRequestState: 1 }, active: false },
     ];
     const contacts = [{ id: '0x123', alias: 'Alice' }];
 
@@ -86,6 +84,18 @@ describe('chatsStore', () => {
     expect(chatsState.items[1].name).toBe('Chat 2'); // Из чата
   });
 
+  it('не показывает удалённый (неактивный) личный чат без запроса', async () => {
+    (getChats as any).mockResolvedValue([
+      { id: '0x789', name: 'Старый', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'x' }, active: false },
+    ]);
+    (getContacts as any).mockResolvedValue({ result: [] });
+    (getCommunities as any).mockResolvedValue([]);
+
+    await loadChats();
+
+    expect(chatsState.items.map((c) => c.id)).not.toContain('0x789');
+  });
+
   it('различает личные чаты и публичные каналы по числовому chatType', async () => {
     (getChats as any).mockResolvedValue([
       { id: '0xabc', name: 'DM', chatType: TYPE_ONE_TO_ONE, active: true },
@@ -97,6 +107,46 @@ describe('chatsStore', () => {
 
     expect(chatsState.items.find(c => c.id === '0xabc')?.type).toBe('direct');
     expect(chatsState.items.find(c => c.id === 'status')?.type).toBe('channel');
+  });
+
+  it('имя канала: у своего канала — имя сообщества, у чужого — имя канала с названием сообщества', async () => {
+    const communities = [
+      {
+        id: '0xmine',
+ name: 'Мой АКК',
+        joined: true,
+ memberRole: 1,
+        chats: { general: { id: 'general', name: 'general', canPost: true, canView: true } },
+ categories: {},
+      },
+      {
+        id: '0xlogos',
+        name: 'Logos',
+ joined: true,
+        memberRole: 0,
+        chats: {
+          intros: { id: 'intros', name: 'intros', canPost: false, canView: true },
+          memes: { id: 'memes', name: 'memes', canPost: false, canView: true },
+ },
+        categories: {},
+      },
+    ];
+    (getChats as any).mockResolvedValue([
+      { id: '0xminegeneral', name: 'general', chatType: TYPE_COMMUNITY, active: true, communityId: '0xmine' },
+      { id: '0xlogosintros', name: 'intros', chatType: TYPE_COMMUNITY, active: true, communityId: '0xlogos' },
+      { id: '0xlogosmemes', name: 'memes', chatType: TYPE_COMMUNITY, active: true, communityId: '0xlogos' },
+    ]);
+    (getContacts as any).mockResolvedValue({ result: [] });
+    (getCommunities as any).mockResolvedValue(communities);
+
+    markChannelOpened('0xlogosintros');
+    markChannelOpened('0xlogosmemes');
+    await loadChats();
+
+    const byId = Object.fromEntries(chatsState.items.map((c) => [c.id, c.name]));
+    expect(byId['0xminegeneral']).toBe('Мой АКК');
+    expect(byId['0xlogosintros']).toBe('intros · Logos');
+    expect(byId['0xlogosmemes']).toBe('memes · Logos');
   });
 
   it('показывает канал сообщества, если он добавлен пользователем', async () => {
@@ -113,12 +163,13 @@ describe('chatsStore', () => {
     ];
     (getChats as any).mockResolvedValue([
       { id: '0xdm', name: 'DM', chatType: TYPE_ONE_TO_ONE, active: true },
+      // Канал сообщества в списке, только если status-go считает его активным.
+      { id: '0xcommgeneral', name: 'general', chatType: TYPE_COMMUNITY, active: true, communityId: '0xcomm' },
     ]);
     (getContacts as any).mockResolvedValue({ result: [] });
     (getCommunities as any).mockResolvedValue(communities);
-    // Пользователь открыл канал из каталога — отметка есть.
-    subscribeChannel('0xcommgeneral');
 
+    markChannelOpened('0xcommgeneral');
     await loadChats();
 
     // id канала в ответе — склейка communityID + channelID, как Chat.id в
@@ -130,8 +181,8 @@ describe('chatsStore', () => {
     expect(channel?.communityName).toBe('Test Community');
     expect(channel?.categoryId).toBe('cat-1');
 
-    // Добавленные каналы идут первыми — внешние источники не вытеснят чаты.
-    expect(chatsState.items[0].id).toBe('0xcommgeneral');
+    // Порядок задаёт превью status-go; проверяем, что канал в списке, а не место.
+    expect(chatsState.items.map((c) => c.id)).toContain('0xcommgeneral');
   });
 
   it('не показывает канал сообщества без отметки — список не должен быть списком сообществ', async () => {
@@ -152,8 +203,9 @@ describe('chatsStore', () => {
     ];
     (getChats as any).mockResolvedValue([
       { id: '0xdm', name: 'DM', chatType: TYPE_ONE_TO_ONE, active: true },
-      { id: '0xcommgeneral', name: 'general', chatType: TYPE_COMMUNITY, active: true },
-      { id: '0xcommnews', name: 'news', chatType: TYPE_COMMUNITY, active: true },
+      // Неактивные каналы (удалены через deactivateChat) в списке не показываем.
+      { id: '0xcommgeneral', name: 'general', chatType: TYPE_COMMUNITY, active: false },
+      { id: '0xcommnews', name: 'news', chatType: TYPE_COMMUNITY, active: false },
     ]);
     (getContacts as any).mockResolvedValue({ result: [] });
     (getCommunities as any).mockResolvedValue(communities);
@@ -185,8 +237,8 @@ describe('chatsStore', () => {
     ]);
     (getContacts as any).mockResolvedValue({ result: [] });
     (getCommunities as any).mockResolvedValue(communities);
-    subscribeChannel('0xcommgeneral');
 
+    markChannelOpened('0xcommgeneral');
     await loadChats();
 
     const channel = chatsState.items.find(c => c.id === '0xcommgeneral');
@@ -361,7 +413,8 @@ describe('публичные каналы больше не создаются',
 
     expect(result.status).toBe('failed');
     if (result.status === 'failed') {
-      expect(result.error).toContain('invite link');
+      expect(result.error).toContain('ссылку на канал');
+      expect(result.error).not.toMatch(/сообществ|community/i);
     }
   });
 

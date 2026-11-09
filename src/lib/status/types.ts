@@ -28,6 +28,8 @@ export interface NodeLoginEvent extends StatusEventBase {
       'key-uid': string;
       'display-name': string;
       'public-key': string;
+      /** Сжатый ключ `zQ3…` — основа ссылки на профиль. */
+      compressedKey?: string;
       mnemonic: string;
       /** Трёхсловный псевдоним, например "Sarcastic Kind Eidolonhelvum". */
       alias?: string;
@@ -172,6 +174,16 @@ export interface Community {
    * `permissions.access` через `communityAccess()`.
    */
   canRequestAccess?: boolean;
+  /**
+   * Может ли текущий пользователь решать заявки (владелец или админ).
+   * Для АКК это признак «автор канала».
+   */
+  canManageUsers?: boolean;
+  /**
+   * Роль текущего пользователя в сообществе (`CommunityMember_Roles`):
+   * 1 — владелец (автор канала), 4 — админ, 0 — обычный участник.
+   */
+  memberRole?: number;
   /** Вступление без заявки (AUTO_ACCEPT) и мы ещё не участники. */
   canJoin?: boolean;
   permissions?: CommunityPermissions;

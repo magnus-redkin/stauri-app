@@ -923,6 +923,34 @@ export async function acceptContactRequest(port: number, contactPublicKey: strin
   });
 }
 
+/**
+ * Отклоняет входящий запрос контакта.
+ *
+ * status-go ищет запрос по `id`; если записи с таким id нет, использует
+ * детерминированный `defaultContactRequestID(contactId)`. Поэтому передаём
+ * тот же вычисленный id: он совпадает с тем, что лежит в базе для запроса от
+ * этого контакта.
+ */
+export async function declineContactRequest(port: number, contactPublicKey: string): Promise<any> {
+  const id = '0x' + contactPublicKey.replace(/^0x/, '') + '20';
+  return await statusFetch(port, 'CallRPC', {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'wakuext_declineContactRequest',
+    params: [{ id, contactId: contactPublicKey }],
+  });
+}
+
+/** Помечает все сообщения чата прочитанными (сбрасывает счётчик «1»). */
+export async function markChatRead(port: number, chatId: string): Promise<any> {
+  return await statusFetch(port, 'CallRPC', {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'wakuext_markAllRead',
+    params: [chatId],
+  });
+}
+
 export async function sendContactRequest(
   port: number,
   publicKey: string,

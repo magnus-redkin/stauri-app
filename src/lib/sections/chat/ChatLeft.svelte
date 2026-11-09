@@ -1,16 +1,14 @@
 <script lang="ts">
   import { i18n } from '$lib/i18n';
-  import { SvelteSet } from 'svelte/reactivity';
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
-  import { chatsState, setSelectedChat, joinByInput, removeChat } from '$lib/stores/chatsStore.svelte';
+  import { chatsState, setSelectedChat, removeChat, setRightPanel } from '$lib/stores/chatsStore.svelte';
   import { removeFeed, feedChatItems } from '$lib/stores/feedsStore.svelte';
 
   let { onSelectChat }: { onSelectChat?: (chat: ChatItem) => void } = $props();
 
   let searchQuery = $state('');
-
-  /** Результат последнего подключения — показывается под полем. */
-  let joinMessage = $state<{ kind: 'ok' | 'pending' | 'error'; text: string } | null>(null);
+  /** Поле поиска: клик по иконке поиска возвращает на него фокус. */
+  let searchEl = $state<HTMLInputElement | null>(null);
 
   export type ChatItem = {
     id: string;
@@ -34,6 +32,8 @@
     categoryId?: string;
     /** Можно ли писать. Для канала без права постинга ввод не показывается. */
     canPost?: boolean;
+    /** Тип канала АКК (news / request / issues); см. channelKind.ts. */
+    kind?: 'news' | 'request' | 'issues';
     /** Внешний источник: чей элемент и откуда он пришёл. */
     source?: string;
     sourceUrl?: string;
@@ -92,52 +92,12 @@
   const allItems = $derived([...feedItems, ...filteredItems]);
 
   /**
-   * Свёрнутые сообщества: id -> true.
+   * Плоский список без заголовков сообществ.
    *
-   * `SvelteSet` даёт реактивность на add/delete без пересоздания коллекции.
-   * По умолчанию всё развёрнуто: скрывать каналы пользователь не просил.
+   * В АКК пользователь видит каналы, а не сообщества: каждый канал — отдельное
+   * техническое сообщество, и его имя в списке не выводим.
    */
-  const collapsed = new SvelteSet<string>();
-
-  /**
-   * Список с заголовками групп сообществ.
-   *
-   * Плоский массив: элементы сообществ идут блоком, перед каждым блоком —
-   * заголовок с именем сообщества. Так список остаётся одномерным (быстрее
-   * и проще для поиска), но визуально разделён.
-   *
-   * Свёрнутая группа отдаёт только заголовок: каналы под ней не попадают в
-   * вывод. При поиске свёрнутость игнорируется — иначе ввод не находил бы
-   * то, что пользователь сам спрятал, и это выглядело бы как поломка.
-   */
-  const groupedItems = $derived.by(() => {
-    const searching = searchQuery.trim().length > 0;
-    const out: Array<{ kind: 'header'; id: string; label: string } | { kind: 'item'; item: ChatItem }> = [];
-    const seen = new SvelteSet<string>();
-
-    for (const item of allItems) {
-      if (item.type === 'community' && item.communityId) {
-        if (!seen.has(item.communityId)) {
-          seen.add(item.communityId);
-          out.push({
-            kind: 'header',
-            id: item.communityId,
-            label: item.communityName || item.communityId,
-          });
-        }
-        // Скрываем каналы свёрнутой группы, но не во время поиска.
-        if (!searching && collapsed.has(item.communityId)) continue;
-      }
-      out.push({ kind: 'item', item });
-    }
-    return out;
-  });
-
-  function toggleGroup(communityId: string) {
-    if (collapsed.has(communityId)) collapsed.delete(communityId);
-    else collapsed.add(communityId);
-  }
-
+  const groupedItems = $derived(allItems.map((item) => ({ kind: 'item' as const, item })));
   function select(item: ChatItem) {
     setSelectedChat(item);
     onSelectChat?.(item);
@@ -161,86 +121,63 @@
 
     const res = await removeChat(item);
     if (!res.ok) {
-      joinMessage = { kind: 'error', text: res.error || 'Failed to remove' };
+      console.warn(`[chat] remove failed: ${res.error || 'unknown'}`);
     }
   }
 
-  /**
-   * Подключается к сообществу или каналу по введённой строке.
-   *
-   * Разбор «что это» — на стороне стора (`joinByInput`): пользователь вводит
-   * то, что у него есть (ссылку или 0x-id), а не выбирает тип из списка.
-   *
-   * Для сообщества результатом будет `spectated`, а не `joined`: вступление
-   * требует выбора раскрываемых адресов и пароля, поэтому оно живёт на
-   * экране превью, а не в этом поле.
-   */
-  async function submitJoin() {
-    if (!searchQuery.trim() || chatsState.isJoining) return;
-
-    joinMessage = null;
-    const result = await joinByInput(searchQuery);
-
-    if (result.status === 'joined') {
-      joinMessage = { kind: 'ok', text: i18n.t('Joined') + ': ' + result.name };
-      searchQuery = '';
-    } else if (result.status === 'requested') {
-      joinMessage = { kind: 'pending', text: i18n.t('Request sent') + ': ' + result.name };
-      searchQuery = '';
-    } else if (result.status === 'spectated') {
-      joinMessage = { kind: 'ok', text: i18n.t('Opened for viewing') + ': ' + result.name };
-      searchQuery = '';
-    } else {
-      joinMessage = { kind: 'error', text: result.error };
-    }
-  }
 </script>
 
 <div class="flex flex-col h-full border-r border-border bg-card">
-  <div class="p-4 border-b border-border">
-    <span class="font-bold text-lg text-primary">{i18n.t('Chat')}</span>
-  </div>
-
-  {#if joinMessage}
-    <div
-      class="px-3 py-2 text-sm border-b border-border {joinMessage.kind === 'error'
-        ? 'bg-destructive/10 text-destructive'
-        : joinMessage.kind === 'pending'
-          ? 'bg-orange-100 text-orange-700'
-          : 'bg-secondary text-foreground'}"
-    >
-      {joinMessage.text}
+  <div class="p-3 border-b border-border">
+    <div class="flex items-center justify-between gap-1">
+      <span class="font-bold text-lg text-primary px-1">{i18n.t('Chat')}</span>
+      <div class="flex items-center gap-1">
+        <button
+   onclick={() => setRightPanel('contactInvite')}
+   class="h-8 w-8 rounded-md hover:bg-secondary flex items-center justify-center"
+   title={i18n.t('Invite a contact')}
+   aria-label={i18n.t('Invite a contact')}
+ >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1"/><path d="M19 8v6M16 11h6"/></svg>
+ </button>
+        <button
+          onclick={() => setRightPanel('joinInvite')}
+   class="h-8 w-8 rounded-md hover:bg-secondary flex items-center justify-center"
+          title={i18n.t('Join by invite')}
+          aria-label={i18n.t('Join by invite')}
+        >
+   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
+        <button
+   onclick={() => setRightPanel('newChannel')}
+          class="h-8 w-8 rounded-md hover:bg-secondary flex items-center justify-center"
+   title={i18n.t('+ New channel')}
+   aria-label={i18n.t('+ New channel')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+ </button>
+      </div>
     </div>
-  {/if}
 
-  <!--
-    Одно поле на два действия.
-
-    Раньше здесь было два почти одинаковых поля: отдельная форма «Join»
-    за кнопкой «+» и ниже — поиск. Пользователь не знал, куда вставлять
-    ссылку, а оба поля выглядели одинаково.
-
-    Теперь ввод либо фильтрует список (пока это похоже на имя), либо
-    подключает (если это ссылка или 0x-идентификатор). Разбор — в
-    `joinByInput`, Enter — подключение.
-  -->
-  <div class="p-2 border-b border-border">
-    <input
-      bind:value={searchQuery}
-      placeholder={i18n.t('Search or paste invite link')}
-      onkeydown={(e) => { if (e.key === 'Enter') submitJoin(); }}
-      class="w-full h-9 border border-input rounded-md px-3 text-sm bg-background"
-      aria-label={i18n.t('Search or paste invite link')}
-    />
-    {#if searchQuery.trim()}
+    <!-- Поиск всегда под иконками. Клик по иконке поиска возвращает фокус сюда. -->
+    <div class="mt-2 relative">
       <button
-        onclick={submitJoin}
-        disabled={chatsState.isJoining}
-        class="mt-2 w-full h-8 rounded-md bg-primary text-primary-foreground text-xs disabled:opacity-50"
+        type="button"
+        onclick={() => searchEl?.focus()}
+        class="absolute left-2 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground"
+        title={i18n.t('Search')}
+ aria-label={i18n.t('Search')}
       >
-        {chatsState.isJoining ? i18n.t('Connecting...') : i18n.t('Connect by link')}
+ <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
       </button>
-    {/if}
+      <input
+        bind:this={searchEl}
+ bind:value={searchQuery}
+ placeholder={i18n.t('Search')}
+        class="w-full h-9 border-2 border-input rounded-md pl-8 pr-3 text-sm bg-background focus:border-primary focus:outline-none"
+ aria-label={i18n.t('Search')}
+      />
+    </div>
   </div>
 
   <!--
@@ -256,24 +193,8 @@
       <p class="p-4 text-muted-foreground text-sm italic">{i18n.t('No chats yet')}</p>
     {:else}
       <div class="p-2 space-y-1">
-        {#each groupedItems as entry (entry.kind === 'header' ? 'h-' + entry.id : entry.item.id)}
-          {#if entry.kind === 'header'}
-            <!--
-              Заголовок группы — кнопка: сообщество можно свернуть, чтобы
-              его каналы не вытесняли остальное. У шести сообществ из
-              каталога каналов было столько, что панель не пролистывалась
-              даже с исправленным скроллом — свернуть проще, чем искать.
-            -->
-            <button
-              onclick={() => toggleGroup(entry.id)}
-              class="w-full flex items-center gap-1 px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-              aria-expanded={!collapsed.has(entry.id)}
-            >
-              <span class="shrink-0">{collapsed.has(entry.id) ? '▸' : '▾'}</span>
-              <span class="truncate">{entry.label}</span>
-            </button>
-          {:else}
-            {@const item = entry.item}
+        {#each groupedItems as entry (entry.item.id)}
+     {@const item = entry.item}
             <div class="group/row relative">
               <button
                 onclick={() => select(item)}
@@ -329,7 +250,6 @@
                 ×
               </button>
             </div>
-          {/if}
         {/each}
       </div>
     {/if}

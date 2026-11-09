@@ -32,7 +32,7 @@ describe('ChatLeft', () => {
   it('должен фильтровать чаты по поиску', async () => {
     render(ChatLeft, { props: {} });
     // Одно поле на два действия: ввод фильтрует список, ссылка — подключает.
-    const searchInput = screen.getByPlaceholderText(/Search or paste invite link/i);
+    const searchInput = screen.getByPlaceholderText(/^Search$/i);
 
     await fireEvent.input(searchInput, { target: { value: 'Alice' } });
 
@@ -47,7 +47,7 @@ describe('ChatLeft', () => {
     ];
     render(ChatLeft, { props: {} });
 
-    const searchInput = screen.getByPlaceholderText(/Search or paste invite link/i);
+    const searchInput = screen.getByPlaceholderText(/^Search$/i);
     await fireEvent.input(searchInput, { target: { value: 'My Community' } });
 
     expect(screen.getByText('general')).toBeInTheDocument();

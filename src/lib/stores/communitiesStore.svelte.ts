@@ -37,7 +37,6 @@ import {
 } from '$lib/status/messaging';
 import { getAccounts } from '$lib/status/api';
 import { chatsState, loadChats } from './chatsStore.svelte';
-import { subscribeChannel, unsubscribeChannel } from './chatSubscriptions.svelte';
 import { debug, info, warn } from '$lib/utils/log';
 import { formatError } from '$lib/utils/errors';
 import type { Community, CommunityAccess, CommunityChat } from '$lib/status/types';
@@ -309,10 +308,9 @@ export function channelTree(community: Community | null | undefined): ChannelGro
  *
  * ## Почему клик отмечает канал
  *
- * Левая панель показывает только каналы, которые пользователь добавил сам
- * (`chatSubscriptions`): просмотр сообщества создаёт `Chat`-записи для всех
- * его каналов, и список превращался в список сообществ. Клик по каналу в
- * каталоге — и есть «добавь мне этот канал».
+ * Левая панель показывает каналы, которые status-go считает активными
+ * (`active` в превью): просмотр сообщества создаёт `Chat`-записи для всех его
+ * каналов, но в списке они появляются, только когда пользователь вступил.
  *
  * Возвращает id чата для выбора в списке и переключения раздела — само
  * переключение делает вызывающий код, потому что активная секция живёт в
@@ -340,10 +338,6 @@ export async function openChannel(
 
     const chatId = communityChatId(entry.id, channelId);
 
-    // Отметка ДО загрузки списка: `buildItems` фильтрует по ней, и без
-    // неё только что добавленный канал не попал бы в результат.
-    subscribeChannel(chatId);
-
     // `loadChats(true)`: каналы появляются только после инициализации фильтров
     // и создания `Chat`-записей, а это делает бэкенд во время спектации.
     await loadChats(true);
@@ -351,9 +345,6 @@ export async function openChannel(
     const found = chatsState.items.some((c) => c.id === chatId);
     if (!found) {
       // Канала нет в списке — это не ошибка вступления, но и открыть нечего.
-      // Отметку снимаем: иначе канал считался бы добавленным, но не
-      // появлялся бы нигде, и это выглядело бы как поломка.
-      unsubscribeChannel(chatId);
       return { ok: false, error: 'Channel is not readable' };
     }
 

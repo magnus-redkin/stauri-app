@@ -1,3 +1,4 @@
+import { SvelteSet } from 'svelte/reactivity';
 import type { StatusEvent, NodeLoginEvent } from '$lib/status/types';
 import { logout as apiLogout } from '$lib/status/api';
 
@@ -7,6 +8,8 @@ export const statusState = $state({
   isLoggedIn: false,
   accountKeyUid: '',
   publicKey: '',
+  /** Сжатый ключ `zQ3…` (base58btc, multicodec) — основа ссылки на профиль. */
+  compressedKey: '',
   alias: '',
   chainId: 1,
   backendPort: null as number | null,
@@ -20,6 +23,12 @@ export const statusState = $state({
   errorMsg: '',
   pendingRequestsCount: 0,
   lastMessageSignal: 0,
+  /**
+   * Чаты, из которых пришли сообщения после последней обработки сигнала.
+   * Позволяет не перечитывать весь список при каждом сообщении из чата,
+   * которого в списке нет (например, снятый с отображения канал).
+   */
+  pendingChatIds: new SvelteSet<string>(),
   isSeedSaved: false,
 });
 
@@ -43,6 +52,7 @@ export function processSignal(rawJson: string) {
       }
       statusState.accountKeyUid = loginEvent.event?.settings?.['key-uid'] || statusState.accountKeyUid;
       statusState.publicKey = loginEvent.event?.settings?.['public-key'] || statusState.publicKey;
+      statusState.compressedKey = loginEvent.event?.settings?.['compressedKey'] || statusState.compressedKey;
       statusState.alias = loginEvent.event?.settings?.['alias'] || statusState.alias;
       statusState.isLoggedIn = true;
       statusState.errorMsg = '';
@@ -76,6 +86,9 @@ export function processSignal(rawJson: string) {
 
     if (parsed.type === 'messages.new') {
       statusState.lastMessageSignal++;
+      for (const m of parsed.event?.messages ?? []) {
+        if (m?.chatId) statusState.pendingChatIds.add(m.chatId);
+      }
     }
   } catch (e) {
     console.warn("Failed to parse signal:", rawJson);
@@ -156,11 +169,13 @@ export async function logout() {
   statusState.isLoggedIn = false;
   statusState.accountKeyUid = '';
   statusState.publicKey = '';
+  statusState.compressedKey = '';
   statusState.alias = '';
   statusState.events = [];
   statusState.errorMsg = '';
   statusState.pendingRequestsCount = 0;
   statusState.lastMessageSignal = 0;
+  statusState.pendingChatIds.clear();
 }
 
 export function resetState() {
@@ -169,6 +184,7 @@ export function resetState() {
   statusState.isLoggedIn = false;
   statusState.accountKeyUid = '';
   statusState.publicKey = '';
+  statusState.compressedKey = '';
   statusState.alias = '';
   statusState.events = [];
   statusState.backendPort = null;
@@ -182,5 +198,6 @@ export function resetState() {
   statusState.chainId = 1;
   statusState.pendingRequestsCount = 0;
   statusState.lastMessageSignal = 0;
+  statusState.pendingChatIds.clear();
   statusState.isSeedSaved = false;
 }

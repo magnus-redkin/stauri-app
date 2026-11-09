@@ -27,7 +27,6 @@
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
   import { loadFeeds, resetFeeds } from '$lib/stores/feedsStore.svelte';
-  import { loadChannelSubscriptions } from '$lib/stores/chatSubscriptions.svelte';
   import {
     loadUiPreferences,
     increaseFontSize,
@@ -248,7 +247,19 @@
     const signal = statusState.lastMessageSignal;
     const section = activeSection;
     if (signal > 0 && section === 'chat') {
-      untrack(() => { loadChats(true); });
+      untrack(() => {
+ // Перечитываем список только если сообщение пришло в чат, который в нём
+        // виден. Сообщения из снятых с отображения каналов приходят постоянно,
+        // и без этой проверки каждое из них тянуло бы полную загрузку
+        // (wakuext_communities ~1.6 МБ): отсюда перезагрузки раз в ~30 секунд.
+        const visible = new Set(chatsState.items.map((c) => c.id));
+        const ids = [...statusState.pendingChatIds];
+ const touched = ids.some((id) => visible.has(id));
+        // Удаляем только то, что сами проверили: открытая лента читает тот же
+ // набор, и полная очистка отняла бы у неё её чат.
+        for (const id of ids) if (visible.has(id)) statusState.pendingChatIds.delete(id);
+        if (touched) loadChats(true);
+      });
     }
   });
 
@@ -293,7 +304,6 @@
     // списку чатов, а не только разделу dApp. Ошибка чтения не должна мешать
     // подключению — испорченное хранилище остаётся с пустым списком.
     loadFeeds();
-    loadChannelSubscriptions();
     await connect(undefined);
     if (statusState.accounts.length > 0) {
       selectedAccountKeyUid = statusState.accounts[0]["key-uid"];

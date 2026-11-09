@@ -282,5 +282,17 @@
   "at least": "至少",
   "Two transactions will be sent: a token approval and the swap itself.": "将发送两笔交易：代币授权和兑换本身。",
   "Swapping... this can take a while.": "正在兑换……可能需要一些时间。",
-  "Confirm and swap": "确认并兑换"
+  "Confirm and swap": "确认并兑换",
+  "Invite a contact": "邀请联系人",
+  "Join by invite": "通过邀请加入",
+  "Invite link": "邀请链接",
+  "Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).": "粘贴邀请链接：频道 (status.app/cc/…) 或联系人 (status.app/u/…)。",
+  "Scan this code in SIM or send the key to add you as a contact.": "在 SIM 中扫描此码，或发送密钥以将您添加为联系人。",
+  "Profile key is not loaded yet": "个人资料密钥尚未加载",
+  "Copied": "已复制",
+  "Reject": "拒绝",
+  "New channel": "新频道",
+  "Description (up to 140 bytes)": "描述（最多 140 字节）",
+  "Search": "搜索",
+  "Contact request sent": "联系人请求已发送"
 }

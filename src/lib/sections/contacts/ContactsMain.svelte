@@ -5,6 +5,7 @@
   import { statusState } from '$lib/stores/statusStore.svelte';
   import { getDisplayName } from '$lib/utils/user';
   import { formatError } from '$lib/utils/errors';
+  import { isIncomingRequest } from '$lib/status/contactState';
 
   // Для перехода в чат
   let { onOpenChat }: { onOpenChat?: (chatId: string) => void } = $props();
@@ -57,12 +58,12 @@
 
       {#if contactsState.selected.mutual}
         <p class="text-sm text-green-600">✓ {i18n.t('Contact is mutual')}</p>
-      {:else if contactsState.selected.contactRequestState === 3}
+      {:else if isIncomingRequest(contactsState.selected)}
         <p class="text-sm text-orange-600">⚠️ {i18n.t('Contact request pending')}</p>
       {/if}
 
       <!-- Кнопка "Чат" -->
-      {#if contactsState.selected.mutual || contactsState.selected.contactRequestState === 3}
+      {#if contactsState.selected.mutual || isIncomingRequest(contactsState.selected)}
         <button
           onclick={() => onOpenChat?.(contactsState.selected.id)}
           class="w-full py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium"
