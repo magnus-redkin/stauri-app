@@ -82,7 +82,7 @@ impl RpcProxyState {
 
 /// Каталог для секрета — рядом с конфигом приложения.
 fn secret_path() -> Option<std::path::PathBuf> {
-    let dir = dirs::config_dir()?.join(env_identifier());
+    let dir = crate::appdirs::config_dir()?.join(env_identifier());
     Some(dir.join("rpc-proxy.secret"))
 }
 

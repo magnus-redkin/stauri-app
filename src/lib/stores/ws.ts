@@ -27,6 +27,11 @@ export function isWsOpen(): boolean {
  * `port` — порт аутентифицирующего прокси, а не бэкенда.
  */
 export async function openWs(port: number): Promise<void> {
+  // Android: сокета /signals нет (бэкенд — библиотека, B.2). Сигналы на мосте
+  // пока не подключены: вход и запросы идут через statusFetch → status_call.
+  if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
+    return;
+  }
   await closeWs();
 
   const socket = await WebSocket.connect(`ws://127.0.0.1:${port}/signals`, {

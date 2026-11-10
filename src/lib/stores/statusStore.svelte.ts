@@ -21,6 +21,8 @@ export const statusState = $state({
   accounts: [] as any[],
   events: [] as StatusEvent[],
   errorMsg: '',
+  /// Временная отметка моста (B.2): какие вызовы status-go прошли.
+  probe: '',
   pendingRequestsCount: 0,
   lastMessageSignal: 0,
   /**

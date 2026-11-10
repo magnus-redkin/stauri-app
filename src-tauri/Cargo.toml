@@ -80,3 +80,11 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Android: libstatus.so (status-go как библиотека) грузится через dlopen,
+# а не через sidecar-процесс (docs/PLAN.md, B.2).
+[target.'cfg(target_os = "android")'.dependencies]
+libloading = "0.7"
+# Логи Rust уходят в logcat (тег stauri), а не в файл.
+android_logger = "0.14"
+log = "0.4"

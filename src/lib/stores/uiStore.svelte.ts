@@ -67,13 +67,12 @@ function applyFontSize(px: number): void {
 
 function applyTheme(theme: ThemeName): void {
   if (typeof document === 'undefined') return;
-  const html = document.documentElement;
-  html.classList.remove('dark');
-  html.setAttribute('data-theme', theme);
-  // `dark` — класс, на который завязан `@custom-variant dark` в app.css.
-  // Без него тёмная тема не переключит служебные стили.
-  if (theme === 'dark') html.classList.add('dark');
+  // Тема задаётся только атрибутом. Класс .dark больше не используется:
+  // все три темы — это [data-theme="…"], а dark:-утилиты Tailwind
+  // настроены в app.css через @custom-variant на этот атрибут.
+  document.documentElement.setAttribute('data-theme', theme);
 }
+
 
 /**
  * Читает сохранённые значения и применяет их к документу.

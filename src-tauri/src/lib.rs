@@ -17,7 +17,9 @@
 
 use tauri::Manager;
 
+mod appdirs;
 mod auth_proxy;
+mod backend;
 mod backend_rpc;
 mod commands;
 mod config;
@@ -25,6 +27,8 @@ mod dapp;
 mod ens;
 mod env;
 mod error;
+#[cfg(target_os = "android")]
+mod inprocess;
 mod invite;
 mod logging;
 mod market;
@@ -58,6 +62,14 @@ pub fn run() {
         // permission не выдан в capabilities, фронтенд ходит через
         // commands::check_for_update / install_update.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            // Каталог конфигурации от Tauri: на Android dirs::config_dir() не работает (B.2).
+            use tauri::Manager;
+            if let Ok(dir) = app.path().app_config_dir() {
+                appdirs::set_config_dir(dir);
+            }
+            Ok(())
+        })
         .manage(sidecar::BackendState::default())
         .manage(rpc_proxy::RpcProxyState::default())
         .manage(auth_proxy::AuthProxyState::default())
@@ -72,6 +84,8 @@ pub fn run() {
             commands::check_for_update,
             commands::install_update,
             commands::restart_app,
+            commands::inprocess_initialize,
+            commands::status_call,
             commands::log_frontend,
             market::fetch_market_data,
             seed::fetch_seed_phrase,

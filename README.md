@@ -32,7 +32,7 @@ When connected to a testnet, Stauri provides clear visual cues:
 - [`docs/en/networks_and_balances.md`](docs/en/networks_and_balances.md) — path from balance to screen, RPC forwarder, `status-go` caches.
 - [`docs/en/status_outdated_architecture.md`](docs/en/status_outdated_architecture.md) — why `status-go` is complex (RPC clients, providers).
 - [`docs/en/tests.md`](docs/en/tests.md) — testing strategy (unit, component, E2E, manual checks).
-- [`BUILDING.md`](BUILDING.md) — building `status-backend` in Nix and preparing the sidecar.
+- [`docs/BUILDING.md`](docs/BUILDING.md) — building `status-backend` in Nix and preparing the sidecar.
 
 ## 🧩 What is already implemented
 
@@ -117,7 +117,7 @@ Stauri is in an active prototyping phase. The following key features already wor
 
 Stauri requires a prebuilt `status-backend` binary and `libsds.so` from the Status Go repository. They must be built **in the same Nix environment**.
 
-Detailed instructions are in [BUILDING.md](./BUILDING.md). Briefly:
+Detailed instructions are in [docs/BUILDING.md](docs/BUILDING.md). Briefly:
 
 ```bash
 # 1. Build status-backend in Nix

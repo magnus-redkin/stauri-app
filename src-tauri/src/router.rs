@@ -28,7 +28,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 
 use crate::auth_proxy;
-use crate::backend_rpc::call;
+use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 
 /// `fees.GasFeeMode`: Low=0, Medium=1, High=2.
@@ -247,7 +247,7 @@ where
 /// может ответить быстрее, чем мы успели бы подписаться, и тогда сигнал ушёл
 /// бы в пустоту.
 pub async fn execute_route(
-    port: u16,
+    backend: Backend,
     params: Value,
     from: &str,
     password: &str,
@@ -258,8 +258,11 @@ pub async fn execute_route(
         .ok_or_else(|| AppError::internal("route params have no uuid"))?
         .to_string();
 
-    let mut ws = connect_signals(port).await?;
-    let sent = execute_round(&mut ws, port, Some(params), &uuid, from, password).await?;
+    let signals_port = backend
+        .signals_port()
+        .ok_or_else(|| AppError::backend("signals are not available for this backend"))?;
+    let mut ws = connect_signals(signals_port).await?;
+    let sent = execute_round(&mut ws, backend, Some(params), &uuid, from, password).await?;
     let _ = ws.close(None).await;
 
     Ok(sent.into_iter().map(|tx| tx.hash).collect())
@@ -291,7 +294,7 @@ pub struct SentTx {
 /// её майнинга и запустить раунд ещё раз.
 pub async fn execute_round<S>(
     ws: &mut S,
-    port: u16,
+    backend: Backend,
     params: Option<Value>,
     uuid: &str,
     from: &str,
@@ -307,11 +310,15 @@ where
 {
     // 1. Маршрут. Только в первом раунде.
     if let Some(params) = params {
-        call(port, "wallet_getSuggestedRoutes", json!([params])).await?;
+        backend
+            .call("wallet_getSuggestedRoutes", json!([params]))
+            .await?;
     }
 
     // 2. Собрать транзакции.
-    call(port, "wallet_buildTransactionsFromRoute", json!([uuid])).await?;
+    backend
+        .call("wallet_buildTransactionsFromRoute", json!([uuid]))
+        .await?;
 
     let built = wait_for_signal(ws, SIGNAL_ROUTER_TXS, uuid).await?;
 
@@ -325,7 +332,8 @@ where
     // 3. Подписать каждый хэш. Пароль живёт только внутри этого цикла.
     let mut signatures = serde_json::Map::new();
     for hash in &hashes {
-        let signature = call(port, "wallet_signMessage", json!([hash, from, password]))
+        let signature = backend
+            .call("wallet_signMessage", json!([hash, from, password]))
             .await?
             .as_str()
             .ok_or_else(|| AppError::backend("backend returned no signature"))?
@@ -338,12 +346,12 @@ where
     }
 
     // 4. Отправить.
-    call(
-        port,
-        "wallet_sendRouterTransactionsWithSignatures",
-        json!([{ "uuid": uuid, "signatures": signatures }]),
-    )
-    .await?;
+    backend
+        .call(
+            "wallet_sendRouterTransactionsWithSignatures",
+            json!([{ "uuid": uuid, "signatures": signatures }]),
+        )
+        .await?;
 
     let sent = wait_for_signal(ws, SIGNAL_TXS_SENT, uuid).await?;
 

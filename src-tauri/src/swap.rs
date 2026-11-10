@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 use std::time::Duration;
 
-use crate::backend_rpc::call;
+use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 use crate::router::{
     GAS_FEE_MEDIUM, connect_signals, execute_round, hex_u128, is_address, unique_uuid,
@@ -193,7 +193,9 @@ pub async fn get_swap_quote(
 
     let uuid = unique_uuid();
     let params = route_params(&uuid, chain_id, &from, &from_token, &to_token, value);
-    let route = call(port, "wallet_getSuggestedRoutes", json!([params])).await?;
+    let route = Backend::from_port(port)?
+        .call("wallet_getSuggestedRoutes", json!([params]))
+        .await?;
 
     let path = first_path(&route)
         .ok_or_else(|| AppError::backend("no swap route is available for this pair right now"))?;
@@ -277,11 +279,12 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
         value,
     );
 
+    let backend = Backend::from_port(request.port)?;
     let mut ws = connect_signals(request.port).await?;
 
     let first = execute_round(
         &mut ws,
-        request.port,
+        backend,
         Some(params),
         &uuid,
         &request.from,
@@ -294,12 +297,12 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
 
     let final_txs = if approval_only {
         let approval_hash = first[0].hash.clone();
-        wait_until_not_pending(request.port, &approval_hash).await?;
+        wait_until_not_pending(backend, &approval_hash).await?;
 
         // Второй раунд по тому же uuid: маршрут уже в бэкенде.
         let second = execute_round(
             &mut ws,
-            request.port,
+            backend,
             None,
             &uuid,
             &request.from,
@@ -362,7 +365,7 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
 /// Транзакция может не попасть в блок вовсе. Вечное ожидание заблокировало бы
 /// команду, поэтому по таймауту возвращаем понятную ошибку: токены не
 /// списаны, `approve` отправлен, обмен можно повторить.
-async fn wait_until_not_pending(port: u16, tx_hash: &str) -> AppResult<()> {
+async fn wait_until_not_pending(backend: Backend, tx_hash: &str) -> AppResult<()> {
     let deadline = tokio::time::Instant::now() + MINING_TIMEOUT;
     let hash = tx_hash.to_ascii_lowercase();
     let mut attempt = 0u32;
@@ -370,7 +373,10 @@ async fn wait_until_not_pending(port: u16, tx_hash: &str) -> AppResult<()> {
     loop {
         // Первая проверка — сразу: `approve` часто майнится быстрее, чем мы
         // успеваем дойти сюда.
-        if let Ok(pending) = call(port, "wallet_getPendingTransactions", json!([])).await {
+        if let Ok(pending) = backend
+            .call("wallet_getPendingTransactions", json!([]))
+            .await
+        {
             let still_pending = pending
                 .as_array()
                 .map(|list| {

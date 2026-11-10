@@ -36,7 +36,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::backend_rpc::call;
+use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 use crate::router::{
     GAS_FEE_MEDIUM, execute_route, hex_u128, is_address, strip_hex_prefix, unique_uuid,
@@ -210,8 +210,8 @@ fn route_params(
 /// `ExtractCoordinates` в status-go режет строку как `0x04` + X + Y, поэтому
 /// принимаем только такую форму: с другим ключом регистрация соберёт
 /// calldata с нулями, и имя будет записано на мусорный публичный ключ.
-async fn public_key_of(port: u16, from: &str) -> AppResult<String> {
-    let accounts = call(port, "accounts_getAccounts", json!([])).await?;
+async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
+    let accounts = backend.call("accounts_getAccounts", json!([])).await?;
     let list = accounts
         .as_array()
         .ok_or_else(|| AppError::backend("backend returned no accounts"))?;
@@ -253,9 +253,8 @@ pub async fn get_ens_quote(
     from: String,
     username: String,
 ) -> AppResult<EnsQuote> {
-    if port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
+    let backend =
+        Backend::from_port(port).map_err(|_| AppError::config("backend is not running"))?;
     validate_username(&username)?;
     if !is_address(&from) {
         return Err(AppError::config("invalid wallet address"));
@@ -265,7 +264,8 @@ pub async fn get_ens_quote(
 
     let name = username.trim();
 
-    let price_raw = call(port, "ens_price", json!([chain_id]))
+    let price_raw = backend
+        .call("ens_price", json!([chain_id]))
         .await?
         .as_str()
         .unwrap_or("0")
@@ -277,36 +277,32 @@ pub async fn get_ens_quote(
     // Ошибку НЕ проглатываем. Раньше здесь стоял `.ok()`, и отказ валидации
     // превращался в пустой владелец, то есть занятое имя выглядело свободным —
     // а дальше человек платил бы за регистрацию, которую контракт отклонит.
-    let owner_raw = call(
-        port,
-        "ens_ownerOf",
-        json!([chain_id, owner_lookup_name(name)]),
-    )
-    .await?;
+    let owner_raw = backend
+        .call("ens_ownerOf", json!([chain_id, owner_lookup_name(name)]))
+        .await?;
     let owner = owner_raw.as_str().unwrap_or_default().to_string();
     let zero = "0x0000000000000000000000000000000000000000";
     let available = owner.is_empty() || owner == zero || owner.eq_ignore_ascii_case("0x0");
 
     // Срок действия — справочно: если его не удалось прочитать, это не повод
     // отказывать в цене и занятости.
-    let expires_at = call(
-        port,
-        "ens_expireAt",
-        json!([chain_id, expire_lookup_name(name)]),
-    )
-    .await
-    .ok()
-    .and_then(|v| v.as_str().map(|s| s.to_string()))
-    .unwrap_or_else(|| "0".to_string());
+    let expires_at = backend
+        .call("ens_expireAt", json!([chain_id, expire_lookup_name(name)]))
+        .await
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "0".to_string());
 
     // Комиссия сети. Маршрут может не собраться (нет SNT на балансе, газ
     // недоступен) — это не повод отказывать в цене и занятости имени, но и
     // показывать ноль вместо «неизвестно» нельзя.
     let mut fee: Option<String> = None;
-    if let Ok(public_key) = public_key_of(port, &from).await {
+    if let Ok(public_key) = public_key_of(backend, &from).await {
         let uuid = unique_uuid();
         if let Ok(params) = route_params(&uuid, chain_id, &from, name, &public_key, price)
-            && let Ok(route) = call(port, "wallet_getSuggestedRoutes", json!([params])).await
+            && let Ok(route) = backend
+                .call("wallet_getSuggestedRoutes", json!([params]))
+                .await
         {
             fee = route_fee(&route);
         }
@@ -332,9 +328,8 @@ fn route_fee(route: &Value) -> Option<String> {
 /// Регистрирует имя и возвращает хэш транзакции.
 #[tauri::command]
 pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegisterResult> {
-    if request.port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
+    let backend =
+        Backend::from_port(request.port).map_err(|_| AppError::config("backend is not running"))?;
     validate_username(&request.username)?;
     if !is_address(&request.from) {
         return Err(AppError::config("invalid wallet address"));
@@ -345,11 +340,12 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
     snt_address(request.chain_id)?;
 
     let name = request.username.trim();
-    let public_key = public_key_of(request.port, &request.from).await?;
+    let public_key = public_key_of(backend, &request.from).await?;
 
     // Цену берём у контракта, а не у фронтенда: сумму approve определяет
     // регистратор, и любая другая цифра означала бы отказ контракта.
-    let price_hex = call(request.port, "ens_price", json!([request.chain_id]))
+    let price_hex = backend
+        .call("ens_price", json!([request.chain_id]))
         .await?
         .as_str()
         .unwrap_or("0")
@@ -366,7 +362,7 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
         price,
     )?;
 
-    let hashes = execute_route(request.port, params, &request.from, &request.password).await?;
+    let hashes = execute_route(backend, params, &request.from, &request.password).await?;
 
     // У регистрации одна транзакция (approveAndCall делает approve внутри).
     // Берём последний хэш: если Router всё же добавит отдельный approve,

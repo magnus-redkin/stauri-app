@@ -35,7 +35,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::backend_rpc::call;
+use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 
 /// Запрос на перевод.
@@ -111,12 +111,12 @@ pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate
 
     // Собираем через тот же путь, что и отправка (`send_args`), чтобы цифры
     // на экране подтверждения и в подписанной транзакции совпадали.
-    let built = call(
-        request.port,
-        "wallet_buildTransaction",
-        json!([request.chain_id, args.to_string()]),
-    )
-    .await?;
+    let built = Backend::from_port(request.port)?
+        .call(
+            "wallet_buildTransaction",
+            json!([request.chain_id, args.to_string()]),
+        )
+        .await?;
 
     let tx_args = built
         .get("txArgs")
@@ -155,12 +155,12 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     let amount = parse_amount(&request.amount)?;
     let args = send_args(&request.from, &request.to, &request.token_address, amount);
 
-    let built = call(
-        request.port,
-        "wallet_buildTransaction",
-        json!([request.chain_id, args.to_string()]),
-    )
-    .await?;
+    let built = Backend::from_port(request.port)?
+        .call(
+            "wallet_buildTransaction",
+            json!([request.chain_id, args.to_string()]),
+        )
+        .await?;
 
     // Нода отвечает объектом с полями `messageToSign` и `txArgs`. Без хэша
     // продолжать нечем: подписывать нечего.
@@ -182,15 +182,15 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     //
     //    `message` передаём как есть, с `0x`: параметр объявлен как
     //    `types.HexBytes`, а его JSON-разбор ждёт hex-строку с префиксом.
-    let signature = call(
-        request.port,
-        "wallet_signMessage",
-        json!([message, request.from, request.password]),
-    )
-    .await?
-    .as_str()
-    .ok_or_else(|| AppError::backend("backend returned no signature"))?
-    .to_string();
+    let signature = Backend::from_port(request.port)?
+        .call(
+            "wallet_signMessage",
+            json!([message, request.from, request.password]),
+        )
+        .await?
+        .as_str()
+        .ok_or_else(|| AppError::backend("backend returned no signature"))?
+        .to_string();
 
     // 3. Отправить. `WalletTransfer` — тип из PendingTrxType
     //    (pkg/services/wallet/pendingtxtracker/pendingtxtracker.go).
@@ -209,17 +209,17 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     // Отсюда ошибка, которую видел пользователь при первой отправке:
     // подпись была получена успешно и транзакция не ушла только из-за
     // префикса. Поэтому снимаем его здесь, а не полагаемся на ноду.
-    let hash = call(
-        request.port,
-        "wallet_sendTransactionWithSignature",
-        json!([
-            request.chain_id,
-            "WalletTransfer",
-            tx_args.to_string(),
-            strip_hex_prefix(&signature)
-        ]),
-    )
-    .await?;
+    let hash = Backend::from_port(request.port)?
+        .call(
+            "wallet_sendTransactionWithSignature",
+            json!([
+                request.chain_id,
+                "WalletTransfer",
+                tx_args.to_string(),
+                strip_hex_prefix(&signature)
+            ]),
+        )
+        .await?;
 
     let tx_hash = hash.as_str().unwrap_or_default().to_string();
     if tx_hash.is_empty() {

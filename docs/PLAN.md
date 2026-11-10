@@ -429,16 +429,31 @@ metainfo.
 
 ### B. Сборка под Android, затем Windows
 
-**Главное препятствие — не UI, а способ запуска бэкенда.** Сейчас бэкенд —
-sidecar: отдельный процесс `status-backend` с ELF-бинарником в
-`externalBin`. На Android запуск исполняемых файлов из каталога данных
-запрещён, на iOS сторонние процессы невозможны вообще. Мобильный
-`status-go` собирается **как библиотека**
-(`make statusgo-android-library`, `statusgo-ios-library`; в репозитории есть
-`mobile/` и C-bindings).
+Решения (2026-11-10):
 
-Значит, архитектурное решение «sidecar вместо библиотеки» действует только
-на десктопе, а на мобильных нужен второй способ доступа к тому же бэкенду.
+- **Android:** `status-go` как in-process библиотека `libstatus.so`, без sidecar.
+- **Windows:** sidecar `status-backend.exe`, как на Linux.
+
+**Главное препятствие Android — не UI, а способ запуска бэкенда.** Сейчас
+бэкенд — sidecar: отдельный процесс с ELF-бинарником в `externalBin`. На
+Android запуск исполняемых файлов из каталога данных запрещён (SELinux,
+`execve` из `app_data`), поэтому на телефоне бэкенд должен работать в
+процессе приложения.
+
+#### B.0. Что уже подтверждено в `status-go`
+
+| Факт | Где |
+|---|---|
+| Android-библиотека собирается: `make statusgo-android-library` (CGO, NDK, `GOOS=android`) | `Makefile`, цель с `-buildmode=c-shared` → `build/bin/libstatus.so` |
+| Цель зависит от `build-libsds-android` (libsds под Android) и `statusgo-c-bindings` | `Makefile` |
+| Экспорт C/JNI-API: `InitializeApplication`, `CallRPC`, `CallPrivateRPC`, `LoginAccount`, `SetSignalEventCallback` | `mobile/status.go` |
+| Сигналы идут **callback'ом** (`SetSignalEventCallback`), не через WebSocket | `mobile/status.go:952` |
+| Windows-цели в `Makefile` **нет** (`status-backend` только под текущую ОС) | `Makefile:394` |
+
+Итого: для Android нужна не просто «другая сборка», а нативный мост, который
+принимает сигналы callback'ом и передаёт их в WebView. Сигналы сейчас
+приходят в Rust по WebSocket (`router.rs`, `ens.rs`) — там это тоже место
+правки.
 
 #### B.1. Подготовка: единственная точка доступа к бэкенду
 
@@ -450,32 +465,59 @@ sidecar: отдельный процесс `status-backend` с ELF-бинарн�
 Задача: ввести тип `Backend` с двумя реализациями —
 
 - `Backend::Rpc { port }` — как сейчас, HTTP и WebSocket к прокси;
-- `Backend::InProcess` — прямой вызов FFI, без порта и сокета
-  (реализуется вместе с Android-сборкой).
+- `Backend::InProcess` — вызов `CallRPC` через FFI (JNI на Android), без
+  порта и сокета. Сигналы — через колбэк, а не WebSocket.
 
-Поведение на десктопе не меняется. Смысл: при переходе на Android меняется
-реализация `call` и `connect_signals`, а кошельковая логика остаётся
+Поведение на десктопе не меняется. При переходе на Android меняется
+реализация `call` и подписки на сигналы, а кошельковая логика остаётся
 нетронутой. Это же дешевле и для Logos, где модули тоже живут в процессе.
 
-#### B.2. Что придётся сделать заново
+Шаг B.1 делается **до** Android-сборки и проверяется на Linux: тесты и
+ручной сценарий должны пройти без изменений.
 
-| Часть | Состояние |
+#### B.2. Что придётся сделать для Android
+
+| Часть | Что делать |
 |---|---|
-| Фронтенд: логика и сторы | переиспользуется целиком |
-| Фронтенд: раскладка | **новый мобильный режим**: сейчас `paneforge` с двумя панелями, окно 1200×900 |
-| Rust: бизнес-логика (`ens`, `swap`, `transfer`, `router`) | переиспользуется |
-| Rust: транспорт | **вторая реализация** (`InProcess` вместо RPC) |
-| Rust: пути | `dirs::config_dir()` на Android возвращает `None` → `app.path().app_data_dir()` (4 места: `config.rs`, `logging.rs`, `rpc_proxy.rs`, `env.rs`) |
-| Rust: хранение секретов | Keystore/Keychain вместо файла с `0600` |
-| Плагины | `updater` и `shell` на мобильных не работают; `open_dapp` через `WebviewWindowBuilder` — десктопный API |
-| `status-go` под ARM | внешняя работа: NDK 27.2, отдельное Nix-окружение, `libsds` под Android |
-| Push, фоновое поведение | отсутствуют; опрос балансов каждые 3 с и `node.stopped` требуют пересмотра |
+| Сборка `libstatus.so` | `make statusgo-android-library` под `arm64` (`ARCH=arm64`, API 28), NDK 27.2 из Nix; проверить `libsds` под Android (`build-libsds-android`) |
+| Инструменты | Android SDK, NDK 27.2, JDK 17, `rustup target add aarch64-linux-android`, `cargo install tauri-cli`; `tauri android init` создаёт `src-tauri/gen/android` |
+| JNI-мост | Kotlin/Java-класс с `native`-методами, загрузка `libstatus.so` через `System.loadLibrary`; Rust вызывает их через `jni` или Tauri-плагин |
+| Пути | `dirs::config_dir()` на Android возвращает `None` → `app.path().app_data_dir()` (4 места: `config.rs`, `logging.rs`, `rpc_proxy.rs`, `env.rs`) |
+| Секреты | Android Keystore вместо файла `0600` (`rpc-proxy.secret`, seed) |
+| Плагины | `updater` и `shell` на мобильных не работают; `open_dapp` через `WebviewWindowBuilder` — десктопный API, нужна альтернатива |
+| Процессы | `sidecar.rs` (`/proc`, `kill`) на Android не нужен: процесса нет |
+| Фон и уведомления | опрос балансов каждые 3 с и `node.stopped` требуют пересмотра; push отсутствует |
+| Тесты | Rust-тесты на хосте, UI — на эмуляторе или устройстве; `tauri android dev` |
 
-#### B.3. Windows
+Оценка: Android — самый большой объём работы. Кошельковая и чат-логика
+переиспользуются, меняется транспорт и платформенный слой.
 
-Проще, чем Android: sidecar там работает как есть. Основное —
-`frameless`/декорации окна, пути (`dirs` работает), и **права на файл
-секрета** (см. шаг 25 — там сейчас только предупреждение в логе).
+#### B.3. Что придётся сделать для Windows
+
+Sidecar остаётся, поэтому план проще:
+
+| Часть | Что делать |
+|---|---|
+| Сборка `status-backend.exe` | `GOOS=windows GOARCH=amd64 go build` из `status-go`; **цели в Makefile нет**, добавить или собирать вручную |
+| `libsds.dll` | Собрать `libsds` под Windows (MinGW/MSVC) или убрать зависимость, если nim-sds её не требует на Windows — проверить |
+| `sidecar.rs` | `kill_stale_backend` читает `/proc/<pid>/comm` и вызывает `kill`; на Windows заменить на `tasklist`/`taskkill` или `windows-sys` |
+| Пути | `dirs` работает; проверить `%APPDATA%` для `config_dir` |
+| Окно | декорации и `frameless` (Windows 11 с системными кнопками) |
+| Секрет | права на файл `rpc-proxy.secret` — сейчас только предупреждение в логе (шаг 25); на Windows нужен ACL через `SetNamedSecurityInfoW`, иначе непроверенный код хуже отсутствия |
+| Сборка | NSIS или MSI через `tauri build --bundles nsis`; подпись кода (Authenticode) для публикации |
+| CI | runner `windows-latest`; Nix на Windows нет, поэтому `status-backend.exe` собирается отдельно и кладётся как артефакт |
+
+Здесь главный риск — `libsds.dll`. Если её нельзя собрать для Windows,
+sidecar не запустится. Проверить до начала работ.
+
+#### B.4. Порядок
+
+1. **B.1** — тип `Backend`, проверка на Linux: без изменений поведения.
+2. **Windows (B.3)** — до Android: меньше всего работы, и сразу понятно, собирается ли `libsds` под Windows.
+3. **Android (B.2)** — самый большой блок: JNI, пути, Keystore, фон.
+
+Точка остановки: после шага 1 — проверка на Linux, решение о Windows по
+результату проверки `libsds`.
 
 ### C. Показать команде Status
 

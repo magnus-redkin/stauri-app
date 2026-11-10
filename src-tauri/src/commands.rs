@@ -10,12 +10,45 @@ use crate::rpc_proxy;
 use crate::sidecar;
 use crate::updater;
 
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn start_backend(
     app: tauri::AppHandle,
     network: Option<String>,
 ) -> AppResult<sidecar::StartBackendResponse> {
     sidecar::start(app, network).await
+}
+
+/// Android: процесса и порта нет, бэкенд — библиотека внутри приложения (B.2).
+/// Возвращаем ответ той же формы, что и десктоп; `port`/`authPort` = 0 не используются,
+/// потому что `statusFetch` на Android идёт через мост `status_call`.
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn start_backend(
+    app: tauri::AppHandle,
+    network: Option<String>,
+) -> AppResult<sidecar::StartBackendResponse> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+ .map_err(|e| crate::error::AppError::internal(format!("app_data_dir: {e}")))?;
+    std::fs::create_dir_all(&dir)
+ .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
+    // На Android сеть одна: мейннет (chainId 1). Testnet добавим отдельно.
+    let _ = network;
+    Ok(sidecar::StartBackendResponse {
+ port: 0,
+        // На Android порта нет: 1 — ненулевой маркер, чтобы connect() не пропускал
+        // configureWalletRpc (statusFetch на мосте порт не читает).
+ auth_port: 1,
+        data_dir: dir.to_string_lossy().into_owned(),
+        network_name: "mainnet".to_string(),
+        chain_id: 1,
+        rpc_url: String::new(),
+        waku_fleet: String::new(),
+ is_testnet: false,
+    })
 }
 
 #[tauri::command]
@@ -160,5 +193,55 @@ pub fn log_frontend(level: String, message: String) {
         "warn" => tracing::warn!(target: "frontend", "{message}"),
         "info" => tracing::info!(target: "frontend", "{message}"),
         _ => tracing::debug!(target: "frontend", "{message}"),
+    }
+}
+
+/// Android: инициализация status-go через мост `libstatus.so` (B.2).
+///
+/// Проверяем одну вещь — что библиотека загружается и отвечает на
+/// `InitializeApplication`. Ответ отдаём фронтенду как есть.
+#[tauri::command]
+pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+ // Каталог данных приложения: на Android dirs::data_local_dir() не работает,
+        // поэтому берём его у Tauri (docs/PLAN.md, B.2).
+        let dir = app
+     .path()
+            .app_data_dir()
+     .map_err(|e| crate::error::AppError::internal(format!("app_data_dir: {e}")))?;
+ std::fs::create_dir_all(&dir)
+     .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
+        let data_dir = dir.to_string_lossy().into_owned();
+        let request = serde_json::json!({
+     "dataDir": data_dir,
+     "rootDataDir": data_dir,
+     "networkId": 1,
+        })
+        .to_string();
+ crate::inprocess::backend()?.initialize(&request)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err(crate::error::AppError::internal("in-process backend is only available on Android"))
+    }
+}
+
+/// Вызов status-go без HTTP: на Android — через мост `libstatus.so`, на остальных
+/// платформах фронтенд ходит по HTTP через прокси, и эта команда не нужна.
+///
+/// `body` — тело запроса, как его шлёт `statusFetch`; для `Logout` не используется.
+#[tauri::command]
+pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<String> {
+    #[cfg(target_os = "android")]
+    {
+ crate::inprocess::backend()?.direct(&endpoint, &body)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+ let _ = (endpoint, body);
+ Err(crate::error::AppError::internal("in-process backend is only available on Android"))
     }
 }

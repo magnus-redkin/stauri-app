@@ -143,7 +143,7 @@ pub fn load_config() -> AppConfig {
     }
 
     // 3. ~/.config/stauri/config.json
-    if let Some(config_dir) = dirs::config_dir() {
+    if let Some(config_dir) = crate::appdirs::config_dir() {
         let config_path = config_dir.join("stauri").join("config.json");
         if let Ok(content) = std::fs::read_to_string(&config_path)
             && let Ok(config) = serde_json::from_str::<AppConfig>(&content)

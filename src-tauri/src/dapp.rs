@@ -24,17 +24,24 @@
 //! даёт dApp-строке превратиться в способ открыть наш собственный интерфейс
 //! или локальный сервис в чужой рамке.
 
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+#[cfg(desktop)]
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::error::{AppError, AppResult};
+#[cfg(desktop)]
 use crate::providers::validate_external_url;
 
 /// Размер окна dApp. Достаточно для десктопного интерфейса, но не
 /// во весь экран: пользователь должен видеть, что это отдельное окно.
+#[cfg(desktop)]
 const DAPP_WIDTH: f64 = 1024.0;
+#[cfg(desktop)]
 const DAPP_HEIGHT: f64 = 800.0;
+#[cfg(desktop)]
 const DAPP_MIN_WIDTH: f64 = 480.0;
+#[cfg(desktop)]
 const DAPP_MIN_HEIGHT: f64 = 360.0;
 
 /// Открывает внешний dApp в изолированном окне.
@@ -42,6 +49,7 @@ const DAPP_MIN_HEIGHT: f64 = 360.0;
 /// Возвращает метку окна. Повторный вызов с тем же адресом не создаёт второе
 /// окно: оно фокусируется. Иначе клик по примеру дважды оставлял бы
 /// невидимые копии поверх друг друга.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> {
     let parsed = validate_external_url(&url)?;
@@ -114,6 +122,16 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
 ///
 /// Ошибку намеренно проглатываем: если страница ещё грузится, `eval` может
 /// не пройти, и падать из-за этого незачем — пользователь нажмёт ещё раз.
+/// На мобильных платформах отдельного окна с меню нет: открытие dApp там
+/// пока не поддерживается. Команда остаётся зарегистрированной, чтобы
+/// фронтенд получал понятную ошибку, а не «команда не найдена».
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn open_dapp(_url: String) -> AppResult<String> {
+    Err(AppError::internal("dApp windows are not available on mobile yet"))
+}
+
+#[cfg(desktop)]
 fn navigate(win: &tauri::Window, js: &str) {
     if let Some(webview) = win.app_handle().get_webview_window(win.label()) {
         let _ = webview.eval(js);
@@ -125,6 +143,7 @@ fn navigate(win: &tauri::Window, js: &str) {
 /// Tauri требует метку из `[a-zA-Z0-9-_]`, поэтому URL не годится напрямую.
 /// FNV-1a даёт стабильную метку без зависимостей: один и тот же адрес всегда
 /// открывается в одном и том же окне.
+#[cfg(desktop)]
 fn window_label(url: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in url.as_bytes() {

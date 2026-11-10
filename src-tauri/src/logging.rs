@@ -61,6 +61,11 @@ static GUARD: OnceLock<Mutex<Option<WorkerGuard>>> = OnceLock::new();
 /// `app_data_dir()` — это `$XDG_DATA_HOME/<identifier>`, что совпадает с
 /// `dirs::data_local_dir()`, поэтому путь тот же.
 pub fn init() {
+    // Android: логи идут в logcat (тег "stauri"), файлового пути на телефоне нет.
+    #[cfg(target_os = "android")]
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Debug).with_tag("stauri"),
+    );
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Чужой шум (tauri, reqwest, hyper) — только warn: их debug
         // утопил бы записи самого приложения.

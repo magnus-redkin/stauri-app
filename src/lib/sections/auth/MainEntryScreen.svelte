@@ -90,4 +90,7 @@
   {#if statusState.errorMsg}
     <p class="text-destructive text-sm text-center max-w-md">{statusState.errorMsg}</p>
   {/if}
+  {#if statusState.probe}
+    <p class="text-primary text-xs text-center max-w-md break-all">{statusState.probe}</p>
+  {/if}
 </div>

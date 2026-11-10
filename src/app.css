@@ -1,7 +1,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * Тёмная тема определяется атрибутом data-theme="dark", а не классом .dark.
+ *
+ * Раньше было две системы: maroon/light через data-theme, dark через класс.
+ * Это мешало добавить четвёртую тему и ломало light (она переопределяла
+ * только часть переменных, остальные наследовались от maroon — «светлая»
+ * на самом деле оставалась бежевой).
+ *
+ * shadcn-компоненты используют dark:-утилиты. Этот вариант сохраняет их
+ * работоспособность: dark: срабатывает внутри [data-theme="dark"].
+ */
+@custom-variant dark (&:where([data-theme="dark"] *));
 
 html, body {
   height: 100%;
@@ -9,7 +20,7 @@ html, body {
 }
 
 /* =========================================
-   БАЗОВЫЕ ПЕРЕМЕННЫЕ (СВЕТЛАЯ ТЕМА)
+   ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ (совпадают с maroon)
    ========================================= */
 :root {
   --background: #fdfbf7;
@@ -18,7 +29,7 @@ html, body {
   --card-foreground: #1a1a1a;
   --popover: #ffffff;
   --popover-foreground: #1a1a1a;
-  --primary: #800000; /* Maroon */
+  --primary: #800000;
   --primary-foreground: #ffffff;
   --secondary: #f4efe6;
   --secondary-foreground: #1a1a1a;
@@ -28,6 +39,15 @@ html, body {
   --accent-foreground: #800000;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #ea580c;
+  --warning-foreground: #ffffff;
+  --info: #2563eb;
+  --info-foreground: #ffffff;
+  --surface: #f4efe6;
+  --surface-raised: #ffffff;
+  --overlay: rgb(0 0 0 / 0.1);
   --border: #e5e7eb;
   --input: #e5e7eb;
   --ring: #800000;
@@ -35,83 +55,105 @@ html, body {
 }
 
 /* =========================================
-   ТЕМА MAROON (по умолчанию для Stauri)
+   MAROON — основная тема Stauri
    ========================================= */
 [data-theme="maroon"] {
   --background: #fdfbf7;
   --foreground: #1a1a1a;
-
   --card: #ffffff;
   --card-foreground: #1a1a1a;
-
   --popover: #ffffff;
   --popover-foreground: #1a1a1a;
-
-  --primary: #800000; /* Maroon */
+  --primary: #800000;
   --primary-foreground: #ffffff;
-
-  --secondary: #f4efe6; /* Светлый беж */
+  --secondary: #f4efe6;
   --secondary-foreground: #1a1a1a;
-
   --muted: #f4efe6;
   --muted-foreground: #6b7280;
-
   --accent: #f4efe6;
   --accent-foreground: #800000;
-
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #ea580c;
+  --warning-foreground: #ffffff;
+  --info: #2563eb;
+  --info-foreground: #ffffff;
+  --surface: #f4efe6;
+  --surface-raised: #ffffff;
+  --overlay: rgb(0 0 0 / 0.1);
   --border: #e5e7eb;
   --input: #e5e7eb;
   --ring: #800000;
 }
 
 /* =========================================
-   ТЕМНАЯ ТЕМА (Dark)
-   ========================================= */
-.dark {
-  --background: #1a1a1a;
-  --foreground: #fdfbf7;
-
-  --card: #262626;
-  --card-foreground: #fdfbf7;
-
-  --popover: #262626;
-  --popover-foreground: #fdfbf7;
-
-  --primary: #a83232; /* Более светлый maroon для темной темы */
-  --primary-foreground: #ffffff;
-
-  --secondary: #333333;
-  --secondary-foreground: #fdfbf7;
-
-  --muted: #333333;
-  --muted-foreground: #a3a3a3;
-
-  --accent: #333333;
-  --accent-foreground: #a83232;
-
-  --destructive: #7f1d1d;
-  --destructive-foreground: #ffffff;
-
-  --border: #404040;
-  --input: #404040;
-  --ring: #a83232;
-}
-
-/* =========================================
-   ТЕМА LIGHT (чистый белый, без бежа)
+   LIGHT — нейтральная светлая
    ========================================= */
 [data-theme="light"] {
   --background: #ffffff;
   --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
   --primary: #171717;
   --primary-foreground: #ffffff;
   --secondary: #f5f5f5;
   --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #6b7280;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #ea580c;
+  --warning-foreground: #ffffff;
+  --info: #2563eb;
+  --info-foreground: #ffffff;
+  --surface: #f5f5f5;
+  --surface-raised: #ffffff;
+  --overlay: rgb(0 0 0 / 0.1);
   --border: #e5e5e5;
+  --input: #e5e5e5;
   --ring: #171717;
+}
+
+/* =========================================
+   DARK — тёмная
+   ========================================= */
+[data-theme="dark"] {
+  --background: #1a1a1a;
+  --foreground: #fdfbf7;
+  --card: #262626;
+  --card-foreground: #fdfbf7;
+  --popover: #262626;
+  --popover-foreground: #fdfbf7;
+  --primary: #a83232;
+  --primary-foreground: #ffffff;
+  --secondary: #333333;
+  --secondary-foreground: #fdfbf7;
+  --muted: #333333;
+  --muted-foreground: #a3a3a3;
+  --accent: #333333;
+  --accent-foreground: #a83232;
+  --destructive: #7f1d1d;
+  --destructive-foreground: #ffffff;
+  --success: #22c55e;
+  --success-foreground: #0a0a0a;
+  --warning: #f97316;
+  --warning-foreground: #0a0a0a;
+  --info: #3b82f6;
+  --info-foreground: #0a0a0a;
+  --surface: #333333;
+  --surface-raised: #262626;
+  --overlay: rgb(0 0 0 / 0.5);
+  --border: #404040;
+  --input: #404040;
+  --ring: #a83232;
 }
 
 @theme inline {
@@ -131,6 +173,15 @@ html, body {
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-overlay: var(--overlay);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

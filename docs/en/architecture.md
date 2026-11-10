@@ -4,7 +4,7 @@ This document describes how Stauri is structured as a whole: what layers it
 consists of, how they communicate, and why the boundaries are drawn the way
 they are. It complements `networks_and_balances.md` (the concrete path from a
 balance to the screen), `status_outdated_architecture.md` (why `status-go` is
-complex) and `BUILDING.md` (building `status-backend` in Nix).
+complex) and `docs/BUILDING.md` (building `status-backend` in Nix).
 
 ## 1. The main decision: a sidecar, not a library
 
@@ -26,6 +26,6 @@ The price is process management: `start_backend` / `stop_backend`, a PID file,
 killing "zombies" at startup. All of this lives in `src-tauri/src/lib.rs`.
 Additionally: `status-backend` and `libsds.so` must be built in the **same Nix
 environment** (same glibc, same ABI), otherwise `status-backend` crashes with
-`SIGSEGV` while loading `libsds.so` (see `BUILDING.md`).
+`SIGSEGV` while loading `libsds.so` (see `docs/BUILDING.md`).
 
 ## 2. Layers

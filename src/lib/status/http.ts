@@ -1,6 +1,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { invoke } from '@tauri-apps/api/core';
 import { debug, error } from '$lib/utils/log';
+import { statusState } from '$lib/stores/statusStore.svelte';
 
 /**
  * Клиент status-go RPC.
@@ -40,6 +41,19 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
   const method = methodOf(body);
   const label = `${endpoint}/${method}`;
   const started = performance.now();
+  // Android: HTTP-сервера нет, запрос идёт через мост libstatus.so (B.2).
+  if (isAndroid()) {
+    const started = performance.now();
+    debug(`[statusFetch] → ${label} (bridge)`);
+    const text = await invoke<string>('status_call', {
+      endpoint,
+      body: JSON.stringify(body),
+    });
+    statusState.probe = `[bridge] ${label}: ${text.length}b`;
+    debug(`[statusFetch] ← ${label} ok ${Math.round(performance.now() - started)}ms (bridge)`);
+    return parseBody<T>(text, label, endpoint);
+  }
+
 
   debug(`[statusFetch] → ${label}`);
 
@@ -66,6 +80,12 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
   const text = await response.text();
   debug(`[statusFetch] ← ${label} ok ${ms}ms len=${text.length}`);
 
+  return parseBody<T>(text, label, endpoint);
+}
+
+
+/** Разбор текста ответа status-go: пустой ответ, JSON, ошибки JSON-RPC. */
+function parseBody<T>(text: string, label: string, endpoint: string): T {
   // 2. Пустой ответ (например, LoginAccount) — это нормально
   if (!text || text.trim() === '') {
     return {} as T;
@@ -99,4 +119,9 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
   }
 
   return data as T;
+}
+
+/** Android: HTTP-сервера бэкенда нет, поэтому запросы идут через мост. */
+function isAndroid(): boolean {
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }

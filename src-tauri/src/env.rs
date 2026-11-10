@@ -22,7 +22,7 @@ pub fn load_env() -> bool {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // 1. Пользовательский конфиг: ~/.config/com.magnus.stauri-app/.env
-    if let Some(dir) = dirs::config_dir() {
+    if let Some(dir) = crate::appdirs::config_dir() {
         candidates.push(dir.join(APP_IDENTIFIER).join(".env"));
     }
 
