@@ -543,6 +543,9 @@ echo "AppImage: $APPIMAGE_PATH"
 
 # ---------- 7a. APK (Android, release, подписанный) ----------
 echo
+if [[ "${RELEASE_SKIP_ANDROID:-0}" == "1" ]]; then
+  echo "[7a] Android APK: пропущен (RELEASE_SKIP_ANDROID=1, собирает release-android.sh)"
+else
 echo "[7a] Android APK (release)"
 
 ANDROID_DIR="$ROOT/src-tauri/gen/android"
@@ -603,6 +606,8 @@ if [[ -n "$APKSIGNER" ]]; then
   }
 else
   echo "  WARNING: apksigner не найден — подпись APK не проверена" >&2
+fi
+
 fi
 
 # ---------- 8. Контрольные суммы, подпись, манифест обновления, тег ----------

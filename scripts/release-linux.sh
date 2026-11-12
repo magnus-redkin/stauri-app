@@ -93,10 +93,10 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-# 2. Сборка. release.sh делает всю работу; тег не трогает.
+# 2. Сборка. release.sh делает всю работу; тег не трогает, APK не собирает.
 echo
 echo "[2/4] Сборка AppImage (release.sh, RELEASE_NO_TAG=1)"
-RELEASE_NO_TAG=1 ./scripts/release.sh "$VERSION"
+RELEASE_NO_TAG=1 RELEASE_SKIP_ANDROID=1 ./scripts/release.sh "$VERSION"
 
 APPIMAGE="$(ls -t "$ROOT"/src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
 SHA_FILE="${APPIMAGE}.sha256"
