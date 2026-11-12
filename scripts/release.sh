@@ -252,7 +252,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
     echo "  WARNING: рабочее дерево содержит незакоммиченные изменения." >&2
     echo "           Тег v$VERSION будет указывать на HEAD, а не на эти файлы." >&2
   fi
-  if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+  if [[ "${RELEASE_NO_TAG:-0}" != "1" ]] && git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
     echo "ERROR: тег v$VERSION уже существует." >&2
     echo "       Версия должна монотонно расти: старый тег уже указывает на другой коммит." >&2
     exit 1
@@ -720,7 +720,9 @@ fi
 # из которого действительно собран этот AppImage. Push не делаем — отправка
 # в remote остаётся решением человека. `git tag -a` создаёт аннотированный
 # тег, у него есть дата и автор, в отличие от лёгкого.
-if git rev-parse --git-dir >/dev/null 2>&1; then
+if [[ "${RELEASE_NO_TAG:-0}" == "1" ]]; then
+  echo "  tag: пропущен (RELEASE_NO_TAG=1, тег ставит release-create.sh)"
+elif git rev-parse --git-dir >/dev/null 2>&1; then
   if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
     echo "  WARNING: тег v$VERSION появился во время сборки — не переставляю" >&2
   else
