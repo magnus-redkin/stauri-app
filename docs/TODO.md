@@ -14,7 +14,10 @@
 1. [ ] Выкладка релиза (решение: сборка локально, выкладка через `gh`)
    - [x] Исправить endpoint updater: `tauri.conf.json` и `release.sh` указывают на `magnus-redkin/stauri-app`
    - [ ] `scripts/publish.sh`: тег, `gh release create` (или `upload --clobber`), ассеты AppImage, `.sha256`, `.sig`, `latest.json`; `--prerelease` для `-beta`
-   - [ ] Генерация `CHANGELOG.md` из git-истории по тегам, группы feat/fix/refactor
+   - [x] Генерация `CHANGELOG.md`: `scripts/release-changelog.sh` (шаг 0). Файл сгенерирован для 0.4.0-beta, **коммит — за вами**
+   - [ ] `release-create.sh`: тег и draft-релиз
+   - [ ] `release-linux.sh` и `release-android.sh`: ассеты в draft
+   - [ ] `release-publish.sh`: снятие draft (только по подтверждению)
    - [ ] Push тега и выкладка в GitHub — только после подтверждения
 2. [ ] Релиз **0.4.0-beta** (ассеты и CHANGELOG)
 3. [ ] Сборка Windows (`status-backend.exe`, `libsds.dll`) и релиз **0.4.0**
