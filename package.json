@@ -17,7 +17,8 @@
     "tests": "pnpm run test:frontend && pnpm run test:rust",
     "test:frontend": "vitest run",
     "test:rust": "cd src-tauri && cargo test",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:integration": "./scripts/integration-contact.sh"
   },
   "license": "MPL-2.0",
   "dependencies": {

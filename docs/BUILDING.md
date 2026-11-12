@@ -217,6 +217,26 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
   `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` не отвечают. Чаты и каналы
   на телефоне пока не работают (см. `TODO.md`, ветку Android).
 
+## Интеграционный тест контактов (отдельно, не в CI)
+
+`scripts/integration-contact.sh` (или `pnpm test:integration`) проверяет сквозной
+сценарий «приглашение в контакты» на двух настоящих нодах:
+
+1. поднимает два `status-backend` на портах 34501 и 34502 с разными каталогами;
+2. создаёт в каждом профиль;
+3. нода B отправляет заявку на `compressedKey` ноды A (то, что в интерфейсе —
+   «Join by invite»);
+4. нода A ждёт входящую заявку и принимает её;
+5. проверяет `mutual` на обеих сторонах.
+
+Требуется собранный `src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu`
+и `libsds.so` рядом (см. шаги 1–2 выше). Параметры: `PORT_A`, `PORT_B`,
+`TIMEOUT` (доставка через Waku, по умолчанию 120 с), `PASSWORD`.
+
+**Шаги 1–3 и 5 детерминированы. Шаг 4 зависит от доставки через Waku** и может
+закончиться кодом 2 («заявка не дошла за N с») — это не ошибка формата, а сеть.
+Поэтому тест не входит в `pnpm test` и в CI: запускать отдельной командой.
+
 ## Проверка сборки (CI)
 
 В CI (`.github/workflows/ci.yml`) сейчас: `pnpm check`, `pnpm lint`, `pnpm test`,
