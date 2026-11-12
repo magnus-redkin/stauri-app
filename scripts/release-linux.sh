@@ -55,10 +55,13 @@ echo "=== Linux-артефакты для $TAG ==="
 echo "[1/4] Предусловия"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   TAG_SHA="$(git rev-parse "$TAG^{commit}")"
-  if [[ "$TAG_SHA" == "$(git rev-parse HEAD)" ]]; then
-    ok "тег $TAG на HEAD ($(git rev-parse --short HEAD))"
+  # Собираем код приложения, поэтому сравниваем его, а не весь HEAD:
+  # коммиты с правками скриптов релиза не меняют сборку.
+  APP_PATHS=(src src-tauri package.json pnpm-lock.yaml)
+  if [[ -z "$(git diff --name-only "$TAG_SHA" HEAD -- "${APP_PATHS[@]}")" ]]; then
+    ok "тег $TAG ($(git rev-parse --short "$TAG_SHA")): код приложения совпадает с HEAD"
   else
-    fail "тег $TAG указывает на $(git rev-parse --short "$TAG_SHA"), а HEAD — $(git rev-parse --short HEAD)"
+    fail "код приложения в HEAD отличается от тега $TAG — сборка не из того кода"
   fi
 else
   fail "тега $TAG нет (сначала release-create.sh)"
