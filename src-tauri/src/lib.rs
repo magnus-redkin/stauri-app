@@ -18,6 +18,7 @@
 use tauri::Manager;
 
 mod appdirs;
+mod trace;
 mod auth_proxy;
 mod backend;
 mod backend_rpc;
@@ -68,6 +69,9 @@ pub fn run() {
             if let Ok(dir) = app.path().app_config_dir() {
                 appdirs::set_config_dir(dir);
             }
+     if let Ok(dir) = app.path().app_data_dir() {
+  trace::set_dir(dir);
+     }
             Ok(())
         })
         .manage(sidecar::BackendState::default())

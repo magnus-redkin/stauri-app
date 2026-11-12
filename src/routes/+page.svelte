@@ -47,7 +47,8 @@
     loadWallet,
     resetWallet,
     startWalletPolling,
-    stopWalletPolling
+    stopWalletPolling,
+    refreshWallet
   } from '$lib/stores/walletStore.svelte';
   import { resetSend } from '$lib/stores/sendStore.svelte';
   import { resetEns } from '$lib/stores/ensStore.svelte';
@@ -62,22 +63,47 @@
   import ProfileLeft from "$lib/sections/profile/ProfileLeft.svelte";
   import EditProfile from "$lib/sections/profile/EditProfile.svelte";
   import CreateSeed from "$lib/sections/profile/CreateSeed.svelte";
-  import ContactsLeft from "$lib/sections/contacts/ContactsLeft.svelte";
-  import ContactsMain from "$lib/sections/contacts/ContactsMain.svelte";
   import SettingsLeft from "$lib/sections/settings/SettingsLeft.svelte";
   import SettingsMain from "$lib/sections/settings/SettingsMain.svelte";
   import WalletLeft from "$lib/sections/wallet/WalletLeft.svelte";
   import WalletMain from "$lib/sections/wallet/WalletMain.svelte";
   import MarketMain from "$lib/sections/market/MarketMain.svelte";
   import ChatLeft from "$lib/sections/chat/ChatLeft.svelte";
+  import ChatHeaderIcons from "$lib/sections/chat/ChatHeaderIcons.svelte";
   import ChatMain from "$lib/sections/chat/ChatMain.svelte";
   import DappsLeft from "$lib/sections/dapps/DappsLeft.svelte";
   import DappsMain from "$lib/sections/dapps/DappsMain.svelte";
   import SectionPane from "$lib/sections/layout/SectionPane.svelte";
+  import MobileShell from "$lib/sections/layout/MobileShell.svelte";
 
+
+  // История раздела пока пустая: стрелки появятся, когда разделы начнут её вести.
+  // Карандаш в мобильной шапке: Profile открывает редактирование, Wallet — список аккаунтов.
+  let mobileEditProfile = $state(false);
+  let mobileWalletAccounts = $state(false);
+
+  const noHistory = { canBack: false, canForward: false, back: () => {}, forward: () => {} };
+
+  const SECTION_TITLES: Record<string, string> = {
+    home: 'Home', profile: 'Profile', chat: 'Chat', wallet: 'All accounts',
+    dapps: 'dApps', market: 'Market', settings: 'Settings',
+  };
+  function sectionTitle(id: string): string {
+    return SECTION_TITLES[id] ?? '';
+  }
 
   // Навигация
   let activeSection = $state('home');
+  // Мобильный layout: одна панель, нижнее меню. Порог — ширина окна (≤ 768px).
+  let isMobile = $state(false);
+  // Какая панель раздела видна в мобильном layout: LP или RP.
+  $effect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const update = () => (isMobile = mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  });
   let showRecovery = $state(false);
   let showCreateSeed = $state(false);
 
@@ -384,6 +410,9 @@
    * сообществ было не выбраться — оставалась только кнопка «обновить».
    */
   function handleSectionSelect(id: string) {
+    // Раздел открывается заново с его первого экрана.
+    mobileEditProfile = false;
+    mobileWalletAccounts = false;
     if (id !== activeSection) return;
     if (id === 'dapps') resetDappsView();
   }
@@ -424,6 +453,117 @@
   }
 </script>
 
+    {#snippet chatActions()}
+      <ChatHeaderIcons />
+    {/snippet}
+
+    {#snippet profileActions()}
+      <button
+        type="button"
+        onclick={() => (mobileEditProfile = !mobileEditProfile)}
+        class="h-11 w-11 rounded-md bg-card flex items-center justify-center"
+ aria-label="Edit profile"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+      </button>
+    {/snippet}
+
+    {#snippet walletActions()}
+      <button
+ type="button"
+        onclick={() => refreshWallet()}
+ disabled={walletState.isRefreshing}
+ class="h-11 w-11 rounded-md bg-card flex items-center justify-center disabled:opacity-50"
+        aria-label="Refresh"
+      >
+        <span class={walletState.isRefreshing ? 'inline-block animate-spin' : 'inline-block'}>🔄</span>
+      </button>
+      <button
+ type="button"
+        onclick={() => (mobileWalletAccounts = !mobileWalletAccounts)}
+        class="h-11 w-11 rounded-md bg-card flex items-center justify-center"
+        aria-label="Edit account"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+      </button>
+    {/snippet}
+
+    {#snippet mobileContent()}
+      {#if activeSection === 'chat'}
+        {#if chatsState.selected || chatsState.rightPanel !== 'chat'}
+          {@render rightPane()}
+ {:else}
+          {@render leftPane()}
+ {/if}
+      {:else if activeSection === 'profile' || activeSection === 'home'}
+        {#if mobileEditProfile}
+   <EditProfile onNavigate={(s) => { mobileEditProfile = false; activeSection = s; }} />
+        {:else}
+          {@render leftPane()}
+        {/if}
+      {:else if activeSection === 'wallet' && mobileWalletAccounts}
+        <WalletLeft />
+      {:else}
+ {@render rightPane()}
+      {/if}
+    {/snippet}
+
+    {#snippet leftPane()}
+      <SectionPane>
+        {#if activeSection === 'home' || activeSection === 'profile'}
+   <ProfileLeft
+     onDisconnect={handleDisconnect}
+     onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
+          />
+        {:else if activeSection === 'settings'}
+          <SettingsLeft />
+        {:else if activeSection === 'wallet'}
+   <WalletLeft />
+        {:else if activeSection === 'chat'}
+                 <ChatLeft compact={isMobile} onSelectChat={(chat) => selectChat(chat.id)} />
+ {:else if activeSection === 'dapps'}
+   <DappsLeft />
+        {:else}
+   <ProfileLeft
+     onDisconnect={handleDisconnect}
+     onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
+   />
+ {/if}
+      </SectionPane>
+    {/snippet}
+
+    {#snippet rightPane()}
+      <SectionPane>
+ {#if activeSection === 'home'}
+   <HomeMain onNavigate={(s) => activeSection = s} />
+        {:else if activeSection === 'profile'}
+          {#if showCreateSeed}
+     <CreateSeed
+       onBack={() => showCreateSeed = false}
+onSave={() => {
+         setSeedSaved(true);
+  showCreateSeed = false;
+       }}
+            />
+          {:else}
+            <EditProfile onNavigate={(s) => activeSection = s} />
+   {/if}
+        {:else if activeSection === 'settings'}
+          <SettingsMain />
+        {:else if activeSection === 'wallet'}
+   <WalletMain compact={isMobile} />
+        {:else if activeSection === 'market'}
+          <MarketMain />
+ {:else if activeSection === 'chat'}
+          <ChatMain />
+ {:else if activeSection === 'dapps'}
+          <DappsMain onOpenChat={handleOpenChat} />
+ {:else}
+          <HomeMain onNavigate={(s) => activeSection = s} />
+        {/if}
+      </SectionPane>
+    {/snippet}
+
 <div class="min-h-screen bg-background">
   <!-- Плашка Testnet -->
   {#if statusState.isTestnet}
@@ -463,82 +603,41 @@
 
   <!-- Основной интерфейс -->
   {:else}
+    {#if isMobile}
+      <MobileShell
+ bind:activeSection
+        onSelect={handleSectionSelect}
+        content={mobileContent}
+ actions={activeSection === 'chat' ? chatActions : activeSection === 'wallet' ? walletActions : activeSection === 'profile' ? profileActions : undefined}
+ title={sectionTitle(activeSection)}
+ history={noHistory}
+      />
+    {:else}
     <div class="flex h-screen overflow-hidden">
       <SidebarIcons bind:activeSection onSelect={handleSectionSelect} />
 
       <PaneGroup direction="horizontal" class="h-full w-full">
         <!--
-          Панели прокручиваются сами, а не каждый раздел по отдельности.
+   Панели прокручиваются сами, а не каждый раздел по отдельности.
 
-          `SectionPane` даёт обеим панелям определённую высоту и внешнюю
+   `SectionPane` даёт обеим панелям определённую высоту и внешнюю
           прокрутку. Разделы, у которых есть своя прокрутка (список чатов,
-          кошелёк), занимают ровно высоту панели — внешняя не появляется.
-          Раздел без своей прокрутки, оказавшийся длиннее панели, получает
-          её здесь, и проверять это в каждом новом разделе не нужно.
+   кошелёк), занимают ровно высоту панели — внешняя не появляется.
+   Раздел без своей прокрутки, оказавшийся длиннее панели, получает
+   её здесь, и проверять это в каждом новом разделе не нужно.
         -->
         <Pane defaultSize={30} minSize={20} class="h-full overflow-hidden border-r border-border">
-          <SectionPane>
-            {#if activeSection === 'home' || activeSection === 'profile'}
-              <ProfileLeft
-                onDisconnect={handleDisconnect}
-                onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
-              />
-            {:else if activeSection === 'contacts'}
-              <ContactsLeft />
-            {:else if activeSection === 'settings'}
-              <SettingsLeft />
-            {:else if activeSection === 'wallet'}
-              <WalletLeft />
-            {:else if activeSection === 'chat'}
-              <ChatLeft onSelectChat={(chat) => selectChat(chat.id)} />
-            {:else if activeSection === 'dapps'}
-              <DappsLeft />
-            {:else}
-              <ProfileLeft
-                onDisconnect={handleDisconnect}
-                onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
-              />
-            {/if}
-          </SectionPane>
+   {@render leftPane()}
         </Pane>
 
         <PaneResizer class="w-1 bg-border hover:bg-primary transition-colors cursor-col-resize" />
 
         <!-- MAIN PANEL -->
         <Pane defaultSize={70} class="h-full overflow-hidden bg-card">
-          <SectionPane>
-            {#if activeSection === 'home'}
-              <HomeMain onNavigate={(s) => activeSection = s} />
-            {:else if activeSection === 'profile'}
-              {#if showCreateSeed}
-                <CreateSeed
-                  onBack={() => showCreateSeed = false}
-                  onSave={() => {
-                    setSeedSaved(true);
-                    showCreateSeed = false;
-                  }}
-                />
-              {:else}
-                <EditProfile onNavigate={(s) => activeSection = s} />
-              {/if}
-            {:else if activeSection === 'contacts'}
-              <ContactsMain onOpenChat={handleOpenChat} />
-            {:else if activeSection === 'settings'}
-              <SettingsMain />
-            {:else if activeSection === 'wallet'}
-              <WalletMain />
-            {:else if activeSection === 'market'}
-              <MarketMain />
-            {:else if activeSection === 'chat'}
-              <ChatMain />
-            {:else if activeSection === 'dapps'}
-              <DappsMain onOpenChat={handleOpenChat} />
-            {:else}
-              <HomeMain onNavigate={(s) => activeSection = s} />
-            {/if}
-          </SectionPane>
+   {@render rightPane()}
         </Pane>
       </PaneGroup>
     </div>
+    {/if}
   {/if}
 </div>

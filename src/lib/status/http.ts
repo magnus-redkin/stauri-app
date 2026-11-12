@@ -49,7 +49,7 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
       endpoint,
       body: JSON.stringify(body),
     });
-    statusState.probe = `[bridge] ${label}: ${text.length}b`;
+    statusState.probe = `[bridge] ${label}: ${text.slice(0, 120)}`;
     debug(`[statusFetch] ← ${label} ok ${Math.round(performance.now() - started)}ms (bridge)`);
     return parseBody<T>(text, label, endpoint);
   }

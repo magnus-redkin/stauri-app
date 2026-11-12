@@ -4,11 +4,8 @@
   import { chatsState, setSelectedChat, removeChat, setRightPanel } from '$lib/stores/chatsStore.svelte';
   import { removeFeed, feedChatItems } from '$lib/stores/feedsStore.svelte';
 
-  let { onSelectChat }: { onSelectChat?: (chat: ChatItem) => void } = $props();
+  let { onSelectChat, compact = false }: { onSelectChat?: (chat: ChatItem) => void; compact?: boolean } = $props();
 
-  let searchQuery = $state('');
-  /** Поле поиска: клик по иконке поиска возвращает на него фокус. */
-  let searchEl = $state<HTMLInputElement | null>(null);
 
   export type ChatItem = {
     id: string;
@@ -25,6 +22,8 @@
      */
     type: 'direct' | 'channel' | 'community' | 'external';
     isPendingRequest?: boolean;
+    /** Время последней активности (мс): сортировка списка «по дате». */
+    sortTs?: number;
     unreadCount?: number;
     /** Для каналов сообществ: к какому сообществу и категории относятся. */
     communityId?: string;
@@ -47,15 +46,10 @@
    * `communityName`. Без этой ветки ввод `stauri-akk-test-1131` не находил
    * ничего, хотя канал видён под заголовком с этим именем.
    */
-  const filteredItems = $derived.by(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return chatsState.items;
-    return chatsState.items.filter(i =>
-      i.name.toLowerCase().includes(q) ||
-      i.id.toLowerCase().includes(q) ||
-      (i.communityName || '').toLowerCase().includes(q)
-    );
-  });
+  // По дате активности, новые сверху. Копия: стор не мутируем.
+  const filteredItems = $derived(
+    [...chatsState.items].sort((a, b) => (b.sortTs ?? 0) - (a.sortTs ?? 0))
+  );
 
   /**
    * Подписки на внешние ленты как элементы списка чатов.
@@ -73,14 +67,7 @@
     // который открывает ленту по id из другого раздела.
     const items: ChatItem[] = feedChatItems();
 
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (i) =>
-        i.name.toLowerCase().includes(q) ||
-        i.id.toLowerCase().includes(q) ||
-        (i.source || '').toLowerCase().includes(q)
-    );
+    return items;
   });
 
   /**
@@ -128,10 +115,19 @@
 </script>
 
 <div class="flex flex-col h-full border-r border-border bg-card">
+  {#if !compact}
   <div class="p-3 border-b border-border">
     <div class="flex items-center justify-between gap-1">
       <span class="font-bold text-lg text-primary px-1">{i18n.t('Chat')}</span>
       <div class="flex items-center gap-1">
+        <button
+   onclick={() => setRightPanel('contacts')}
+          class="h-8 w-8 rounded-md hover:bg-secondary flex items-center justify-center"
+   title={i18n.t('Search contacts and channels')}
+   aria-label={i18n.t('Search contacts and channels')}
+ >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+ </button>
         <button
    onclick={() => setRightPanel('contactInvite')}
    class="h-8 w-8 rounded-md hover:bg-secondary flex items-center justify-center"
@@ -159,26 +155,8 @@
       </div>
     </div>
 
-    <!-- Поиск всегда под иконками. Клик по иконке поиска возвращает фокус сюда. -->
-    <div class="mt-2 relative">
-      <button
-        type="button"
-        onclick={() => searchEl?.focus()}
-        class="absolute left-2 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground"
-        title={i18n.t('Search')}
- aria-label={i18n.t('Search')}
-      >
- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-      </button>
-      <input
-        bind:this={searchEl}
- bind:value={searchQuery}
- placeholder={i18n.t('Search')}
-        class="w-full h-9 border-2 border-input rounded-md pl-8 pr-3 text-sm bg-background focus:border-primary focus:outline-none"
- aria-label={i18n.t('Search')}
-      />
-    </div>
   </div>
+  {/if}
 
   <!--
     `min-h-0` обязателен: во flex-контейнере потомок по умолчанию не может

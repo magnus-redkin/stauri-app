@@ -237,7 +237,32 @@ pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<St
 pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<String> {
     #[cfg(target_os = "android")]
     {
- crate::inprocess::backend()?.direct(&endpoint, &body)
+ if endpoint == "TraceNote" {
+     // Тестовые заметки фронтенда. Пароль сюда не попадает.
+            crate::trace::line(&format!("note {body}"));
+     return Ok(String::new());
+        }
+        crate::trace::line(&format!("call {endpoint} body={}b", body.len()));
+ let res = crate::inprocess::backend()?.direct(&endpoint, &body);
+        match &res {
+     Ok(text) => {
+  crate::trace::line(&format!("ok {endpoint} len={} text={}", text.len(), text.chars().take(200).collect::<String>()));
+         if endpoint == "InitializeApplication" {
+      if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+          match v.get("accounts").and_then(|a| a.get(0)) {
+       Some(acc) => {
+    let fields: Vec<String> = acc.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+    let key_uid = acc.get("key-uid").or_else(|| acc.get("keyUid")).and_then(|k| k.as_str()).unwrap_or("<none>");
+           crate::trace::line(&format!("init account fields={fields:?} key-uid={key_uid}"));
+       }
+       None => crate::trace::line("init accounts: none"),
+   }
+      }
+  }
+     }
+     Err(e) => crate::trace::line(&format!("err {endpoint} {e}")),
+        }
+ res
     }
     #[cfg(not(target_os = "android"))]
     {

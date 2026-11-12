@@ -17,6 +17,7 @@ import {
   waitForLogin,
   waitForNodeStopped,
 } from './statusStore.svelte';
+import { invoke } from '@tauri-apps/api/core';
 import { debug } from '$lib/utils/log';
 import { formatError, errorTag } from '$lib/utils/errors';
 import {
@@ -28,7 +29,7 @@ import {
   startMessenger,
   logout as apiLogout,
 } from '$lib/status/api';
-import { ensureTestNetworkMode } from '$lib/status/wallet';
+import { ensureTestNetworkMode, getSettings } from '$lib/status/wallet';
 import { configureWalletRpc } from './rpcConfig';
 import { isWsOpen, openWs, closeWs } from './ws';
 
@@ -149,8 +150,9 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
 
   // Ошибку входа не глотаем: если нода не поднялась, продолжать не с чем —
   // пусть вызывающий код покажет её пользователю.
+  await traceSecret('login', password);
   await loginAccount(port, password, keyUid);
-  await waitForLogin(30000);
+  await waitForLoginReady(port, 30000);
 
   await configureWalletRpc(port);
   await startMessenger(port);
@@ -217,8 +219,9 @@ export async function login(password: string, keyUid: string) {
   const port = statusState.backendPort;
   if (!isWsOpen()) await openWs(port);
 
+  await traceSecret('login', password);
   await loginAccount(port, password, keyUid);
-  await waitForLogin(30000);
+  await waitForLoginReady(port, 30000);
 
   // Режим сетей — до провайдеров: он определяет, для каких сетей их писать.
   const modeChanged = await applyNetworkMode(port);
@@ -241,9 +244,16 @@ export async function createAccount(password: string) {
   if (!statusState.backendPort) return;
   const port = statusState.backendPort;
   if (!isWsOpen()) await openWs(port);
+  await traceSecret('create', password);
   const createResult = await createAccountAndLogin(port, statusState.backendDataDir, password);
   if (createResult?.error) throw new Error(createResult.error);
-  await waitForLogin(30000);
+  if (isAndroidRuntime()) {
+    // Android: сигнала node.login нет (колбэк SetSignalEventCallback не подключён),
+    // поэтому ждём, пока нода сама ответит на settings_getSettings.
+    await waitForNodeLogin(port, 30000);
+  } else {
+    await waitForLogin(30000);
+  }
 
   const keyUid = statusState.accountKeyUid;
   const modeChanged = await applyNetworkMode(port);
@@ -251,6 +261,90 @@ export async function createAccount(password: string) {
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
   await startMessenger(port);
+}
+
+/** Ожидание входа: на десктопе по сигналу node.login, на Android — опросом ноды. */
+async function waitForLoginReady(port: number, timeoutMs: number): Promise<void> {
+  if (isAndroidRuntime()) return waitForNodeLogin(port, timeoutMs);
+  return waitForLogin(timeoutMs);
+}
+
+/** Тестовая трасса: одна строка в bridge-trace.log через status_call. */
+async function traceNote(note: unknown): Promise<void> {
+  try {
+    await invoke('status_call', { endpoint: 'TraceNote', body: JSON.stringify(note) });
+  } catch {
+    /* трасса не должна ломать вход */
+  }
+}
+
+/**
+ * Тестовая трасса: длина пароля и SHA-256-префикс в bridge-trace.log.
+ * Сам пароль никуда не пишется.
+ */
+async function traceSecret(kind: string, password: string): Promise<void> {
+  if (!isAndroidRuntime()) return;
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
+    const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+    await traceNote({ kind, len: password.length, sha256_16: hex.slice(0, 16) });
+  } catch {
+    /* трасса не должна ломать вход */
+  }
+}
+
+/** Android: сигналов из libstatus.so пока нет, проверяем вход опросом ноды. */
+function isAndroidRuntime(): boolean {
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+}
+
+/**
+ * Ждёт, пока нода вошла в аккаунт: settings_getSettings вернёт key-uid.
+ * Выставляет isLoggedIn и accountKeyUid, как это делает сигнал node.login.
+ */
+async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = '';
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt += 1;
+    try {
+      const raw = await getSettings(port);
+      // CallRPC отдаёт конверт JSON-RPC: настройки лежат в result.
+      const settings = raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw;
+      const keyUid = settings?.['key-uid'];
+      if (attempt <= 5 && isAndroidRuntime()) {
+        await traceNote({
+   attempt,
+   keys: settings && typeof settings === 'object' ? Object.keys(settings) : typeof settings,
+          keyUid: typeof keyUid === 'string' ? keyUid.slice(0, 10) : keyUid ?? null,
+   raw: JSON.stringify(settings ?? null).slice(0, 300),
+        });
+      }
+      if (typeof keyUid === 'string' && keyUid.length > 0) {
+               statusState.accountKeyUid = keyUid;
+ // Те же поля, что приходят в сигнале node.login: без сигнала на Android
+        // публичный ключ и alias иначе не появятся в профиле и в инвайте.
+        if (typeof settings['public-key'] === 'string' && settings['public-key']) {
+   statusState.publicKey = settings['public-key'];
+        }
+        if (typeof settings['compressedKey'] === 'string' && settings['compressedKey']) {
+   statusState.compressedKey = settings['compressedKey'];
+        }
+        if (typeof settings['alias'] === 'string' && settings['alias']) {
+          statusState.alias = settings['alias'];
+        }
+        statusState.isLoggedIn = true;
+ return;
+      }
+      lastError = 'settings without key-uid';
+    } catch (e) {
+      lastError = String(e);
+      if (attempt <= 5 && isAndroidRuntime()) await traceNote({ attempt, error: lastError.slice(0, 300) });
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`Login timeout: node did not answer (${lastError})`);
 }
 
 /**

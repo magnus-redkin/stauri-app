@@ -56,7 +56,7 @@ export const chatsState = $state({
 });
 
 /** Режимы правой панели раздела «Чат». */
-export type RightPanel = 'chat' | 'contactInvite' | 'joinInvite' | 'newChannel';
+export type RightPanel = 'chat' | 'contacts' | 'contactInvite' | 'joinInvite' | 'newChannel';
 
 /**
  * Результат подключения к сообществу — для интерфейса.
@@ -120,6 +120,10 @@ function buildItems(
 
   const items: ChatItem[] = [];
   const openedChannels = loadOpenedChannels();
+  // «По дате»: время последнего сообщения, иначе время самого чата (мс).
+  function activityTs(chat: any): number {
+    return Number(chat.lastMessage?.timestamp ?? chat.timestamp ?? 0) * 1000;
+  }
   for (const chat of previews) {
     // Неактивный чат — значит удалён (`deactivateChat`), и он не должен
     // возвращаться в список. Исключение — входящий запрос в контакты: он тоже
@@ -150,7 +154,8 @@ function buildItems(
           ? meta?.communityName || chat.name
    : `${chat.name} · ${meta?.communityName ?? ''}`.replace(/ · $/, ''),
         lastMessage: chat.lastMessage?.text || '',
-        type: 'community',
+        sortTs: activityTs(chat),
+ type: 'community',
         communityId: chat.communityId || meta?.communityId || undefined,
         communityName: meta?.communityName,
         categoryId: chat.categoryId || meta?.categoryID || undefined,
@@ -165,6 +170,7 @@ function buildItems(
       id: chat.id,
       name: nameFor(chat),
       lastMessage: chat.lastMessage?.text || '',
+      sortTs: activityTs(chat),
       type: isDirectMessage(chat) ? 'direct' : 'channel',
       categoryId: chat.categoryId || undefined,
       unreadCount: chat.unviewedMessagesCount || 0,

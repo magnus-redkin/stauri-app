@@ -28,6 +28,7 @@
   import ContactInvitePanel from './ContactInvitePanel.svelte';
   import JoinInvitePanel from './JoinInvitePanel.svelte';
   import CreateChannelPanel from './CreateChannelPanel.svelte';
+  import ContactsSearchPanel from './ContactsSearchPanel.svelte';
 
   let messages = $state<any[]>([]);
   let inputText = $state('');
@@ -422,10 +423,8 @@
     <JoinInvitePanel />
   {:else if chatsState.rightPanel === 'newChannel'}
     <CreateChannelPanel />
-  {:else if !chatsState.selected}
-    <div class="flex items-center justify-center h-full text-muted-foreground">
-      {i18n.t('Select a chat')}
-    </div>
+  {:else if chatsState.rightPanel === 'contacts' || !chatsState.selected}
+    <ContactsSearchPanel />
   {:else}
     <!-- Заголовок -->
     <div class="p-4 border-b border-border flex items-center gap-2">

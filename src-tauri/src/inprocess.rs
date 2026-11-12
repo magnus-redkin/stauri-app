@@ -34,6 +34,7 @@ pub struct InProcessBackend {
     call_rpc: CStrFn,
     initialize: CStrFn,
     login: CStrFn,
+    call_rpc_raw: CStrFn,
     create_and_login: CStrFn,
     logout: unsafe extern "C" fn() -> *mut c_char,
 }
@@ -64,7 +65,10 @@ impl InProcessBackend {
      let initialize: Symbol<CStrFn> = lib
   .get(b"InitializeApplication\0")
          .map_err(|e| AppError::internal(format!("no InitializeApplication: {e}")))?;
-            let login: Symbol<CStrFn> = lib
+            let call_rpc_raw: Symbol<CStrFn> = lib
+         .get(b"CallRPC\0")
+         .map_err(|e| AppError::internal(format!("no CallRPC raw: {e}")))?;
+        let login: Symbol<CStrFn> = lib
          .get(b"LoginAccount\0")
   .map_err(|e| AppError::internal(format!("no LoginAccount: {e}")))?;
 
@@ -78,6 +82,7 @@ impl InProcessBackend {
          call_rpc: *call_rpc,
   initialize: *initialize,
   login: *login,
+  call_rpc_raw: *call_rpc_raw,
   create_and_login: *create_and_login,
   logout: *logout,
          _lib: lib,
@@ -136,6 +141,7 @@ impl InProcessBackend {
          unsafe { free(out as *mut std::ffi::c_void) };
          Ok(text)
      }
+     "CallRPC" => self.invoke(self.call_rpc_raw, body_json),
      other => Err(AppError::internal(format!("unsupported in-process endpoint: {other}"))),
         }
     }

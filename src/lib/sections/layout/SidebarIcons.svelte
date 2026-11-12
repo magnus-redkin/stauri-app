@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Home, User, Users, MessageCircle, Wallet, Store, Settings, Blocks } from "lucide-svelte";
+  import { Home, User, MessageCircle, Wallet, Store, Settings, Blocks } from "lucide-svelte";
   import { i18n } from '$lib/i18n';
   import { statusState } from '$lib/stores/statusStore.svelte'; // <-- Импорт стора
 
@@ -21,7 +21,6 @@
   const navItems = [
     { id: 'home', icon: Home, label: 'Home' },
     { id: 'profile', icon: User, label: 'Profile' },
-    { id: 'contacts', icon: Users, label: 'Contacts' },
     { id: 'chat', icon: MessageCircle, label: 'Chat' },
     // Отдельного раздела «Сообщества» больше нет.
     //

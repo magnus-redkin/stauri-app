@@ -12,6 +12,8 @@
 
 export const LOCAL_SENT = 2;
 export const REMOTE_RECEIVED = 3;
+/** Мы отклонили входящий запрос (`ContactRequestStateDismissed`, contact.go). */
+export const LOCAL_DISMISSED = 4;
 
 export interface ContactRequestFields {
   contactRequestLocalState?: number;

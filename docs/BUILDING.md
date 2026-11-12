@@ -1,8 +1,9 @@
 # Сборка Stauri
 
 Документ описывает сборку `status-backend` (десктоп), `libsds.so`, `libstatus.so`
-(Android) и самого Stauri. Состояние на 2026-11-10: десктоп собирается и
-запускается; Android собирается, вход на телефоне в работе; Windows не собран.
+(Android) и самого Stauri. Состояние на 2026-11-11: десктоп собирается и
+запускается; Android собирается, вход на телефоне работает, чаты и кошелёк в работе
+(см. ветку в `TODO.md`); Windows не собран.
 Открытые задачи — в [`TODO.md`](TODO.md), план — в [`PLAN.md`](PLAN.md).
 
 ## Пререквизиты
@@ -175,6 +176,18 @@ adb logcat -s stauri:V     # Rust (logcat-логгер, тег stauri)
 adb logcat -d | grep -i "libstatus\|UnsatisfiedLink\|FATAL\|AndroidRuntime"
 ```
 
+Трасса моста (тестовая, до релиза не отключается). Файл `bridge-trace.log` лежит
+в каталоге данных приложения и пишется при каждом вызове `status_call` (`call`, `ok`, `err`)
+и заметках фронтенда (`note`). `run-as` работает только в debug-сборке:
+
+```bash
+adb shell run-as com.magnus.stauri_app tail -n 50 bridge-trace.log
+adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед новым прогоном
+```
+
+В трассу не попадает пароль: только его длина и первые 16 символов SHA-256.
+Ответ `CallRPC` — это конверт JSON-RPC (`{"jsonrpc","id","result"}`), поля настроек лежат в `result`.
+
 ## 9. Windows
 
 Не собран. Что известно: `libsds.dll` через `nim c --os:windows` с MinGW не
@@ -200,6 +213,9 @@ adb logcat -d | grep -i "libstatus\|UnsatisfiedLink\|FATAL\|AndroidRuntime"
 - **ldd segfault на `status-backend`** при linuxdeploy. Обход: обёртка `/tmp/bin/ldd`,
   которая для `status-backend` отвечает «statically linked».
 - **`dApp`-окна и `open_dapp` на Android** не поддерживаются (заглушка).
+- **`wakuext_*` недоступен в `libstatus.so`** (`method does not exist`): после входа
+  `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` не отвечают. Чаты и каналы
+  на телефоне пока не работают (см. `TODO.md`, ветку Android).
 
 ## Проверка сборки (CI)
 

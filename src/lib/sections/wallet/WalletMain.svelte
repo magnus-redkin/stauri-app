@@ -43,10 +43,14 @@
    * в ETH, и сумма по ним была бы числом, которого нигде нет.
    */
   const total = $derived(totalBalance(walletState.balances, walletState.prices));
+
+  /** В мобильной оболочке заголовок и Reload выводит титульная строка. */
+  let { compact = false }: { compact?: boolean } = $props();
 </script>
 
 <div class="h-full flex flex-col bg-card overflow-hidden">
   <!-- Шапка: заголовок + адрес + кнопка обновления -->
+  {#if !compact}
   <div class="p-6 pb-0 flex justify-between items-start">
     <div>
       <h2 class="text-2xl font-bold text-primary">{i18n.t('All accounts')}</h2>
@@ -87,6 +91,7 @@
       <span class={walletState.isRefreshing ? 'inline-block animate-spin' : 'inline-block'}>🔄</span>
     </button>
   </div>
+  {/if}
 
   <!-- Кнопки-вкладки -->
   <div class="px-6 mt-4 border-b border-border flex gap-1 overflow-x-auto">
