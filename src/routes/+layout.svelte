@@ -13,9 +13,19 @@
    * Перехват в фазе capture, чтобы сработать раньше обработчиков компонентов.
    * Своего контекстного меню в приложении нет; когда появится, оно должно
    * открываться по событию, а не через браузерное меню.
+   *
+   * Исключение — поля ввода: на Android долгое нажатие в поле открывает меню
+   * «Вставить», и без него туда нельзя вставить текст (ключ приглашения,
+   * адрес). Блокируем только вне полей и областей редактирования.
    */
   onMount(() => {
-    const block = (e: Event) => e.preventDefault();
+    const block = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')) {
+        return;
+      }
+      e.preventDefault();
+    };
     document.addEventListener("contextmenu", block, true);
     return () => document.removeEventListener("contextmenu", block, true);
   });

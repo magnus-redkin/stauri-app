@@ -23,6 +23,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { statusFetch } from './http';
+import { hexToBase58Key } from './invite';
 import { debug } from '$lib/utils/log';
 import type {
   Chat,
@@ -951,15 +952,33 @@ export async function markChatRead(port: number, chatId: string): Promise<any> {
   });
 }
 
+/**
+ * Отправляет заявку в контакты.
+ *
+ * status-go отвергает пустое сообщение
+ * (`requests.SendContactRequest.Validate`: `ErrSendContactRequestInvalidMessage`),
+ * а интерфейс приглашения по ключу сообщения не спрашивает. Поэтому пустой
+ * текст заменяем на приветствие по умолчанию: без него заявка не уходит
+ * вовсе, и ошибка выглядит как «invalid message» без объяснения.
+ */
 export async function sendContactRequest(
   port: number,
   publicKey: string,
   message = ''
 ): Promise<any> {
+  const text = message.trim() || 'Hi! Please add me as a contact.';
+  // status-go ждёт multibase-ключ (`zQ3…`). `0x`-hex сжатого ключа он
+  // декодирует как `f`+hex, и первый байт `03` читается как код типа ключа —
+  // отсюда `unsupported public key type '3'`. Старый несжатый ключ (132
+  // символа) принимается как есть.
+  let id = publicKey.trim();
+  if (/^0x[0-9a-fA-F]{66}$/.test(id)) {
+    id = hexToBase58Key(id);
+  }
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_sendContactRequest',
-    params: [{ id: publicKey, message }],
+    params: [{ id, message: text }],
   });
 }

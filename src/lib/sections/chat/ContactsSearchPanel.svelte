@@ -17,6 +17,20 @@
   let query = $state('');
   let inputEl = $state<HTMLInputElement | null>(null);
 
+  /**
+   * Широкий экран: список принятых контактов уже есть слева, поэтому справа
+   * остаётся только поле поиска. Узкий экран (десктоп ≤ 768px и Android):
+   * панель одна, список показываем под полем.
+   */
+  let narrow = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const update = () => (narrow = mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  });
+
   const q = $derived(query.trim().toLowerCase());
 
   type Row =
@@ -47,21 +61,38 @@
     );
   });
 
-  const matched = $derived(
-    rows.filter((r) => {
-      if (!q) return true;
+  /**
+   * Без запроса — только принятые контакты и каналы: это основной список
+   * (слева на десктопе, под поиском на мобильном). Отвергнутые и непринятые
+   * появляются только в результатах поиска: их ищут по имени или ключу.
+   */
+  const matched = $derived.by<Row[]>(() => {
+    const matches = (r: Row) => {
       if (r.name.toLowerCase().includes(q)) return true;
       return r.kind === 'contact' && String(r.contact.id ?? '').toLowerCase().includes(q);
-    })
-  );
+    };
+    if (!q) {
+      return rows.filter((r) => r.kind === 'channel' || !isRejected(r.contact));
+    }
+    return rows.filter(matches);
+  });
 
-  /** Крестик — не принятый или отклонённый контакт. */
+  /**
+   * Крестик — заявка не принята. `mutual` от status-go точнее, чем сравнение
+   * двух полей: при принятии локальное состояние становится `Sent`, а удалённое
+   * остаётся `Received`, и `isMutual` на этом даёт верный ответ, но только если
+   * снимок свежий. Отклонённая заявка — `Dismissed`.
+   */
   function isRejected(contact: any): boolean {
-    return !isMutual(contact) || contact.contactRequestLocalState === LOCAL_DISMISSED;
+    if (contact.contactRequestLocalState === LOCAL_DISMISSED) return true;
+    if (typeof contact.mutual === 'boolean') return !contact.mutual;
+    return !isMutual(contact);
   }
 
   onMount(() => {
-    loadContacts();
+    // force: состояние заявок меняется при Accept и при входящих сигналах.
+    // Без перезагрузки принятый контакт остаётся с крестиком из прошлого снимка.
+    loadContacts(true);
     queueMicrotask(() => inputEl?.focus());
   });
 
@@ -87,6 +118,7 @@
     />
   </div>
 
+  {#if narrow}
   <ScrollArea class="flex-1 min-h-0">
     {#if contactsState.isLoading}
       <p class="px-4 py-2 text-muted-foreground text-sm">{i18n.t('Loading contacts...')}</p>
@@ -117,4 +149,5 @@
       </div>
     {/if}
   </ScrollArea>
+  {/if}
 </div>

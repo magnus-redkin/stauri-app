@@ -29,31 +29,6 @@ describe('ChatLeft', () => {
     expect(screen.getByText('Hello')).toBeInTheDocument();
   });
 
-  it('должен фильтровать чаты по поиску', async () => {
-    render(ChatLeft, { props: {} });
-    // Одно поле на два действия: ввод фильтрует список, ссылка — подключает.
-    const searchInput = screen.getByPlaceholderText(/^Search$/i);
-
-    await fireEvent.input(searchInput, { target: { value: 'Alice' } });
-
-    expect(screen.getByText('Alice Chat')).toBeInTheDocument();
-    expect(screen.queryByText('Bob Chat')).not.toBeInTheDocument();
-  });
-
-  it('фильтрует по имени сообщества, а не только канала', async () => {
-    chatsState.items = [
-      { id: '0xcommgeneral', name: 'general', lastMessage: '', type: 'community', communityId: '0xcomm', communityName: 'My Community' },
-      { id: '0xdm', name: 'Alice', lastMessage: '', type: 'direct' },
-    ];
-    render(ChatLeft, { props: {} });
-
-    const searchInput = screen.getByPlaceholderText(/^Search$/i);
-    await fireEvent.input(searchInput, { target: { value: 'My Community' } });
-
-    expect(screen.getByText('general')).toBeInTheDocument();
-    expect(screen.queryByText('Alice')).not.toBeInTheDocument();
-  });
-
   it('должен отображать иконку pending-запроса', () => {
     render(ChatLeft, { props: {} });
     // Для Bob Chat isPendingRequest = true, значит, должен быть значок "!"

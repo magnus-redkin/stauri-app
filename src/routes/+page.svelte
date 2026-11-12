@@ -23,7 +23,7 @@
   } from '$lib/stores/connectionStore.svelte';
 
   import { resetContacts } from '$lib/stores/contactsStore.svelte';
-  import { chatsState, loadChats, selectChat, resetChats } from '$lib/stores/chatsStore.svelte';
+  import { chatsState, loadChats, selectChat, resetChats, setRightPanel } from '$lib/stores/chatsStore.svelte';
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
   import { loadFeeds, resetFeeds } from '$lib/stores/feedsStore.svelte';
@@ -257,7 +257,12 @@
     const section = activeSection;
     const loggedIn = statusState.isLoggedIn;
     if (section === 'chat' && loggedIn) {
-      untrack(() => { loadChats(); });
+      untrack(() => {
+        // Вход в раздел открывает справа поиск контактов: иначе остаётся
+        // прошлый экран (Invite, новый канал), и формы поиска не видно.
+        if (!chatsState.selected) setRightPanel('contacts');
+        loadChats();
+      });
     }
   });
 

@@ -108,6 +108,11 @@ function buildItems(
     return contact ? getDisplayName(contact) : getDisplayName(chat);
   };
 
+  // Чат с самим собой. status-go создаёт его, если заявку отправили на
+  // собственный ключ (ошибка ввода или чужой Invite с нашим профилем).
+  // В списке он бесполезен и выглядит как контакт без имени: `0x0498b7…`.
+  const ownKey = statusState.publicKey;
+
   // Метаданные каналов сообществ (имя, категория, право писать) — из сообществ.
   // Сам состав списка — из превью: канал в списке, только если status-go
   // считает его активным. Так удаление (`deactivateChat`) убирает канал сразу
@@ -125,6 +130,7 @@ function buildItems(
     return Number(chat.lastMessage?.timestamp ?? chat.timestamp ?? 0) * 1000;
   }
   for (const chat of previews) {
+    if (ownKey && String(chat.id).toLowerCase() === ownKey.toLowerCase()) continue;
     // Неактивный чат — значит удалён (`deactivateChat`), и он не должен
     // возвращаться в список. Исключение — входящий запрос в контакты: он тоже
     // приходит как неактивный, но его надо показать, чтобы принять.
@@ -702,6 +708,13 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
   const contactMatch = value.match(/status\.app\/u\/[^#\s]*#(\S+)/i);
   if (contactMatch) {
     return await requestContactById(contactMatch[1]);
+  }
+
+  // Голый ключ контакта — так Invite a contact показывает его на Android:
+  // base58btc с префиксом `z` (zQ3sh…) или `0x`-hex сжатого ключа.
+  // Проверяем после ссылок: ссылка на канал содержит `#` и уже разобрана выше.
+  if (/^z[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(value) || /^0x[0-9a-fA-F]{66}$/.test(value)) {
+    return await requestContactById(value);
   }
 
   if (/status\.app\/cc\//i.test(value)) {
