@@ -26,8 +26,10 @@
       value = '';
       setRightPanel('chat');
     } else if (result.status === 'contact') {
-      message = { kind: 'pending', text: i18n.t('Contact request sent') };
+      // Заявка ушла: дальше работа в контактах (строка заявки и Accept), а не
+      // в форме ввода. Справа открываем список контактов с поиском.
       value = '';
+      setRightPanel('contacts');
     } else {
       message = { kind: 'error', text: result.error };
     }

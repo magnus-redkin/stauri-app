@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hexToBase58Key } from './invite';
-import { sendContactRequest } from './messaging';
+import { sendContactRequest, sendContactUpdates } from './messaging';
 import { statusFetch } from './http';
 
 // Мокаем HTTP-границу: интересует только тело запроса, которое уходит
@@ -78,5 +78,17 @@ describe('hexToBase58Key', () => {
 
   it('отвергает ключ неверной длины', () => {
     expect(() => hexToBase58Key('0x1234')).toThrow();
+  });
+});
+
+describe('sendContactUpdates', () => {
+  beforeEach(() => fetchMock.mockReset());
+
+  it('рассылает новое экранное имя (а не заглушку) через wakuext_sendContactUpdates', async () => {
+    fetchMock.mockResolvedValue({} as any);
+    await sendContactUpdates(1, 'Михаил');
+    const call = fetchMock.mock.calls.at(-1)!;
+    expect((call[2] as any).method).toBe('wakuext_sendContactUpdates');
+    expect((call[2] as any).params[0]).toBe('Михаил');
   });
 });

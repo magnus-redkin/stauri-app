@@ -22,7 +22,9 @@
     disconnect
   } from '$lib/stores/connectionStore.svelte';
 
-  import { resetContacts } from '$lib/stores/contactsStore.svelte';
+  import { resetContacts, loadContacts } from '$lib/stores/contactsStore.svelte';
+  import { getChats } from '$lib/status/messaging';
+  import { scenarioLog, short } from '$lib/utils/scenario';
   import { chatsState, loadChats, selectChat, resetChats, setRightPanel } from '$lib/stores/chatsStore.svelte';
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
@@ -266,6 +268,49 @@
     }
   });
 
+  // Заявки в контакты и их принятие приходят без сигнала, который читает приложение
+  // (на Android сигналов нет вовсе). Поэтому пока открыт раздел Chat, раз в 10 с
+  // перечитываем контакты, а при изменении числа заявок — список чатов.
+  // Без этого новая заявка видна только после переключения раздела.
+  $effect(() => {
+    const section = activeSection;
+    const loggedIn = statusState.isLoggedIn;
+    if (section !== 'chat' || !loggedIn) return;
+    // Состояние по чату: время последнего сообщения, непрочитанные, активность.
+    // Первый проход только запоминает базу, иначе все чаты сочлись бы новыми.
+    const seen = new Map<string, string>();
+    let baseline = false;
+    const tick = () => untrack(async () => {
+      const port = statusState.backendPort;
+      if (!port) return;
+      await loadContacts(true);
+      const chats = await getChats(port);
+      const changed: string[] = [];
+      for (const c of chats) {
+        const sig = `${c.lastMessage?.timestamp ?? 0}:${c.unviewedMessagesCount ?? 0}:${c.active}`;
+        if (seen.get(c.id) !== sig) {
+          if (baseline) changed.push(c.id);
+          seen.set(c.id, sig);
+        }
+      }
+      baseline = true;
+      // Новый чат (заявка, первое сообщение) в списке ещё не виден, и эффект
+      // сигнала его не перечитает: перечитываем список сами.
+      const visible = new Set(chatsState.items.map((c) => c.id));
+      if (changed.some((id) => !visible.has(id))) await loadChats(true);
+      if (changed.length) {
+        scenarioLog('reply-sync', 'poll-changed', { count: changed.length, chat: short(changed[0]) });
+        // Тот же путь, что у сигнала messages.new: список чатов и открытая
+        // переписка перечитываются эффектами, которые уже работают.
+        for (const id of changed) statusState.pendingChatIds.add(id);
+        statusState.lastMessageSignal++;
+      }
+    });
+    tick();
+    const id = setInterval(tick, 10_000);
+    return () => clearInterval(id);
+  });
+
   // Реагируем на новые сообщения (через lastMessageSignal).
   //
   // `untrack` обязателен: `loadChats` внутри читает и пишет `chatsState`
@@ -414,10 +459,20 @@
    * dApps: возврат к списку примеров. Без этого из открытого каталога
    * сообществ было не выбраться — оставалась только кнопка «обновить».
    */
+  /** Открыть редактирование профиля: на узком экране — вместо списка, на широком — справа. */
+  function openEditProfile() {
+    activeSection = 'profile';
+    showCreateSeed = false;
+    mobileEditProfile = true;
+  }
+
   function handleSectionSelect(id: string) {
     // Раздел открывается заново с его первого экрана.
     mobileEditProfile = false;
     mobileWalletAccounts = false;
+    // Chat всегда открывается с поиска справа, даже если раздел уже открыт
+    // (иначе остаётся Invite или другая форма). Открытый чат не трогаем.
+    if (id === 'chat' && !chatsState.selected) setRightPanel('contacts');
     if (id !== activeSection) return;
     if (id === 'dapps') resetDappsView();
   }
@@ -519,6 +574,7 @@
    <ProfileLeft
      onDisconnect={handleDisconnect}
      onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
+     onEditProfile={openEditProfile}
           />
         {:else if activeSection === 'settings'}
           <SettingsLeft />
@@ -532,6 +588,7 @@
    <ProfileLeft
      onDisconnect={handleDisconnect}
      onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
+     onEditProfile={openEditProfile}
    />
  {/if}
       </SectionPane>

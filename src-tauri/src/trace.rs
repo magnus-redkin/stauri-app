@@ -14,6 +14,13 @@ pub fn set_dir(dir: PathBuf) {
     let _ = TRACE_PATH.set(dir.join("bridge-trace.log"));
 }
 
+/// Подробная трасса включается переменной окружения `STAURI_DEBUG_TRACE=1`
+/// (перед запуском приложения). Тогда ответы пишутся до 4000 символов вместо 200.
+pub fn debug_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("STAURI_DEBUG_TRACE").map(|v| v == "1").unwrap_or(false))
+}
+
 /// Дописывает одну строку с меткой времени. Тела запросов/ответов сюда не
 /// пишем целиком: только endpoint, длину и первые 200 символов ответа.
 pub fn line(text: &str) {

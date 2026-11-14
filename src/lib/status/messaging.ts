@@ -953,6 +953,23 @@ export async function markChatRead(port: number, chatId: string): Promise<any> {
 }
 
 /**
+ * Рассылает обновлённое экранное имя уже добавленным контактам.
+ *
+ * Заявка в контакты несёт имя из настроек, а контакт, которому оно уже
+ * отправлено, видит старое, пока не придёт обновление. Вызывается после
+ * сохранения имени в профиле.
+ */
+export async function sendContactUpdates(port: number, displayName: string): Promise<any> {
+  return await statusFetch(port, 'CallRPC', {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'wakuext_sendContactUpdates',
+    // Аргументы status-go: name, picture, customizationColor (как при создании профиля).
+    params: [displayName, '', 'primary'],
+  });
+}
+
+/**
  * Отправляет заявку в контакты.
  *
  * status-go отвергает пустое сообщение

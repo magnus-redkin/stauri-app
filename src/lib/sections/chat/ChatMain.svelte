@@ -31,6 +31,28 @@
   import ContactsSearchPanel from './ContactsSearchPanel.svelte';
 
   let messages = $state<any[]>([]);
+
+  /** Нода отдаёт сообщения от новых к старым; в ленте нужно сверху вниз. */
+  const byTime = (a: any, b: any) =>
+    (Number(a.clock ?? 0) || Number(a.whisperTimestamp ?? 0)) -
+    (Number(b.clock ?? 0) || Number(b.whisperTimestamp ?? 0));
+  function setMessages(list: any[]) {
+    messages = [...list].sort(byTime);
+  }
+
+  /** Системные события, которые в личном чате не выводим: заявка уже видна карточкой. */
+  const HIDDEN_CONTENT = new Set([15, 16]); // MUTUAL_EVENT_SENT, MUTUAL_EVENT_ACCEPTED
+  const CONTACT_REQUEST = 11;
+
+  /** Личный чат: без системных событий, по времени. */
+  const directMessages = $derived(
+    messages.filter((m) => !HIDDEN_CONTENT.has(Number(m.contentType)))
+  );
+
+  /** Конец ленты: к нему прокручиваем при открытии и новых сообщениях. */
+  function scrollToEnd() {
+    queueMicrotask(() => document.getElementById('chat-end')?.scrollIntoView({ block: 'end' }));
+  }
   let inputText = $state('');
 
   /** Запись, чьи комментарии открыты на отдельной странице. `null` — лента. */
@@ -271,6 +293,34 @@
   });
 
   // Загружаем историю при смене чата
+  /**
+   * Открытая переписка обновляется сама раз в 10 с. Сообщение, пришедшее до
+   * того, как чат открыт или опрос списка его увидел, иначе не попало бы в
+   * экран: сравнивать с базой опроса тут не на что. Запрос к одному чату дешёвый.
+   */
+  $effect(() => {
+    const chat = chatsState.selected;
+    const port = statusState.backendPort;
+    if (!chat || chat.isPendingRequest || chat.type === 'external' || !port) return;
+    const reload = () =>
+      untrack(() => {
+        getChatMessages(port, chat.id)
+          .then((res) => {
+            const next = res.messages;
+            const lastNow = messages[messages.length - 1]?.id;
+            const lastNext = next[next.length - 1]?.id;
+            if (next.length !== messages.length || lastNow !== lastNext) {
+              scenarioLog('reply-sync', 'poll-reloaded', { chat: short(chat.id), before: messages.length, after: next.length });
+              setMessages(next);
+              scrollToEnd();
+            }
+          })
+          .catch(() => {});
+      });
+    const id = setInterval(reload, 10_000);
+    return () => clearInterval(id);
+  });
+
   $effect(() => {
     const chat = chatsState.selected;
     if (!chat || chat.isPendingRequest || chat.type === 'external' || !statusState.backendPort) {
@@ -282,7 +332,8 @@
 
     getChatMessages(statusState.backendPort, chat.id)
       .then(res => {
-        messages = res.messages;
+        setMessages(res.messages);
+        scrollToEnd();
         debug(`[chat] ${chat.id}: loaded ${res.messages.length} messages`);
       })
       .catch((e) => { error(`[chat] ${chat.id}: load messages failed`, e); })
@@ -315,7 +366,8 @@
       getChatMessages(port, chat.id)
         .then((res) => {
           const before = messages.length;
-   messages = res.messages;
+   setMessages(res.messages);
+   scrollToEnd();
    scenarioLog('reply-sync', 'reloaded', {
      chat: short(chat.id),
      before,
@@ -373,6 +425,7 @@
         communityId,
         ''
       );
+      scenarioLog('reply-sync', 'sent', { chat: short(chat.id) });
       // Бэкенд возвращает в `result.messages` и новое сообщение, и родителя.
       // Для обычной записи просто добавляем оптимистичную копию: ответ
       // подтянется при следующей загрузке истории.
@@ -606,6 +659,36 @@
           <p class="text-muted-foreground text-sm">{i18n.t('Loading messages...')}</p>
         {:else if posts.length === 0}
           <p class="text-muted-foreground text-sm italic">{i18n.t('No messages yet.')}</p>
+        {:else if chatsState.selected.type === 'direct'}
+          <!--
+            Личный чат: пузыри. Свои — слева, собеседника — справа.
+            Ширина пузыря — 3/4 колонки, фон чуть светлее или темнее колонки.
+          -->
+          <div class="flex flex-col gap-2">
+            {#each directMessages as msg (msg.id)}
+              {#if Number(msg.contentType) === CONTACT_REQUEST}
+                <!-- Заявка в контакты: имя, текст заявки и галочка, когда принята. -->
+                <div class="w-3/4 mx-auto rounded-lg px-3 py-2 border border-border bg-card text-sm">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs font-semibold text-muted-foreground">{i18n.t('Request')}</span>
+                    <span class="font-medium truncate">{authorNameOf(msg)}</span>
+                    {#if Number(msg.contactRequestState) === 2}
+                      <span class="ml-auto text-green-600 font-bold" title={i18n.t('Accepted')} aria-label={i18n.t('Accepted')}>✓</span>
+                    {/if}
+                  </div>
+                  <div class="whitespace-pre-wrap break-words">{formatMessageText(msg.text, chatsState.contacts)}</div>
+                </div>
+              {:else}
+                <div class="flex {isOwn(msg) ? 'justify-start' : 'justify-end'}">
+                  <div class="w-3/4 rounded-lg px-3 py-2 bg-secondary/50 text-sm">
+                    <div class="text-xs text-muted-foreground mb-0.5">{isOwn(msg) ? i18n.t('You') : authorNameOf(msg)}</div>
+                    <div class="whitespace-pre-wrap break-words">{formatMessageText(msg.text, chatsState.contacts)}</div>
+                  </div>
+                </div>
+              {/if}
+            {/each}
+            <div id="chat-end"></div>
+          </div>
         {:else}
           <div class="space-y-3">
             {#each posts as post (post.id)}

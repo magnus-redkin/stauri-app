@@ -31,6 +31,7 @@ import {
   type CreateChannelParams,
 } from '$lib/status/akk';
 import { getDisplayName } from '$lib/utils/user';
+import { isMutual } from '$lib/status/contactState';
 import { scenarioLog, short } from '$lib/utils/scenario';
 import { parseKind } from '$lib/status/channelKind';
 import { ROLE_OWNER } from '$lib/status/channelRights';
@@ -103,6 +104,15 @@ function buildItems(
   contacts: any[],
   communities: Community[]
 ): ChatItem[] {
+  // Заявка ещё ждёт ответа, только если контакт не принят. Превью чата после
+  // Accept может несколько секунд отдавать старое состояние (active=false,
+  // contactRequestState=1): без этой проверки чат навсегда остаётся «ожидающим».
+  const isStillPending = (chat: any) => {
+    const contact = contacts.find((ct: any) => ct.id === chat.id);
+    if (contact && isMutual(contact)) return false;
+    return chat.active === false && chat.lastMessage?.contactRequestState === 1;
+  };
+
   const nameFor = (chat: any) => {
     const contact = contacts.find((ct: any) => ct.id === chat.id);
     return contact ? getDisplayName(contact) : getDisplayName(chat);
@@ -180,8 +190,7 @@ function buildItems(
       type: isDirectMessage(chat) ? 'direct' : 'channel',
       categoryId: chat.categoryId || undefined,
       unreadCount: chat.unviewedMessagesCount || 0,
-      isPendingRequest:
- chat.active === false && chat.lastMessage?.contactRequestState === 1,
+      isPendingRequest: isStillPending(chat),
     });
   }
 
@@ -354,6 +363,23 @@ export async function acceptRequestAndOpen(item: ChatItem, port: number, publicK
   const fresh = chatsState.items.find((c) => c.id === item.id) ?? null;
   setSelectedChat(fresh);
   scenarioLog('reply-sync', 'accepted', { chat: short(item.id), opened: !!fresh }, 'info');
+}
+
+/**
+ * Принимает входящую заявку по id контакта и открывает чат с ним справа.
+ * Вызывается из списка контактов, где заявки показываются первыми.
+ */
+export async function acceptIncomingAndOpen(contactId: string): Promise<void> {
+  if (!statusState.backendPort) return;
+  await acceptContactRequestRpc(statusState.backendPort, contactId);
+  await loadChats(true);
+  const fresh = chatsState.items.find((c) => c.id === contactId) ?? null;
+  setSelectedChat(fresh);
+  if (!fresh) {
+    // Чат появится после синка: открываем переписку, а не пустой поиск.
+    chatsState.rightPanel = 'chat';
+  }
+  scenarioLog('reply-sync', 'accepted-from-search', { chat: short(contactId), opened: !!fresh }, 'info');
 }
 
 /**
@@ -710,13 +736,6 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
     return await requestContactById(contactMatch[1]);
   }
 
-  // Голый ключ контакта — так Invite a contact показывает его на Android:
-  // base58btc с префиксом `z` (zQ3sh…) или `0x`-hex сжатого ключа.
-  // Проверяем после ссылок: ссылка на канал содержит `#` и уже разобрана выше.
-  if (/^z[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(value) || /^0x[0-9a-fA-F]{66}$/.test(value)) {
-    return await requestContactById(value);
-  }
-
   if (/status\.app\/cc\//i.test(value)) {
     const parsed = await parseChannelInvite(value).catch(() => null);
     return await spectateCommunityById(
@@ -727,6 +746,18 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
 
   if (/status\.app\/c(?:[/#])/i.test(value)) {
     return await spectateCommunityById(communityIdFromInvite(value));
+  }
+
+  // Голый ключ контакта — то, что показывает «Invite a contact» (Android и SIM):
+  // base58btc с префиксом `z` (zQ3sh…). Пользователь копирует его по-разному:
+  // «zQ3…», «#zQ3…», «clean invite: #zQ3…». Ищем ключ в любом месте строки.
+  // Ссылки на канал и сообщество уже разобраны выше, поэтому здесь их нет.
+  const bareKey = value.match(/(?:^|[\s#:])(z[1-9A-HJ-NP-Za-km-z]{40,60})(?![1-9A-Za-z])/);
+  if (bareKey) {
+    return await requestContactById(bareKey[1]);
+  }
+  if (/^0x[0-9a-fA-F]{66}$/.test(value)) {
+    return await requestContactById(value);
   }
 
   // Явный hex-идентификатор сообщества.

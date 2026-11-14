@@ -19,6 +19,7 @@ import {
   generateJoiningRequestsForSigning,
   signJoinRequestData,
   requestToJoinCommunity,
+  sendContactRequest,
   normalizeChatId,
   normalizeHex,
   channelIdFromInvite,
@@ -39,6 +40,7 @@ vi.mock('$lib/status/messaging', async (importOriginal) => {
     generateJoiningRequestsForSigning: vi.fn(),
     signJoinRequestData: vi.fn(),
     requestToJoinCommunity: vi.fn(),
+    sendContactRequest: vi.fn(),
   };
 });
 
@@ -630,5 +632,88 @@ describe('joinByInput', () => {
       12345,
       '0x03ddf4c625afcbf7fb9fe189e43b9158b70e8f01fe968e41ae49f258aa9b7d1400'
     );
+  });
+});
+
+describe('joinByInput: приглашения от контакта и канала', () => {
+  const KEY = 'zQ3shsyGaQFGsrT1Q32C7UgwWe6FVcvb6g4HeXFFuiLu2Pn5s';
+  const CONTACT_LINK = `https://status.app/u/CwSACgcKBVRFU1QxAw==#${KEY}`;
+
+  beforeEach(() => {
+    resetChats();
+    vi.clearAllMocks();
+    (getChats as any).mockResolvedValue([]);
+    (getContacts as any).mockResolvedValue({ result: [] });
+    (getCommunities as any).mockResolvedValue([]);
+    (fetchCommunity as any).mockResolvedValue(null);
+    (spectateCommunity as any).mockResolvedValue({});
+    (sendContactRequest as any).mockResolvedValue({});
+  });
+
+  it.each([
+    ['голый ключ', KEY],
+    ['ключ с #', `#${KEY}`],
+    ['подпись и #', `clean invite: #${KEY}`],
+    ['подпись и ключ', `Invite: ${KEY}`],
+    ['полная ссылка SIM', `Privacy first! Join me on Status. ${CONTACT_LINK}`],
+    ['полная ссылка', CONTACT_LINK],
+  ])('%s — отправляет заявку контакту', async (_name, input) => {
+    const result = await joinByInput(input);
+    expect(result.status).toBe('contact');
+    expect(sendContactRequest).toHaveBeenCalledTimes(1);
+    // Стор передаёт hex; перевод в zQ3 делает sendContactRequest (покрыт в messaging.test.ts).
+    const [, sentId] = (sendContactRequest as any).mock.calls[0];
+    expect(sentId).toBe(communityIdFromInvite(`#${KEY}`));
+    expect(sentId).toMatch(/^0x[0-9a-fA-F]{66}$/);
+  });
+
+  it('ссылка на канал не уходит в заявку контакту', async () => {
+    await joinByInput('https://status.app/cc/11923aa7-3b7a-41db-bf56-55e1d0cf4be2#' + KEY);
+    expect(sendContactRequest).not.toHaveBeenCalled();
+  });
+
+  it('текст без ключа и ссылки — понятная ошибка', async () => {
+    const result = await joinByInput('привет, как дела');
+    expect(result.status).toBe('failed');
+    expect(sendContactRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('ожидающая заявка: статус контакта важнее превью чата', () => {
+  const CID = '0x04' + 'b'.repeat(128);
+
+  beforeEach(() => {
+    resetChats();
+    vi.clearAllMocks();
+    (getCommunities as any).mockResolvedValue([]);
+    (fetchCommunity as any).mockResolvedValue(null);
+  });
+
+  it('принятый контакт не остаётся ожидающим, даже если превью ещё старое', async () => {
+    // Превью после Accept: active=false и contactRequestState=1 — устаревшее.
+    (getChats as any).mockResolvedValue([
+      { id: CID, name: 'Stauri User', active: false, chatType: TYPE_ONE_TO_ONE,
+        lastMessage: { contactRequestState: 1, text: 'Hi', timestamp: 1 }, unviewedMessagesCount: 0 },
+    ]);
+    (getContacts as any).mockResolvedValue({
+      result: [{ id: CID, displayName: 'Stauri User', contactRequestLocalState: 2, contactRequestRemoteState: 3, mutual: true }],
+    });
+    await loadChats(true);
+    const item = chatsState.items.find((c) => c.id === CID);
+    expect(item).toBeDefined();
+    expect(item!.isPendingRequest).toBe(false);
+  });
+
+  it('неприятый входящий по-прежнему ожидающий', async () => {
+    (getChats as any).mockResolvedValue([
+      { id: CID, name: 'Stauri User', active: false, chatType: TYPE_ONE_TO_ONE,
+        lastMessage: { contactRequestState: 1, text: 'Hi', timestamp: 1 }, unviewedMessagesCount: 0 },
+    ]);
+    (getContacts as any).mockResolvedValue({
+      result: [{ id: CID, displayName: 'Stauri User', contactRequestLocalState: 0, contactRequestRemoteState: 3, mutual: false }],
+    });
+    await loadChats(true);
+    const item = chatsState.items.find((c) => c.id === CID);
+    expect(item!.isPendingRequest).toBe(true);
   });
 });

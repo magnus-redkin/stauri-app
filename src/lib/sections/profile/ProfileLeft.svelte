@@ -9,11 +9,14 @@
   let {
     displayName = "Tauri User",
     onDisconnect,
-    onCreateSeed
+    onCreateSeed,
+    onEditProfile
   }: {
     displayName?: string,
     onDisconnect?: () => void,
-    onCreateSeed?: () => void
+    onCreateSeed?: () => void,
+    /** Открыть редактирование профиля (в SA — единственный путь к нему). */
+    onEditProfile?: () => void
   } = $props();
 
   let copiedProfileId = $state(false);
@@ -41,6 +44,17 @@
 <div class="flex flex-col h-full border-r border-border bg-card">
   <div class="p-4 border-b border-border font-bold text-lg text-primary">
     {i18n.t('Profile')}
+  </div>
+
+  <!-- Ссылка на редактирование: на узком экране без неё профиль не открыть. -->
+  <div class="px-4 py-2 border-b border-border">
+    <button
+      type="button"
+      onclick={() => onEditProfile?.()}
+      class="text-sm font-medium text-primary hover:underline"
+    >
+      {i18n.t('Edit profile')}
+    </button>
   </div>
 
   <ScrollArea class="flex-1 min-h-0 overflow-x-hidden">

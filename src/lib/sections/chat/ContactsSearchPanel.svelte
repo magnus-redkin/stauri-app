@@ -8,7 +8,16 @@
    */
   import { onMount } from 'svelte';
   import { i18n } from '$lib/i18n';
-  import { chatsState, selectChat, setRightPanel } from '$lib/stores/chatsStore.svelte';
+  import {
+    chatsState,
+    selectChat,
+    setRightPanel,
+    acceptIncomingAndOpen,
+    rejectRequest,
+    loadChats,
+  } from '$lib/stores/chatsStore.svelte';
+  import { statusState } from '$lib/stores/statusStore.svelte';
+  import { isIncomingRequest } from '$lib/status/contactState';
   import { contactsState, loadContacts, selectContact } from '$lib/stores/contactsStore.svelte';
   import { getDisplayName } from '$lib/utils/user';
   import { isMutual, LOCAL_DISMISSED } from '$lib/status/contactState';
@@ -30,6 +39,9 @@
     mq.addEventListener('change', update);
     return () => mq.removeEventListener('change', update);
   });
+
+  /** Входящие заявки, ещё не принятые: первой строкой списка. */
+  const incoming = $derived(contactsState.items.filter((c: any) => isIncomingRequest(c)));
 
   const q = $derived(query.trim().toLowerCase());
 
@@ -102,7 +114,15 @@
       selectChat(row.chatId);
       return;
     }
-    selectContact(row.contact);
+    // Контакт → его чат (1-1 чат имеет тот же id, что у контакта). Если чата
+    // ещё нет в списке, сначала перечитываем список.
+    const id = row.contact.id as string;
+    const open = () => {
+      setRightPanel('chat');
+      selectChat(id);
+    };
+    if (chatsState.items.some((c) => c.id === id)) open();
+    else loadChats(true).then(open);
   }
 </script>
 
@@ -120,6 +140,25 @@
 
   {#if narrow}
   <ScrollArea class="flex-1 min-h-0">
+    {#each incoming as c (c.id)}
+      <div class="mx-2 mt-2 p-3 rounded-md border border-orange-300 bg-orange-50 flex items-center gap-2">
+        <div class="min-w-0 flex-1">
+          <div class="font-medium truncate">{getDisplayName(c)}</div>
+          <div class="text-xs text-orange-700">{i18n.t('Contact request')}</div>
+        </div>
+        <button
+          type="button"
+          onclick={() => acceptIncomingAndOpen(c.id)}
+          class="shrink-0 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+        >{i18n.t('Accept')}</button>
+        <button
+          type="button"
+          onclick={() => statusState.backendPort && rejectRequest({ id: c.id } as any, statusState.backendPort, c.id)}
+          class="shrink-0 h-9 px-3 rounded-md border border-border text-sm"
+        >{i18n.t('Reject')}</button>
+      </div>
+    {/each}
+
     {#if contactsState.isLoading}
       <p class="px-4 py-2 text-muted-foreground text-sm">{i18n.t('Loading contacts...')}</p>
     {:else if matched.length === 0}

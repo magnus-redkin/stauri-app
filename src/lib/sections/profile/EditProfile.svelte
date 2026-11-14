@@ -3,6 +3,9 @@
   import { untrack } from 'svelte';
   import { statusState, setSeedSaved } from '$lib/stores/statusStore.svelte';
   import { ensState, loadProfileNames } from '$lib/stores/ensStore.svelte';
+  import { saveSetting } from '$lib/status/wallet';
+  import { sendContactUpdates } from '$lib/status/messaging';
+  import { formatError } from '$lib/utils/errors';
   import { User } from 'lucide-svelte';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import CreateSeed from './CreateSeed.svelte';
@@ -16,12 +19,31 @@
   let showCreateSeed = $state(false);
 
   let isChanged = $derived(displayName !== originalDisplayName);
+  let saveError = $state('');
 
-  function saveProfile() {
-    if (!isChanged) return;
-    // TODO: API-вызов для сохранения (отложено)
-    statusState.alias = displayName;
-    originalDisplayName = displayName;
+  /**
+   * Сохраняет имя в ноду: без этого заявки в контакты уходят с заглушкой
+   * («Stauri User» из создания профиля). Затем рассылает новое имя уже
+   * добавленным контактам. Ошибка остаётся на странице, навигации не будет.
+   */
+  async function saveProfile(): Promise<boolean> {
+    if (!isChanged) return true;
+    const port = statusState.backendPort;
+    if (!port) {
+      saveError = i18n.t('Backend is not running');
+      return false;
+    }
+    try {
+      await saveSetting(port, 'display-name', displayName);
+      await sendContactUpdates(port, displayName);
+      statusState.alias = displayName;
+      originalDisplayName = displayName;
+      saveError = '';
+      return true;
+    } catch (e) {
+      saveError = formatError(e);
+      return false;
+    }
   }
 
   function handleSeedSaved() {
@@ -108,12 +130,14 @@
             <span>⚠️ {i18n.t('Создать seed-фразу')}</span>
           </button>
         {/if}
+        {#if saveError}
+          <p class="mt-3 text-sm text-red-600">{saveError}</p>
+        {/if}
         <!-- Кнопка Save -->
           <div class="mt-4">
             <button
-              onclick={() => {
-              saveProfile(); // сохраняет displayName
-              onNavigate?.('home'); // переходит на Home
+              onclick={async () => {
+              if (await saveProfile()) onNavigate?.('home');
               }}
               class="w-full py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition"
               >

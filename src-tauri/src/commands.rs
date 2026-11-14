@@ -246,7 +246,8 @@ pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<St
  let res = crate::inprocess::backend()?.direct(&endpoint, &body);
         match &res {
      Ok(text) => {
-  crate::trace::line(&format!("ok {endpoint} len={} text={}", text.len(), text.chars().take(200).collect::<String>()));
+  let limit = if crate::trace::debug_enabled() { 4000 } else { 200 };
+        crate::trace::line(&format!("ok {endpoint} len={} text={}", text.len(), text.chars().take(limit).collect::<String>()));
          if endpoint == "InitializeApplication" {
       if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
           match v.get("accounts").and_then(|a| a.get(0)) {

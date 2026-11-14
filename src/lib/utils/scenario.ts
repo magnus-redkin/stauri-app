@@ -24,6 +24,25 @@ export function scenarioLog(
   const line = `[scenario ${scenario}/${step}] ${JSON.stringify(data)}`;
   if (level === 'warn') warn(line);
   else info(line);
+  // Android: логов фронтенда на телефоне нет, поэтому та же строка уходит в
+  // трассу моста (bridge-trace.log). По ней сверяют сценарии (tests/scenarios).
+  if (isAndroidWebview()) sendToBridgeTrace(line);
+}
+
+/**
+ * Метки уходят в трассу по одной цепочке: порядок вызовов не гарантирован,
+ * и без очереди «начало» и «конец» шага могли поменяться местами.
+ */
+let traceChain: Promise<unknown> = Promise.resolve();
+function sendToBridgeTrace(line: string): void {
+  traceChain = traceChain
+    .then(() => import('@tauri-apps/api/core'))
+    .then(({ invoke }) => invoke('status_call', { endpoint: 'TraceNote', body: JSON.stringify({ line }) }))
+    .catch(() => {});
+}
+
+function isAndroidWebview(): boolean {
+  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }
 
 /** Сокращает публичный ключ или id, чтобы в логе не было полного значения. */
