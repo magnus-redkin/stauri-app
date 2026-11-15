@@ -66,9 +66,9 @@
 
   <releases>
     <!-- Версия подставляется release.sh из аргумента сборки. -->
-    <release version="0.4.0" date="2026-11-15">
+    <release version="0.4.1" date="2026-11-15">
       <description>
-        <p>Первый публичный релиз.</p>
+        <p>Правила пароля и чистое окружение при проверке релиза.</p>
       </description>
     </release>
   </releases>
