@@ -82,11 +82,11 @@ describe('navStore', () => {
     record(snap({ section: 'chat' }));
     record(snap({ section: 'wallet' }));
 
-    goBack(); // теперь на 'chat'
+    goBack(); // now on 'chat'
     record(snap({ section: 'settings' }));
 
-    // В стопке: home, chat, settings. wallet отброшен.
-    // Ключ — все шесть полей снимка через `|`, пустые дают пустые сегменты.
+    // On the stack: home, chat, settings. wallet is dropped.
+    // The key is all six snapshot fields joined by `|`; empty ones give empty segments.
     expect(_debugStack()).toEqual([
       'home|||||',
       'chat|||||',
@@ -138,15 +138,14 @@ describe('navStore', () => {
   });
 
   it('запись того же экрана после шага назад не съедает «вперёд»', () => {
-    // В реальном приложении `goBack()` меняет состояние, а эффект записи
-    // видит это изменение и вызывает `record` повторно. Если бы такой
-    // вызов дописывал шаг, история теряла бы «будущее» после каждого
-    // возврата — и вперёд было бы некуда идти.
+    // In the real app `goBack()` changes state, and the recording effect sees that change and calls
+    // `record` again. If such a call appended a step, the history would lose the "future" after
+    // every return, and there would be nowhere to go forward to.
     record(snap({ section: 'home' }));
     record(snap({ section: 'chat' }));
 
     goBack();
-    record(snap({ section: 'home' })); // эффект после восстановления
+    record(snap({ section: 'home' })); // the effect after restoring
 
     expect(_debugStack()).toHaveLength(2);
     expect(navState.canForward).toBe(true);

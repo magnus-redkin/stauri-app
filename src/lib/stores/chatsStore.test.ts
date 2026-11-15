@@ -26,8 +26,8 @@ import {
   communityIdFromInvite,
 } from '$lib/status/messaging';
 
-// Мокаем API мессенджинга. `communityChannels` и предикаты оставляем
-// настоящими: они чистая логика, и мокать их значило бы проверять мок.
+// Mocks the messaging API. `communityChannels` and the predicates stay real: they are pure logic,
+// and mocking them would only test the mock.
 vi.mock('$lib/status/messaging', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/status/messaging')>();
   return {
@@ -53,7 +53,7 @@ vi.mock('$lib/utils/user', () => ({
     entity.displayName || entity.alias || entity.name || entity.id.slice(0, 8),
 }));
 
-// Значения chatType из internal/protocol/chat.go
+// chatType values from internal/protocol/chat.go
 const TYPE_ONE_TO_ONE = 1;
 const TYPE_PUBLIC = 2;
 const TYPE_COMMUNITY = 6;
@@ -69,7 +69,7 @@ describe('chatsStore', () => {
   it('должен загружать чаты и контакты', async () => {
     const previews = [
       { id: '0x123', name: 'Chat 1', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'Hello' }, active: true },
-      // Входящий запрос в контакты: неактивен, но показывается, чтобы принять.
+      // Incoming contact request: inactive, but shown so it can be accepted.
       { id: '0x456', name: 'Chat 2', chatType: TYPE_ONE_TO_ONE, lastMessage: { text: 'World', contactRequestState: 1 }, active: false },
     ];
     const contacts = [{ id: '0x123', alias: 'Alice' }];
@@ -82,8 +82,8 @@ describe('chatsStore', () => {
     expect(chatsState.items).toHaveLength(2);
     expect(chatsState.contacts).toHaveLength(1);
     expect(chatsState.loaded).toBe(true);
-    expect(chatsState.items[0].name).toBe('Alice'); // Из контакта
-    expect(chatsState.items[1].name).toBe('Chat 2'); // Из чата
+    expect(chatsState.items[0].name).toBe('Alice'); // From the contact
+    expect(chatsState.items[1].name).toBe('Chat 2'); // From the chat
   });
 
   it('не показывает удалённый (неактивный) личный чат без запроса', async () => {
@@ -165,7 +165,7 @@ describe('chatsStore', () => {
     ];
     (getChats as any).mockResolvedValue([
       { id: '0xdm', name: 'DM', chatType: TYPE_ONE_TO_ONE, active: true },
-      // Канал сообщества в списке, только если status-go считает его активным.
+      // A community channel is listed only when status-go considers it active.
       { id: '0xcommgeneral', name: 'general', chatType: TYPE_COMMUNITY, active: true, communityId: '0xcomm' },
     ]);
     (getContacts as any).mockResolvedValue({ result: [] });
@@ -174,8 +174,8 @@ describe('chatsStore', () => {
     markChannelOpened('0xcommgeneral');
     await loadChats();
 
-    // id канала в ответе — склейка communityID + channelID, как Chat.id в
-    // status-go (community.ChatID).
+    // A channel id in the response is communityID + channelID, like Chat.id in status-go
+    // (community.ChatID).
     const channel = chatsState.items.find(c => c.id === '0xcommgeneral');
     expect(channel).toBeDefined();
     expect(channel?.type).toBe('community');
@@ -183,14 +183,14 @@ describe('chatsStore', () => {
     expect(channel?.communityName).toBe('Test Community');
     expect(channel?.categoryId).toBe('cat-1');
 
-    // Порядок задаёт превью status-go; проверяем, что канал в списке, а не место.
+    // The order comes from the status-go preview; check that the channel is listed, not where.
     expect(chatsState.items.map((c) => c.id)).toContain('0xcommgeneral');
   });
 
   it('не показывает канал сообщества без отметки — список не должен быть списком сообществ', async () => {
-    // Просмотр сообщества создаёт `Chat`-записи для ВСЕХ каналов, поэтому
-    // одного факта существования чата недостаточно: в левой панели должны
-    // остаться только чаты 1-1 и каналы, добавленные из каталога.
+    // Spectating a community creates `Chat` rows for ALL its channels, so the mere existence of a
+    // chat is not enough: the left panel must keep only 1-1 chats and channels added from the
+    // catalog.
     const communities = [
       {
         id: '0xcomm',
@@ -205,7 +205,7 @@ describe('chatsStore', () => {
     ];
     (getChats as any).mockResolvedValue([
       { id: '0xdm', name: 'DM', chatType: TYPE_ONE_TO_ONE, active: true },
-      // Неактивные каналы (удалены через deactivateChat) в списке не показываем.
+      // Inactive channels (removed via deactivateChat) are not listed.
       { id: '0xcommgeneral', name: 'general', chatType: TYPE_COMMUNITY, active: false },
       { id: '0xcommnews', name: 'news', chatType: TYPE_COMMUNITY, active: false },
     ]);
@@ -246,7 +246,7 @@ describe('chatsStore', () => {
     const channel = chatsState.items.find(c => c.id === '0xcommgeneral');
     expect(channel?.lastMessage).toBe('latest');
     expect(channel?.unreadCount).toBe(3);
-    // Не должно быть дубликата.
+    // No duplicate must appear.
     expect(chatsState.items.filter(c => c.id === '0xcommgeneral')).toHaveLength(1);
   });
 
@@ -301,7 +301,7 @@ describe('chatsStore', () => {
 });
 
 // ===========================================================================
-// ВСТУПЛЕНИЕ
+// JOINING
 // ===========================================================================
 
 describe('normalizeChatId / normalizeHex', () => {
@@ -316,7 +316,7 @@ describe('normalizeChatId / normalizeHex', () => {
   it('достаёт имя из ссылки t.me', () => {
     expect(normalizeChatId('https://t.me/status')).toBe('status');
     expect(normalizeChatId('t.me/status')).toBe('status');
-    // Хвост ссылки не должен попадать в имя канала.
+    // The link's tail must not leak into the channel name.
     expect(normalizeChatId('https://t.me/status/123?x=1')).toBe('status');
   });
 
@@ -336,9 +336,9 @@ describe('normalizeChatId / normalizeHex', () => {
 
 describe('communityIdFromInvite', () => {
   it('декодирует реальную ссылку-приглашение Status', () => {
-    // Настоящая ссылка: Base64 после /c/ (не ключ!) и base58btc после #.
-    // Раньше регулярка брала base64-часть и обрезала её на первом '_',
-    // то есть в fetchCommunity уходил мусор.
+    // A real link: Base64 after /c/ (not the key!) and base58btc after #. A regular expression
+    // that captured the base64 part and cut it at the first '_' would send garbage to
+    // fetchCommunity.
     const link =
       'https://status.app/c/G0UAAGR0254sGpC8mYb0UborbMAJSIkEhgPewpWlTiIJf7_6f-agXtfg698vSJIsofpwPiaav4DmYzTTmMbQgA2dPCtjWbkgAw==#zQ3shuaXi1bQ6iVowkgm6eUtt5PPToUUpifePDvereeupioks';
 
@@ -361,7 +361,7 @@ describe('communityIdFromInvite', () => {
   });
 
   it('возвращает строку как есть, если это не base58 и не hex', () => {
-    // Пусть бэкенд ответит внятной ошибкой, а не мы теряем ввод.
+    // Let the backend answer with a clear error instead of losing the input.
     expect(communityIdFromInvite('not-a-key')).toBe('not-a-key');
   });
 });
@@ -379,22 +379,21 @@ describe('channelIdFromInvite', () => {
   });
 
   it('не находит канал в ссылке на сообщество', () => {
-    // /c/ — сообщество целиком, конкретного канала в ней нет.
+    // /c/ is a whole community; it carries no specific channel.
     expect(channelIdFromInvite('https://status.app/c/G0UA==#zQ3shabc')).toBeNull();
   });
 
   it('отклоняет cc-ссылку с мусором вместо UUID', () => {
-    // По этому значению мы ищем канал в Community.chats, поэтому мусор
-    // пропускать нельзя — иначе поиск гарантированно промахнётся.
+    // This value is used to look the channel up in Community.chats, so garbage must be rejected or
+    // the lookup is guaranteed to miss.
     expect(channelIdFromInvite('https://status.app/cc/not-a-uuid#zQ3shabc')).toBeNull();
   });
 });
 
 describe('публичные каналы больше не создаются', () => {
-  // `joinChannel` удалён: он вызывал `createPublicChat`, то есть создавал
-  // публичный канал без владельца, прав и проверки существования. Для схемы
-  // АКК это непригодно — «канал с автором» требует возможности ограничить
-  // запись, которой у публичного канала нет.
+  // Public channels cannot be created from the UI: they have no owner and no rights, and no
+  // catalog exists, so they can be found only by exact name. The ACC scheme needs a channel whose
+  // author can restrict posting, which a public channel does not provide.
   beforeEach(() => {
     resetChats();
     vi.clearAllMocks();
@@ -446,8 +445,8 @@ describe('spectateCommunityById', () => {
   });
 
   it('не падает, если описание ещё не получено', async () => {
-    // fetchCommunity с waitForResponse: false может вернуть null — id уже
-    // известен из каталога, и это не повод отказываться от просмотра.
+    // fetchCommunity with waitForResponse: false may return null, because the id is already known
+    // from the catalog and that is no reason to skip spectating.
     (fetchCommunity as any).mockResolvedValue(null);
     (spectateCommunity as any).mockResolvedValue({});
 
@@ -494,8 +493,8 @@ describe('requestJoinCommunity', () => {
       'secret'
     );
 
-    // Даже для открытого сообщества сначала «заявка»: принятие приходит
-    // асинхронно, по сигналу, и обещать «вступил» было бы обманом.
+    // Even for an open community the result is first a "request": acceptance arrives asynchronously
+    // via a signal, and claiming "joined" would be a lie.
     expect(result).toEqual({ status: 'requested', name: 'Status Inc' });
     expect(generateJoiningRequestsForSigning).toHaveBeenCalledWith(
       12345,
@@ -532,8 +531,7 @@ describe('requestJoinCommunity', () => {
   });
 
   it('отказывает, если ни один адрес нельзя подписать', async () => {
-    // personal.SignParams пропускает chat- и watch-only аккаунты, поэтому
-    // ответ может быть пустым.
+    // personal.SignParams skips chat and watch-only accounts, so the answer may be empty.
     (generateJoiningRequestsForSigning as any).mockResolvedValue([]);
 
     const result = await requestJoinCommunity(
@@ -564,8 +562,7 @@ describe('requestJoinCommunity', () => {
   });
 
   it('подставляет подписываемый адрес, если выбранный нельзя подписать', async () => {
-    // airdropAddress обязан входить в addressesToReveal, иначе
-    // RequestToJoinCommunity.Validate ответит
+    // airdropAddress must be inside addressesToReveal, or RequestToJoinCommunity.Validate answers
     // ErrRequestToJoinNoAirdropAddressAmongAddressesToReveal.
     (generateJoiningRequestsForSigning as any).mockResolvedValue([
       { data: '0xhash1', account: '0xaddr1' },
@@ -601,16 +598,16 @@ describe('joinByInput', () => {
   });
 
   it('не создаёт публичный канал по имени', async () => {
-    // Публичные каналы исключены из подключения: у них нет владельца и
-    // прав, а каталога не существует — найти можно только по точному имени.
+    // Public channels are excluded from connecting: they have no owner or rights and no catalog
+    // exists, so they can be found only by exact name.
     const result = await joinByInput('#status');
     expect(result.status).toBe('failed');
     expect(spectateCommunity).not.toHaveBeenCalled();
   });
 
   it('ведёт hex-идентификатор в spectateCommunity', async () => {
-    // Для сообщества входное действие — просмотр, а не вступление:
-    // вступление требует выбора адресов и пароля и идёт с экрана превью.
+    // For a community the entry action is spectating, not joining: joining needs address choices
+    // and a password and starts from the preview screen.
     const hex = '0x' + 'a'.repeat(64);
     const result = await joinByInput(hex);
     expect(result.status).toBe('spectated');
@@ -618,7 +615,7 @@ describe('joinByInput', () => {
   });
 
   it('достаёт идентификатор из короткой ссылки-приглашения', async () => {
-    // Формат status.app/c#<ключ> — без base64-части после /c/.
+    // Format status.app/c#<key>: no base64 part after /c/.
     const id = 'zQ3shabc';
     await joinByInput(`https://status.app/c#${id}`);
     expect(spectateCommunity).toHaveBeenCalledWith(12345, id);
@@ -661,7 +658,7 @@ describe('joinByInput: приглашения от контакта и кана�
     const result = await joinByInput(input);
     expect(result.status).toBe('contact');
     expect(sendContactRequest).toHaveBeenCalledTimes(1);
-    // Стор передаёт hex; перевод в zQ3 делает sendContactRequest (покрыт в messaging.test.ts).
+    // The store passes hex; sendContactRequest converts it to zQ3 (covered in messaging.test.ts).
     const [, sentId] = (sendContactRequest as any).mock.calls[0];
     expect(sentId).toBe(communityIdFromInvite(`#${KEY}`));
     expect(sentId).toMatch(/^0x[0-9a-fA-F]{66}$/);
@@ -690,7 +687,7 @@ describe('ожидающая заявка: статус контакта важ�
   });
 
   it('принятый контакт не остаётся ожидающим, даже если превью ещё старое', async () => {
-    // Превью после Accept: active=false и contactRequestState=1 — устаревшее.
+    // Preview after Accept: active=false and contactRequestState=1 are stale.
     (getChats as any).mockResolvedValue([
       { id: CID, name: 'Stauri User', active: false, chatType: TYPE_ONE_TO_ONE,
         lastMessage: { contactRequestState: 1, text: 'Hi', timestamp: 1 }, unviewedMessagesCount: 0 },

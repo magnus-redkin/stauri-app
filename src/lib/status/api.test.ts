@@ -3,7 +3,7 @@ import * as api from './api';
 import * as http from './http';
 import { invoke } from '@tauri-apps/api/core';
 
-// Мокаем внешние зависимости
+// Mock external dependencies.
 vi.mock('@tauri-apps/api/core');
 vi.mock('./http');
 
@@ -56,8 +56,8 @@ describe('Status API', () => {
 
       await api.createAccountAndLogin(8080, '/tmp/data', 'supersecret');
 
-      // Ключи RPC приходят из .env и в тестах отсутствуют, поэтому проверяем
-      // только поля, которые формирует сам код.
+      // RPC keys come from .env and are absent in tests, so only the fields the
+      // code builds itself are checked.
       expect(http.statusFetch).toHaveBeenCalledWith(
         8080,
         'CreateAccountAndLogin',
@@ -67,8 +67,8 @@ describe('Status API', () => {
           password: 'supersecret',
           customizationColor: 'primary',
           statusProxyStageName: 'prod',
-          // Без включённого провайдера обмена Router не получает обработчиков
-          // и отвечает WR-005 «no best route found» на любой запрос свопа.
+          // Without an enabled swap provider the Router has no handlers and
+          // answers WR-005 "no best route found" for every swap request.
           enableLiFiProvider: true,
         })
       );
@@ -88,9 +88,9 @@ describe('Status API', () => {
           password: 'supersecret',
           keyUid: 'test-123',
           statusProxyStageName: 'prod',
-          // WalletConfig читается из запроса на логине
-          // (pkg/backend/geth_backend.go, loginAccount), поэтому флаг обязан
-          // быть и здесь, а не только при создании аккаунта.
+          // WalletConfig is read on login too
+          // (pkg/backend/geth_backend.go, loginAccount), so the flag must be
+          // present here as well, not only at account creation.
           enableLiFiProvider: true,
         })
       );
@@ -113,7 +113,7 @@ describe('Status API', () => {
     });
 
     it('должен возвращать пустой массив, если accounts undefined', async () => {
-      vi.mocked(http.statusFetch).mockResolvedValue({}); // Нет поля accounts
+      vi.mocked(http.statusFetch).mockResolvedValue({}); // No accounts field.
 
       const accounts = await api.getAccountsList(8080, '/tmp/data', 1);
       expect(accounts).toEqual([]);
@@ -147,13 +147,13 @@ describe('Status API', () => {
     });
 
     it('передаёт responseTo на верхнем уровне объекта', async () => {
-      // Message.UnmarshalJSON читает поле именно с верхнего уровня:
-      // `ResponseTo string \`json:"responseTo"\`` в aux-структуре.
+      // Message.UnmarshalJSON reads the field at the top level:
+      // `ResponseTo string \`json:"responseTo"\`` in the aux struct.
       await api.sendChatMessage(8080, 'status', 'comment', '', '0xparent');
 
       const body = vi.mocked(http.statusFetch).mock.calls[0][2] as any;
       expect(body.params[0].responseTo).toBe('0xparent');
-      // Не вложено в payload и не в chatId.
+      // Not nested in a payload, and not in chatId.
       expect(body.params[0].chatId).toBe('status');
     });
   });

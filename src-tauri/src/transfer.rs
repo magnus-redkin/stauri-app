@@ -1,36 +1,29 @@
-//! Отправка средств из кошелька.
+//! Sending funds from the wallet.
 //!
-//! ## Почему это в Rust, а не в компоненте
-//!
-//! Перевод в status-go трёхшаговый (`pkg/services/wallet/api.go`):
+//! A transfer in status-go takes three steps (`pkg/services/wallet/api.go`):
 //!
 //! ```text
 //! wallet_buildTransaction(chainID, sendTxArgs)   → messageToSign, txArgs
-//! wallet_signMessage(messageToSign, from, pass)  → подпись
+//! wallet_signMessage(messageToSign, from, pass)  → signature
 //! wallet_sendTransactionWithSignature(chainID, "WalletTransfer", txArgs, sig)
 //! ```
 //!
-//! Если бы эта последовательность жила в webview, любая XSS получила бы две
-//! вещи сразу: пароль профиля и универсальное приспособление для подписи —
-//! `wallet_signMessage` подписывает любые 32 байта ключом кошелька и не
-//! знает, что это за байты. Тогда чужой скрипт мог бы подписать собранную им
-//! транзакцию «переведи всё на этот адрес».
+//! The orchestration lives in Rust, not in a component: in the webview any XSS
+//! would get both the profile password and a universal signing tool —
+//! `wallet_signMessage` signs any 32 bytes with the wallet key without knowing
+//! what they are. A foreign script could then sign a transaction it assembled
+//! itself ("send everything to this address"). Here only the intent crosses the
+//! boundary: "send this much of this token to this address". The hash to sign,
+//! the steps and the password stay in Rust.
 //!
-//! Здесь наружу торчит только намерение: «отправь столько-то этого токена на
-//! такой-то адрес». Хэш для подписи, шаги и пароль не покидают Rust.
+//! Rust validates only what can be checked without the network: address shape,
+//! amount syntax, `chainId` range, presence of the password. Sufficient funds,
+//! correct gas and the transaction itself are the node's business; duplicating
+//! them would mean diverging from its rules.
 //!
-//! ## Что проверяет Rust, а что нет
-//!
-//! Проверяется то, что можно проверить без сети: форма адреса, схема суммы,
-//! диапазон chainId, наличие пароля. Достаточность средств, корректность газа
-//! и самой транзакции проверяет нода — дублировать это значило бы расходиться
-//! с ней в правилах.
-//!
-//! ## Пароль
-//!
-//! Приходит от фронтенда один раз за сессию и здесь не хранится: передаётся
-//! в `wallet_signMessage` и забывается. Держать его дольше незачем — каждая
-//! отправка и так идёт через эту команду.
+//! The password arrives from the frontend once per session and is not stored
+//! here: it is passed to `wallet_signMessage` and dropped. Every send goes
+//! through this command anyway, so holding it longer serves no purpose.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,56 +31,60 @@ use serde_json::{Value, json};
 use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 
-/// Запрос на перевод.
+/// Transfer request.
 #[derive(Debug, Deserialize)]
 pub struct TransferRequest {
-    /// Порт аутентифицирующего прокси.
+    /// Port of the authenticating proxy.
     pub port: u16,
     pub chain_id: u64,
-    /// Адрес отправителя — кошелёк этого профиля.
+    /// Sender address — the wallet of this profile.
     pub from: String,
     pub to: String,
-    /// Адрес контракта токена. Для нативного ETH — нулевой адрес.
+    /// Token contract address. The zero address for native ETH.
     pub token_address: String,
-    /// Сумма в минимальных единицах (строка, чтобы не терять точность).
+    /// Amount in the smallest unit (a string, to avoid losing precision).
     pub amount: String,
-    /// Пароль профиля. Не логируется и не хранится.
+    /// Profile password. Never logged or stored.
     pub password: String,
 }
 
-/// Результат отправки.
+/// Send result.
 #[derive(Debug, Serialize)]
 pub struct TransferResult {
-    /// Хэш транзакции, если нода его вернула.
+    /// Transaction hash, when the node returned one.
     pub tx_hash: String,
 }
 
-/// Оценка комиссии: сколько сети уйдёт за перевод.
+/// Fee estimate: what the network will charge for the transfer.
 ///
-/// Считается из тех же `gas` и `gasPrice`, которые нода подставила при
-/// сборке транзакции. Отдельного метода оценки в status-go для этого пути
-/// нет (`wallet_getSuggestedFees` отдаёт рекомендованные цены сети, а не
-/// газ именно этой транзакции), поэтому берём цифры из собранной, но ещё не
-/// подписанной транзакции: это ровно та комиссия, которая уйдёт.
+/// Derived from the `gas` and `gasPrice` the node filled in while building the
+/// transaction. status-go has no separate estimate method for this path
+/// (`wallet_getSuggestedFees` returns the network's recommended prices, not the
+/// gas of this particular transaction), so the figures come from the built but
+/// still unsigned transaction: that is exactly the fee that will be charged.
 #[derive(Debug, Serialize)]
 pub struct FeeEstimate {
-    /// Комиссия в минимальных единицах (wei).
+    /// Fee in the smallest unit (wei).
     pub fee: String,
-    /// Предел газа.
+    /// Gas limit.
     pub gas: String,
-    /// Цена газа в wei.
+    /// Gas price in wei.
     pub gas_price: String,
 }
 
-/// Собирает транзакцию и возвращает оценку комиссии.
+/// Builds the transaction and returns a fee estimate.
 ///
-/// ## Почему это безопасно до ввода пароля
+/// Safe to call before the password is entered: `wallet_buildTransaction` only
+/// assembles the transaction and computes its hash. The key is not used, no
+/// signature is produced and nothing is sent to the network, so the estimate
+/// can be shown on the confirmation screen before the user types the password —
+/// they see the full picture of the transfer, fee included, and then decide.
 ///
-/// `wallet_buildTransaction` только собирает транзакцию и считает её хэш.
-/// Ключ при этом не используется, подписи не происходит, в сеть ничего не
-/// уходит. Поэтому оценку можно показывать на экране подтверждения ДО того,
-/// как человек введёт пароль: он видит полную картину перевода, включая
-/// комиссию, и только потом решает.
+/// # Errors
+/// `ErrorKind::Config` for a missing backend port, a zero `chain_id`, a bad
+/// address or a non-integer amount; `ErrorKind::Backend` when the backend call
+/// fails, or when the node omits `txArgs` or returns unparsable
+/// `gas`/`gasPrice`.
 #[tauri::command]
 pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate> {
     if request.port == 0 {
@@ -109,8 +106,8 @@ pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate
     let amount = parse_amount(&request.amount)?;
     let args = send_args(&request.from, &request.to, &request.token_address, amount);
 
-    // Собираем через тот же путь, что и отправка (`send_args`), чтобы цифры
-    // на экране подтверждения и в подписанной транзакции совпадали.
+    // Built through the same path as sending (`send_args`), so the figures on
+    // the confirmation screen match the signed transaction.
     let built = Backend::from_port(request.port)?
         .call(
             "wallet_buildTransaction",
@@ -133,7 +130,7 @@ pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate
     })
 }
 
-/// Запрос оценки комиссии: то же, что отправка, но без пароля.
+/// Fee estimate request: the same as a send, without the password.
 #[derive(Debug, Deserialize)]
 pub struct FeeRequest {
     pub port: u16,
@@ -144,10 +141,15 @@ pub struct FeeRequest {
     pub amount: String,
 }
 
-/// Адрес нативного актива во всех сетях EVM.
+/// Address of the native asset on every EVM chain.
 const NATIVE_TOKEN: &str = "0x0000000000000000000000000000000000000000";
 
-/// Отправляет перевод и возвращает хэш.
+/// Sends a transfer and returns its hash.
+///
+/// # Errors
+/// `ErrorKind::Config` when validation fails; `ErrorKind::Backend` when a
+/// backend call fails, or when the node returns no hash to sign, no transaction
+/// arguments, no signature or no transaction hash.
 #[tauri::command]
 pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult> {
     validate(&request)?;
@@ -162,26 +164,26 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
         )
         .await?;
 
-    // Нода отвечает объектом с полями `messageToSign` и `txArgs`. Без хэша
-    // продолжать нечем: подписывать нечего.
+    // The node answers with an object holding `messageToSign` and `txArgs`.
+    // Without the hash there is nothing to sign.
     let message = built
         .get("messageToSign")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::backend("backend returned no hash to sign"))?
         .to_string();
 
-    // `txArgs` возвращаем ОБРАТНО в ноду без изменений: там nonce и газ,
-    // которые она только что посчитала. Собирать их заново значило бы
-    // отправить не ту транзакцию, которую мы показывали.
+    // `txArgs` goes BACK to the node unchanged: it holds the nonce and gas the
+    // node has just computed. Rebuilding them would mean sending a different
+    // transaction from the one that was shown.
     let tx_args = built
         .get("txArgs")
         .cloned()
         .ok_or_else(|| AppError::backend("backend returned no transaction arguments"))?;
 
-    // 2. Подписать. Пароль живёт только внутри этого вызова.
+    // 2. Sign. The password lives only inside this call.
     //
-    //    `message` передаём как есть, с `0x`: параметр объявлен как
-    //    `types.HexBytes`, а его JSON-разбор ждёт hex-строку с префиксом.
+    //    `message` is passed as is, with `0x`: the parameter is declared as
+    //    `types.HexBytes`, whose JSON decoder expects a prefixed hex string.
     let signature = Backend::from_port(request.port)?
         .call(
             "wallet_signMessage",
@@ -192,23 +194,21 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
         .ok_or_else(|| AppError::backend("backend returned no signature"))?
         .to_string();
 
-    // 3. Отправить. `WalletTransfer` — тип из PendingTrxType
+    // 3. Send. `WalletTransfer` is a value of `PendingTrxType`
     //    (pkg/services/wallet/pendingtxtracker/pendingtxtracker.go).
     //
-    // ## Почему подпись идёт без префикса `0x`
+    // The signature goes out without the `0x` prefix because of a split inside
+    // status-go:
     //
-    // Это расхождение в самом status-go, и оно не наше:
+    //   * `wallet_signMessage` returns the signature through `types.EncodeHex`,
+    //     which ADDS `0x` (internal/crypto/types/utils.go);
+    //   * `wallet_sendTransactionWithSignature` parses it with
+    //     `hex.DecodeString` (pkg/services/wallet/api.go:613), which accepts
+    //     bare hex only and fails on `0x` with
+    //     "encoding/hex: invalid byte: U+0078 'x'".
     //
-    //   * `wallet_signMessage` возвращает подпись через `types.EncodeHex`,
-    //     а тот ДОБАВЛЯЕТ `0x` (internal/crypto/types/utils.go);
-    //   * `wallet_sendTransactionWithSignature` разбирает её через
-    //     `hex.DecodeString` (pkg/services/wallet/api.go:613), а тот
-    //     принимает только голый hex: на `0x` он отвечает
-    //     «encoding/hex: invalid byte: U+0078 'x'».
-    //
-    // Отсюда ошибка, которую видел пользователь при первой отправке:
-    // подпись была получена успешно и транзакция не ушла только из-за
-    // префикса. Поэтому снимаем его здесь, а не полагаемся на ноду.
+    // The signature is therefore obtained successfully but the transaction is
+    // never sent. The prefix is stripped here rather than relying on the node.
     let hash = Backend::from_port(request.port)?
         .call(
             "wallet_sendTransactionWithSignature",
@@ -229,17 +229,21 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     Ok(TransferResult { tx_hash })
 }
 
-/// Проверяет запрос до обращения к сети.
+/// Validates the request before any network access.
 ///
-/// Всё, что здесь отклоняется, не стоит даже вызова бэкенда: адрес не той
-/// формы, сумма не число, chainId не тот.
+/// Anything rejected here is not worth a backend call: a malformed address, a
+/// non-numeric amount, a wrong `chainId`.
+///
+/// # Errors
+/// `ErrorKind::Config` for a missing backend port, a zero `chain_id`, a bad
+/// address, an empty password, a non-integer amount or a zero amount.
 fn validate(request: &TransferRequest) -> AppResult<()> {
     if request.port == 0 {
         return Err(AppError::config("backend is not running"));
     }
 
-    // chainId 0 — не сеть. Верхняя граница взята с запасом: реальные сети
-    // укладываются в u64, а 0 и мусор отсекаем здесь.
+    // chainId 0 is not a network. The upper bound is generous: real networks
+    // fit in u64, so 0 and garbage are rejected here.
     if request.chain_id == 0 {
         return Err(AppError::config("chain id is required"));
     }
@@ -258,8 +262,7 @@ fn validate(request: &TransferRequest) -> AppResult<()> {
         return Err(AppError::config("password is required"));
     }
 
-    // `u128` не бывает отрицательным, поэтому «больше нуля» — это просто
-    // «не ноль».
+    // `u128` is never negative, so "greater than zero" is simply "not zero".
     if parse_amount(&request.amount)? == 0 {
         return Err(AppError::config("amount must be greater than zero"));
     }
@@ -267,10 +270,10 @@ fn validate(request: &TransferRequest) -> AppResult<()> {
     Ok(())
 }
 
-/// Снимает префикс `0x`, если он есть.
+/// Strips the `0x` prefix when present.
 ///
-/// Нужен только там, где status-go декодирует hex без префикса (см. шаг 3
-/// в `send_transfer`). Остальные поля передаются с `0x`, как и положено.
+/// Required only where status-go decodes bare hex (see step 3 in
+/// `send_transfer`). Other fields are passed with `0x`, as expected.
 fn strip_hex_prefix(value: &str) -> &str {
     value
         .strip_prefix("0x")
@@ -278,19 +281,17 @@ fn strip_hex_prefix(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-/// Аргументы транзакции для `wallet_buildTransaction`.
+/// Transaction arguments for `wallet_buildTransaction`.
 ///
-/// ## Почему общая функция
+/// Fee estimation and sending must build the transaction identically;
+/// otherwise the confirmation screen could show one fee while a transaction
+/// with another is sent.
 ///
-/// Оценка комиссии и отправка обязаны собирать транзакцию ОДИНАКОВО. Если
-/// бы каждая строила аргументы сама, на экране подтверждения могла бы
-/// оказаться одна комиссия, а уйти транзакция с другой — ровно тот случай,
-/// где расхождение недопустимо.
-///
-/// Нативный актив и токен отличаются тем, куда идёт транзакция: у ETH
-/// получатель — это `to`, а сумма — `value`. У ERC-20 транзакция идёт
-/// контракту (`to` = контракт, `value` = 0), а получатель и сумма кодируются
-/// в `data` вызовом transfer(address,uint256).
+/// The native asset and a token differ in where the transaction goes: for ETH
+/// the recipient is `to` and the amount is `value`. For an ERC-20 the
+/// transaction goes to the contract (`to` = contract, `value` = 0) while the
+/// recipient and amount are encoded in `data` via the
+/// transfer(address,uint256) call.
 fn send_args(from: &str, to: &str, token_address: &str, amount: u128) -> Value {
     if token_address.eq_ignore_ascii_case(NATIVE_TOKEN) {
         json!({
@@ -309,7 +310,12 @@ fn send_args(from: &str, to: &str, token_address: &str, amount: u128) -> Value {
     }
 }
 
-/// Читает hex-поле из `txArgs` (нода отдаёт `gas` и `gasPrice` как `0x…`).
+/// Reads a hex field from `txArgs` (the node returns `gas` and `gasPrice` as
+/// `0x…`).
+///
+/// # Errors
+/// `ErrorKind::Backend` when the field is missing, is not a string, or does not
+/// parse as hex.
 fn hex_u128(value: &Value, field: &str) -> AppResult<u128> {
     let raw = value
         .get(field)
@@ -320,7 +326,7 @@ fn hex_u128(value: &Value, field: &str) -> AppResult<u128> {
         .map_err(|e| AppError::backend(format!("invalid {field} from backend: {e}")))
 }
 
-/// Адрес EVM: `0x` и ровно 40 шестнадцатеричных цифр.
+/// EVM address: `0x` and exactly 40 hexadecimal digits.
 fn is_address(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 42
@@ -329,43 +335,44 @@ fn is_address(value: &str) -> bool {
         && bytes[2..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
-/// `data` для вызова `transfer(address,uint256)` у ERC-20.
+/// `data` for an ERC-20 `transfer(address,uint256)` call.
 ///
-/// ## Почему кодируем сами
+/// The call is fixed — a four-byte selector plus two 32-byte arguments — so a
+/// full ABI encoder (alloy/ethabi) would add hundreds of kilobytes of
+/// dependencies for 64 lines of work.
 ///
-/// Это фиксированный ABI-вызов из четырёх байт селектора и двух 32-байтных
-/// аргументов — тащить ради него полноценный ABI-энкодер (alloy/ethabi)
-/// незачем: он добавит сотни килобайт зависимостей ради 64 строк.
+/// The selector `0xa9059cbb` is the first 4 bytes of
+/// keccak256("transfer(address,uint256)"). It is identical across ERC-20 tokens,
+/// so it is written as a constant instead of computed at runtime.
 ///
-/// Селектор `0xa9059cbb` — это первые 4 байта keccak256("transfer(address,uint256)").
-/// Он один и тот же у всех ERC-20, поэтому выписан константой, а не считается
-/// в рантайме.
-///
-/// ## Почему сумма обязана влезть в 32 байта
-///
-/// `uint256` — это ровно 256 бит. Сумма больше 2^256 не представима, и
-/// молча обрезать её значило бы отправить не ту сумму.
+/// The amount must fit in 32 bytes: `uint256` is exactly 256 bits, and
+/// silently truncating a larger sum would send the wrong amount.
 fn encode_erc20_transfer(to: &str, amount: u128) -> String {
-    // `to` уже проверен `is_address`, но проверяем ещё раз: эта функция
-    // собирает байты, которые попадут в сеть, и ошибиться здесь нельзя.
+    // `to` was already checked by `is_address`, but it is checked again: this
+    // function assembles the bytes that go on chain and a mistake here is not
+    // recoverable.
     let recipient = to
         .trim_start_matches("0x")
         .trim_start_matches("0X")
         .to_ascii_lowercase();
 
-    // 20 байт адреса дополняются 12 байтами нулей до 32 — так требует ABI.
+    // The 20-byte address is padded with 12 zero bytes to 32, as the ABI
+    // requires.
     let address_word = format!("{recipient:0>64}");
-    // Сумма — 32 байта шестнадцатеричного числа с ведущими нулями.
+    // The amount is a 32-byte hexadecimal number with leading zeros.
     let amount_word = format!("{amount:064x}");
 
     format!("0xa9059cbb{address_word}{amount_word}")
 }
 
-/// Разбирает сумму в минимальных единицах.
+/// Parses an amount in the smallest unit.
 ///
-/// Фронтенд уже перевёл её в целое (`utils/amount.ts`), поэтому принимаем
-/// только десятичные цифры. Строку, а не число: `u64` не хватит для 18
-/// знаков, а `f64` потеряет точность.
+/// The frontend already converted it to an integer (`utils/amount.ts`), so only
+/// decimal digits are accepted. It arrives as a string: `u64` is too small for
+/// 18 digits and `f64` would lose precision.
+///
+/// # Errors
+/// `ErrorKind::Config` when the value is not a decimal integer.
 fn parse_amount(raw: &str) -> AppResult<u128> {
     raw.parse::<u128>()
         .map_err(|_| AppError::config("amount must be a decimal integer"))
@@ -411,7 +418,7 @@ mod tests {
 
     #[test]
     fn accepts_uppercase_x_prefix() {
-        // Некоторые кошельки копируют адрес как `0X…`.
+        // Some wallets copy the address as `0X…`.
         let mut r = request();
         r.to = "0X0000000000000000000000000000000000000001".to_string();
         assert!(validate(&r).is_ok());
@@ -453,8 +460,7 @@ mod tests {
 
     #[test]
     fn amount_keeps_full_precision() {
-        // 1 ETH в wei: u64 этого не вмещает (предел ~1.8e19, но 1e18 вмещает),
-        // а вот 100 ETH — уже на границе. u128 держит любые реальные суммы.
+        // 1 ETH in wei: `u128` holds any realistic amount.
         assert_eq!(
             parse_amount("100000000000000000000").unwrap(),
             100_000_000_000_000_000_000u128
@@ -463,7 +469,7 @@ mod tests {
 
     #[test]
     fn encodes_erc20_transfer_call() {
-        // Эталон: transfer(0x0000…0001, 1) у USDC (6 знаков) — сумма 1e6.
+        // Reference: transfer(0x0000…0001, 1) on USDC (6 decimals) — amount 1e6.
         let data = encode_erc20_transfer("0x0000000000000000000000000000000000000001", 1_000_000);
         assert_eq!(
             data,
@@ -473,7 +479,7 @@ mod tests {
                 "00000000000000000000000000000000000000000000000000000000000f4240",
             )
         );
-        // Селектор + два 32-байтных слова = 4 + 32 + 32 байта.
+        // Selector plus two 32-byte words = 4 + 32 + 32 bytes.
         assert_eq!(data.len(), 2 + 8 + 64 + 64);
     }
 
@@ -481,7 +487,7 @@ mod tests {
     fn erc20_encoding_accepts_uppercase_prefix_and_uppercase_hex() {
         let lower = encode_erc20_transfer("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd", 1);
         let upper = encode_erc20_transfer("0XABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD", 1);
-        // Регистр не должен влиять на байты: адрес дополняется нулями одинаково.
+        // Case must not affect the bytes: the address is zero-padded the same way.
         assert_eq!(lower, upper);
         assert!(lower.contains("abcdefabcdefabcdefabcdefabcdefabcdefabcd"));
     }
@@ -494,31 +500,29 @@ mod tests {
 
     #[test]
     fn native_and_token_addresses_are_distinguished() {
-        // Нулевой адрес — это ETH, а не ERC-20: сборка аргументов для них
-        // разная, и перепутать значит отправить токен на пустой адрес.
+        // The zero address means ETH, not ERC-20: argument building differs, and
+        // mixing them up would send a token to an empty address.
         assert!(NATIVE_TOKEN.eq_ignore_ascii_case("0x0000000000000000000000000000000000000000"));
         assert!(!NATIVE_TOKEN.eq_ignore_ascii_case("0x0000000000000000000000000000000000000001"));
     }
 
-    /// Регрессия первой реальной отправки.
-    ///
-    /// `wallet_signMessage` возвращает подпись с префиксом `0x`, а
-    /// `wallet_sendTransactionWithSignature` разбирает её через
-    /// `hex.DecodeString`, который префикса не понимает. Пользователь видел
-    /// «encoding/hex: invalid byte: U+0078 'x'» — подпись была получена,
-    /// а транзакция не уходила. Проверяем, что префикс снимается в обоих
-    /// регистрах и что остальные поля не портятся.
+    /// `wallet_signMessage` returns a signature with a `0x` prefix, while
+    /// `wallet_sendTransactionWithSignature` parses it with `hex.DecodeString`,
+    /// which does not understand the prefix. The result is
+    /// "encoding/hex: invalid byte: U+0078 'x'" — the signature is obtained but
+    /// the transaction never leaves. Checks that the prefix is stripped in both
+    /// cases and that other fields are untouched.
     #[test]
     fn strips_prefix_only_from_signature() {
         let sig = "0x1b2a3c4d5e6f";
         assert_eq!(strip_hex_prefix(sig), "1b2a3c4d5e6f");
         assert_eq!(strip_hex_prefix("0X1B2A"), "1B2A");
 
-        // Без префикса строка не меняется: иначе сломались бы вызовы, где
-        // нода уже вернула голый hex.
+        // Without a prefix the string is unchanged, so calls where the node
+        // already returned bare hex keep working.
         assert_eq!(strip_hex_prefix("1b2a"), "1b2a");
 
-        // Адрес при этом остаётся с префиксом: его ждут с `0x`.
+        // The address keeps its prefix: it is expected with `0x`.
         let addr = "0xcd8fd2a9f9726729d19f9be57d959942d7eb578c";
         assert_eq!(strip_hex_prefix(addr).len(), 40);
         assert!(is_address(addr));
@@ -529,23 +533,23 @@ mod tests {
         let args = json!({"gas": "0x5208", "gasPrice": "0x12"});
         assert_eq!(hex_u128(&args, "gas").unwrap(), 21000);
         assert_eq!(hex_u128(&args, "gasPrice").unwrap(), 18);
-        // Комиссия = газ × цена; 21000 × 18 = 378000 wei.
+        // Fee = gas × price; 21000 × 18 = 378000 wei.
         assert_eq!(21000u128 * 18, 378_000);
     }
 
     #[test]
     fn hex_reader_rejects_missing_and_garbage() {
-        // "abc" — валидный hex (0xabc), это не мусор.
+        // "abc" is valid hex (0xabc), so it is not garbage.
         let args = json!({"gas": "xyz"});
         assert!(hex_u128(&args, "gas").is_err());
-        // Отсутствующее поле — тоже ошибка, а не ноль.
+        // A missing field is an error too, not zero.
         assert!(hex_u128(&args, "gasPrice").is_err());
         let empty = json!({"gas": ""});
         assert!(hex_u128(&empty, "gas").is_err());
     }
 
-    /// Оценка и отправка обязаны собирать транзакцию одинаково, иначе
-    /// комиссия на экране не совпадёт с той, что уйдёт.
+    /// Estimation and sending must build the transaction identically, otherwise
+    /// the fee on screen will not match the one charged.
     #[test]
     fn send_args_are_identical_for_fee_and_send() {
         let native = send_args("0xfrom", "0xto", NATIVE_TOKEN, 1000);

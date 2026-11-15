@@ -1,25 +1,25 @@
 <script lang="ts">
   /**
-   * Правая панель раздела dApp.
+   * Right panel of the dApps section.
    *
-   * Сверху — строка адреса: введённый здесь dApp открывается в отдельном
-   * окне (`dapp.rs`), а не внутри этой панели. У чужого интерфейса нет
-   * доступа к нашему дереву компонентов и IPC: его окно не перечислено в
-   * capabilities, поэтому `invoke` из чужой страницы не работает.
+   * The address bar at the top opens the entered dApp in a separate window (`dapp.rs`)
+   * rather than inside this panel. A foreign interface gets no access to the component tree
+   * or to IPC: its window is not listed in the capabilities, so `invoke` from a foreign
+   * page does not work.
    *
-   * Ниже, пока провайдер не выбран, — список примеров. В нём смешаны три
-   * вида, и для пользователя это одно и то же место со списком: встроенный
-   * экран (каталог), настоящее внешнее приложение и запись, которая лишь
-   * подставляет адрес провайдера. Разница в том, где открывается интерфейс.
+   * Below the bar, while no provider is selected, sits the list of examples. It mixes three
+   * kinds that look like one list to the user: a built-in screen (the directory), a real
+   * external application, and an entry that only fills the provider address. The difference
+   * is where the interface opens.
    *
-   * Два провайдера, каждый со своим слотом:
-   *   * `communities` — каталог сообществ; подключение выполняем мы
-   *     (`spectateCommunity`), провайдер только отдаёт адреса;
-   *   * `feed` — лента по URL; элементы только читаются, ссылки открываются
-   *     явными кнопками с полным адресом.
+   * Two providers, each with its own slot:
+   *   * `communities` — a community directory; the provider returns addresses only, and the
+   *     join request is sent by the app (`spectateCommunity`);
+   *   * `feed` — a feed by URL; entries are read-only and links open through explicit
+   *     buttons that show the full address.
    *
-   * Разметка провайдера никогда не попадает в `{@html}` (docs §9.5): только
-   * текст и отдельные ссылки.
+   * Markup returned by a provider never reaches `{@html}` (docs §9.5): only text and
+   * individual links are rendered.
    */
   import { i18n } from '$lib/i18n';
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
@@ -51,10 +51,10 @@
   const entries = $derived(filteredEntries());
 
   /**
-   * Сообщества, раскрытые в дерево.
+   * Communities expanded into a channel tree.
    *
-   * `SvelteSet` реактивен сам, поэтому не оборачивается в `$state` и не
-   * переприсваивается — иначе сломались бы подписки (та же причина, что в
+   * `SvelteSet` is reactive on its own, so it is neither wrapped in `$state` nor
+   * reassigned — reassigning would drop the subscriptions (the same reason as in
    * `ChatLeft`).
    */
   const expanded = new SvelteSet<string>();
@@ -64,27 +64,25 @@
     else expanded.add(id);
   }
 
-  /** Каналы открытого сообщества: категории и то, что внутри. */
+  /** Channels of the selected community: categories and what is inside them. */
   const tree = $derived(channelTree(communitiesState.selected?.community));
 
   let channelError = $state('');
 
   /**
-   * Раскрытая форма вступления.
+   * Whether the join form is open.
    *
-   * Отдельное состояние, а не флаг в `communitiesState`: это состояние
-   * интерфейса, а не данных. Сбрасывается при смене сообщества — форма
-   * с паролем от другого сообщества вводила бы в заблуждение.
+   * Kept separate from `communitiesState` because it is interface state, not data. The form
+   * itself is mounted only under the expanded community, so it never outlives its community.
    */
   let joining = $state(false);
 
   /**
-   * Поле адреса dApp.
+   * The dApp address input.
    *
-   * Фокус ставится сам, когда экран примеров открывается: это первое, что
-   * пользователь делает в разделе, и лишний клик ему не нужен. `$effect`
-   * срабатывает в том числе при возврате из каталога — раздел один и тот же,
-   * а экран меняется.
+   * It takes focus as soon as the examples screen is shown: that is the first thing done in
+   * this section, and an extra click is pointless. The `$effect` also runs when returning
+   * from the directory — the section stays the same while the screen changes.
    */
   let dappInput = $state<HTMLInputElement | null>(null);
   $effect(() => {
@@ -92,26 +90,25 @@
   });
 
   /**
-   * Поле адреса ленты.
+   * The feed address input.
    *
-   * Тот же принцип: открыли провайдер — курсор уже в поле, вставлять можно
-   * сразу. Раньше приходилось кликать, хотя других действий на этом экране
-   * нет.
+   * Same principle: opening the provider puts the cursor in the field so a URL can be
+   * pasted straight away — there is no other action on that screen.
    */
   let feedInput = $state<HTMLInputElement | null>(null);
   $effect(() => {
     if (dappsState.active === 'feed') feedInput?.focus();
   });
 
-  /** Запрос из `+page.svelte`: переключить раздел и выбрать чат. */
+  /** Callback from `+page.svelte`: switch to the chat section and open the given chat. */
   let { onOpenChat }: { onOpenChat?: (chatId: string) => void } = $props();
 
   /**
-   * Добавляет ленту и сразу открывает её в чате.
+   * Adds a feed and opens it in the chat list.
    *
-   * Переключение раздела — не украшение: добавление проверяет адрес и, если
-   * он рабочий, создаёт запись в списке чатов. Оставить пользователя в панели
-   * провайдера значило бы заставить его искать, куда делось добавленное.
+   * Opening it is not decoration: adding a feed validates the address and, when it works,
+   * creates a chat entry. Leaving the user on the provider panel would make them hunt for
+   * what they just added.
    */
   async function submitFeed() {
     if (feedsState.isAdding) return;
@@ -120,8 +117,8 @@
 
     const raw = dappsState.feedUrl.trim();
     dappsState.feedUrl = '';
-    // Адрес мог быть нормализован (`@name` → `t.me/s/name`), поэтому id
-    // берём из сохранённой подписки, а не из ввода.
+    // The address may have been normalised (`@name` → `t.me/s/name`), so the id is taken
+    // from the stored subscription rather than from the input.
     const added = [...feedsState.subscriptions.keys()].find(
       (url) => url === raw || url.endsWith(raw)
     );
@@ -140,13 +137,10 @@
   {#if dappsState.active === null}
     <div class="flex-1 flex flex-col min-h-0">
       <!--
-        Строка адреса стоит только здесь, на экране примеров.
-
-        Раньше она висела над панелью всегда — и в провайдере ленты рядом
-        оказывались два поля ввода: адрес dApp и адрес ленты. Пользователь
-        не мог понять, куда что вставлять, и вставлял адрес канала Telegram
-        в поле dApp. Поле — часть экрана «выбрать, что открыть», а не общая
-        шапка раздела.
+        The address bar belongs to the examples screen only. Sharing it with the feed
+        provider puts two address inputs side by side, and a Telegram channel link ends up
+        in the dApp field. The field is part of "choose what to open", not a header for the
+        whole section.
       -->
       <div class="p-2 border-b border-border space-y-2">
         <div class="flex gap-2">
@@ -168,10 +162,10 @@
           <p class="text-xs text-destructive">{dappsState.dappError}</p>
         {/if}
         <!--
-          Предупреждение неотключаемое (docs §12): пользователь должен знать,
-          что чужое окно не имеет доступа к Stauri, но и мы не отвечаем за
-          его содержимое. Показываем всегда, а не однократно — «больше не
-          спрашивать» здесь означало бы «забыть, что это чужой код».
+          The warning cannot be dismissed (docs §12): the user must know that a foreign
+          window cannot reach Stauri, but that the app is also not responsible for what that
+          window shows. It is always visible rather than shown once — "don't ask again" here
+          would mean "forget that this is foreign code".
         -->
         <p class="text-[0.6875rem] text-muted-foreground">
           {i18n.t('External dApps open in a separate window and cannot reach Stauri or your keys.')}
@@ -205,12 +199,7 @@
         {#if dappsState.dappError}
           <p class="text-xs text-destructive">{dappsState.dappError}</p>
         {/if}
-        <!--
-          Предупреждение неотключаемое (docs §12): пользователь должен знать,
-          что чужое окно не имеет доступа к Stauri, но и мы не отвечаем за
-          его содержимое. Показываем всегда, а не однократно — «больше не
-          спрашивать» здесь означало бы «забыть, что это чужой код».
-        -->
+        <!-- Same non-dismissible warning as the block above. -->
         <p class="text-[0.6875rem] text-muted-foreground">
           {i18n.t('External dApps open in a separate window and cannot reach Stauri or your keys.')}
         </p>
@@ -250,9 +239,8 @@
   {:else if dappsState.active === 'communities'}
     <div class="p-3 border-b border-border flex items-center gap-2">
       <!--
-        Назад к примерам. Раздел остаётся тем же (`dapps`), меняется только
-        внутренний экран — поэтому это не навигация приложения, а возврат
-        внутри компонента.
+        Back to the examples. The section stays the same (`dapps`); only the inner screen
+        changes, so this is a return inside the component rather than app navigation.
       -->
       <button
         onclick={() => resetDappsView()}
@@ -298,15 +286,15 @@
             {#each entries as entry (entry.id)}
               <div>
                 <!--
-                  Строка сообщества. Кнопка раскрывает дерево, а не сразу
-                  выполняет spectate: пользователь должен увидеть, что внутри,
-                  до того как мы что-то запишем в базу status-go.
+                  A community row. The button expands the tree instead of spectating
+                  straight away: the user sees what is inside before anything is written to
+                  the status-go database.
                 -->
                 <button
                   onclick={async () => {
                     toggleExpanded(entry.id);
                     if (!expanded.has(entry.id)) return;
-                    // Раскрытие требует описания: каналов без него нет.
+                    // Expanding requires the description: without it there are no channels.
                     if (!entry.loaded) await selectCommunity(entry);
                     else if (!entry.joined && !entry.spectated) await selectCommunity(entry);
                   }}
@@ -391,9 +379,9 @@
                     {/if}
 
                     <!--
-                      Вступление — отдельным действием: без него канал
-                      читается, но писать нельзя, а заявка требует выбора
-                      адресов и пароля.
+                      Joining is a separate action: without it channels can be read but not
+                      written to, and a join request needs a choice of addresses and a
+                      password.
                     -->
                     {#if !entry.joined}
                       <button
@@ -408,9 +396,8 @@
 
                       {#if joining}
                         <!--
-                          Форма готовит себя сама при монтировании: адреса и
-                          проверку токен-гейта. Родителю не нужно знать про
-                          её внутреннее состояние.
+                          The form prepares itself on mount (addresses and the token gate
+                          check); the parent does not need to know its internal state.
                         -->
                         <JoinCommunity onDone={() => { joining = false; }} />
                       {/if}
@@ -427,9 +414,9 @@
   {:else if dappsState.active === 'feed'}
     <div class="p-3 border-b border-border flex items-center gap-2">
       <!--
-        Тот же возврат, что и в каталоге: без него из ленты тоже нельзя было
-        выйти, кроме как повторным кликом по иконке раздела. Две разные
-        кнопки в одном компоненте не должны вести себя по-разному.
+        The same return as in the directory: without it the feed can only be left by
+        clicking the section icon again. Two back buttons in one component should not behave
+        differently.
       -->
       <button
         onclick={() => resetDappsView()}
@@ -466,9 +453,9 @@
       </div>
 
       <!--
-        Ошибка — это и есть ответ «это не лента»: страница HTML, 404,
-        Cloudflare-заглушка или пустой фид. Подпись под ней объясняет, что
-        делать дальше, а не только констатирует провал.
+        The error is the answer "this is not a feed": an HTML page, a 404, a Cloudflare
+        interstitial or an empty document. The line below it says what to do next instead of
+        merely stating the failure.
       -->
       {#if feedsState.error}
         <p class="text-xs text-destructive">{feedsState.error}</p>
@@ -478,10 +465,10 @@
       {/if}
 
       <!--
-        Подсказка про зеркало: `rsshub.app` больше не отдаёт ленты программам,
-        поэтому ссылки из каталога маршрутов сами по себе не работают. Мы их
-        переписываем автоматически, но пользователю полезно видеть, куда
-        уходит запрос — и знать, какие маршруты у зеркала действительно живые.
+        Mirror note: `rsshub.app` no longer serves feeds to programs, so route links taken
+        from its catalogue do not work on their own. They are rewritten automatically, but
+        the user should see where the request goes — and know that only some routes of the
+        mirror are alive.
       -->
       <p class="text-[0.6875rem] text-muted-foreground">
         {i18n.t('RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.', { mirror: RSSHUB_MIRROR })}
@@ -492,9 +479,8 @@
       </p>
 
       <!--
-        Примеры внизу, а не в подсказке под полем: это то, что нужно
-        попробовать руками, а не прочитать. Клик подставляет адрес в поле —
-        дальше Enter, и лента в списке чатов.
+        Examples sit below the field rather than in a tooltip: they are meant to be tried by
+        hand, not read. A click fills the field; Enter then adds the feed to the chat list.
       -->
       <div class="pt-2 border-t border-border">
         <p class="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground mb-1">

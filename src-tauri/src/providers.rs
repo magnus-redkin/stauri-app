@@ -1,23 +1,21 @@
-//! Внешние источники данных (провайдеры).
+//! External data sources (providers).
 //!
-//! По `docs/ru/providers_and_dapps.md` провайдер отдаёт **данные**, не код, и
-//! получает один запрос «дай список», а не «что у пользователя уже есть».
-//! Склейка с нативными элементами — всегда локальная.
+//! Following `docs/ru/providers_and_dapps.md`, a provider returns **data**, not
+//! code, and answers one "give me the list" request rather than "what does the
+//! user already have". Merging with native UI elements is always local.
 //!
-//! # Что здесь есть
+//! Channel feeds use a single built-in type because channels are homogeneous
+//! (title, excerpt, link). A Telegram channel is another instance of it —
+//! **there is no Telegram code here**: `t.me/s/<name>` is parsed as an HTML page
+//! yielding the same field set.
 //!
-//! Первая категория — «источник каналов»: лента по URL. Встроенного типа
-//! достаточно, потому что каналы однородны (заголовок, отрывок, ссылка).
-//! Telegram-канал становится его экземпляром — **в коде Telegram нет вообще**:
-//! `t.me/s/<name>` разбирается как HTML-страница с тем же набором полей.
+//! # SSRF protection
 //!
-//! # Защита от SSRF
-//!
-//! URL вводит пользователь, запрос делает Rust. На `127.0.0.1` висят
-//! `rpc_proxy` и auth-прокси, поэтому фид с адресом `http://127.0.0.1:43057/1`
-//! заставил бы нас обратиться к собственной инфраструктуре. Блокируются
-//! loopback, частные диапазоны, link-local и IPv6-эквиваленты — как по
-//! литеральному адресу, так и после разыменования имени.
+//! The URL is user input, the request is made by Rust. `rpc_proxy` and the auth
+//! proxy listen on `127.0.0.1`, so a feed pointing at
+//! `http://127.0.0.1:43057/1` would make the app call its own infrastructure.
+//! Loopback, private ranges, link-local and their IPv6 equivalents are blocked,
+//! both as literal addresses and after name resolution.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -26,48 +24,53 @@ use url::Url;
 
 use crate::error::{AppError, AppResult};
 
-/// Ограничение на размер ответа: фид не должен съесть память.
+/// Response size cap: a feed must not exhaust memory.
 const MAX_BODY_BYTES: usize = 512 * 1024;
 
-/// Сколько записей отдаём фронтенду.
+/// Number of items handed to the frontend.
 const MAX_ITEMS: usize = 50;
 
-/// Сколько редиректов допускаем при загрузке фида.
+/// Number of redirects a feed load may follow.
 ///
-/// Пять — обычный запас: `http→https`, `example.com→www.example.com`,
-/// переезд домена. Длиннее цепочки в живой сети не встречаются, а каждая
-/// лишняя — это чужой сервер, которого мы обязаны ждать.
+/// Five is the usual allowance: `http→https`, `example.com→www.example.com`, a
+/// domain move. Longer chains do not occur in the wild, and every extra hop is
+/// a third-party server the request has to wait on.
 const MAX_REDIRECTS: usize = 5;
 
-/// Один элемент ленты — то же, что строка канала в списке чатов.
+/// One feed item — the equivalent of a channel row in the chat list.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FeedItem {
-    /// Ссылка на запись — используется как идентификатор для открытия.
+    /// Link to the entry, used as the identifier for opening it.
     pub url: String,
-    /// Заголовок записи.
+    /// Entry title.
     pub title: String,
-    /// Отрывок текста. Только текст: HTML сюда не попадает (см. §9.5).
+    /// Excerpt text. Text only: HTML never reaches this field (see §9.5).
     pub summary: String,
-    /// Время публикации в миллисекундах, если удалось разобрать.
+    /// Publication time in milliseconds, when it could be parsed.
     pub published_at: Option<i64>,
 }
 
-/// Результат загрузки фида.
+/// Result of loading a feed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedResponse {
-    /// Название источника — заголовок фида или имя канала.
+    /// Source name — the feed title or the channel name.
     pub title: String,
     pub items: Vec<FeedItem>,
-    /// Источник, к которому относится каждый элемент (`t.me/<name>` или хост).
+    /// Source each item belongs to (`t.me/<name>` or the host).
     pub source: String,
 }
 
-/// Проверяет, что адрес ведёт наружу.
+/// Checks that a URL points outside the machine.
 ///
-/// Правило простое: `http`/`https` и ни одного «внутреннего» адреса.
-/// Проверка делается **до** запроса по имени хоста и по его разрешённым
-/// адресам — иначе `localhost.attacker.com` с записью A на `127.0.0.1`
-/// обошёл бы фильтр.
+/// The rule is simple: `http`/`https` and no "internal" address. The check runs
+/// **before** the request, against both the host name and its resolved
+/// addresses; otherwise `localhost.attacker.com` with an A record on
+/// `127.0.0.1` would slip through.
+///
+/// # Errors
+/// `ErrorKind::Config` for an unparsable URL, a non-HTTP scheme or an internal
+/// address; `ErrorKind::Network` when DNS resolution fails or the host resolves
+/// to no addresses.
 pub fn validate_external_url(raw: &str) -> AppResult<Url> {
     let url = Url::parse(raw).map_err(|e| AppError::config(format!("invalid URL: {e}")))?;
 
@@ -84,13 +87,13 @@ pub fn validate_external_url(raw: &str) -> AppResult<Url> {
         .host_str()
         .ok_or_else(|| AppError::config("URL has no host"))?;
 
-    // Литеральный IP проверяем сразу: без DNS.
+    // A literal IP is checked at once: no DNS involved.
     if let Ok(ip) = host.parse::<IpAddr>() {
         ensure_public_ip(ip)?;
         return Ok(url);
     }
 
-    // Имя хоста: отсекаем очевидные локальные имена до обращения к DNS.
+    // Host name: reject obvious local names before touching DNS.
     let lower = host.to_ascii_lowercase();
     if lower == "localhost"
         || lower.ends_with(".localhost")
@@ -102,8 +105,8 @@ pub fn validate_external_url(raw: &str) -> AppResult<Url> {
         ));
     }
 
-    // Разыменовываем имя и проверяем каждый адрес: DNS rebinding — реальный
-    // обход наивной проверки по строке.
+    // Resolve the name and check every address: DNS rebinding is a real way
+    // around a naive string check.
     use std::net::ToSocketAddrs;
     let port = url.port_or_known_default().unwrap_or(443);
     let addrs = (host, port)
@@ -122,7 +125,10 @@ pub fn validate_external_url(raw: &str) -> AppResult<Url> {
     Ok(url)
 }
 
-/// Отклоняет loopback, частные диапазоны, link-local и их IPv6-эквиваленты.
+/// Rejects loopback, private ranges, link-local and their IPv6 equivalents.
+///
+/// # Errors
+/// `ErrorKind::Config` when the address is internal.
 fn ensure_public_ip(ip: IpAddr) -> AppResult<()> {
     let blocked = match ip {
         IpAddr::V4(v4) => is_blocked_v4(v4),
@@ -154,25 +160,25 @@ fn is_blocked_v6(ip: Ipv6Addr) -> bool {
     ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local() || ip.is_unicast_link_local()
 }
 
-/// Загружает адрес, следуя за редиректами вручную.
+/// Loads a URL, following redirects by hand.
 ///
-/// ## Почему не `reqwest::redirect::Policy`
+/// `reqwest::redirect::Policy` validates only the address the redirect came
+/// from, not the one it points to: a server can answer `302 Location:
+/// http://127.0.0.1:43057/<secret>/1` and the client follows it silently. That
+/// turns [`validate_external_url`] into decoration — no DNS control is needed,
+/// any own domain with a single response is enough.
 ///
-/// Встроенное следование проверяет только адрес, на который пришёл редирект,
-/// но не тот, **куда** он ведёт: сервер отвечает `302 Location:
-/// http://127.0.0.1:43057/<секрет>/1`, и `reqwest` молча идёт туда. Проверка
-/// [`validate_external_url`] оказывалась декоративной: контролировать DNS не
-/// нужно, достаточно любого своего домена с одним ответом.
+/// Here every intermediate address passes the same filter as user input,
+/// including name resolution.
 ///
-/// Здесь каждый промежуточный адрес проходит тот же фильтр, что и введённый
-/// человеком, — включая разыменование имени, то есть и защиту от того, что
-/// имя вначале указывало на публичный адрес.
+/// At most [`MAX_REDIRECTS`] hops, so a chain of third-party servers cannot
+/// hold the request open. A schema-less `Location` and a relative path are
+/// resolved against the current address the way a browser does.
 ///
-/// ## Ограничения
-///
-/// Не больше [`MAX_REDIRECTS`] переходов: иначе цепочка из чужих серверов
-/// держала бы запрос. `Location` без схемы и относительный путь разворачиваются
-/// относительно текущего адреса — так же, как это делает браузер.
+/// # Errors
+/// `ErrorKind::Network` on a failed request, a redirect without `Location`,
+/// too many hops, or an invalid redirect target; `ErrorKind::Config` when the
+/// target is internal.
 async fn fetch_following_redirects(
     client: &reqwest::Client,
     mut url: url::Url,
@@ -184,7 +190,8 @@ async fn fetch_following_redirects(
                 "Accept",
                 "application/rss+xml, application/atom+xml, text/xml, text/html",
             )
-            // Telegram отдаёт HTML только браузерной подписи; без неё — заглушка.
+            // Telegram serves HTML only to a browser user agent; anything else
+            // gets a stub page.
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Stauri/0.2",
@@ -203,19 +210,23 @@ async fn fetch_following_redirects(
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::network("redirect without a Location header"))?;
 
-        // Прошёл фильтр — идём дальше, не прошёл — отказ с понятным текстом.
+        // Passed the filter — continue; failed — reject with a clear message.
         url = resolve_redirect(&url, location)?;
     }
 
     Err(AppError::network("too many redirects"))
 }
 
-/// Считает адрес следующего перехода и проверяет его тем же фильтром.
+/// Computes the next hop and validates it with the same filter.
 ///
-/// Вынесено отдельно, чтобы правило было одно и его можно было проверить
-/// тестом: `Location` без схемы (относительный путь) разворачивается
-/// относительно текущего адреса, как в браузере, а абсолютный адрес
-/// проверяется [`validate_external_url`] — включая разыменование имени.
+/// Kept separate so the rule lives in one place and tests can target it: a
+/// schema-less `Location` (a relative path) is resolved against the current
+/// address as in a browser, and an absolute address is checked by
+/// [`validate_external_url`], resolution included.
+///
+/// # Errors
+/// `ErrorKind::Network` for a target that cannot be joined; otherwise whatever
+/// [`validate_external_url`] returns.
 fn resolve_redirect(current: &url::Url, location: &str) -> AppResult<url::Url> {
     let next = current
         .join(location)
@@ -223,35 +234,41 @@ fn resolve_redirect(current: &url::Url, location: &str) -> AppResult<url::Url> {
     validate_external_url(next.as_str())
 }
 
-/// Загружает ленту по URL.
+/// Loads a feed from a URL.
 ///
-/// Поддерживает два вида:
-///   * RSS/Atom — обычный фид;
-///   * `t.me/s/<name>` — HTML-страница публичного канала Telegram.
+/// Supports two kinds:
+///   * RSS/Atom — a regular feed;
+///   * `t.me/s/<name>` — the HTML page of a public Telegram channel.
 ///
-/// Разбор Telegram здесь же, без посредника: по §9.6 это вариант «без моста»,
-/// с риском хрупкости, но без утечки подписки третьей стороне.
+/// Telegram is parsed here rather than through an intermediary: per §9.6 that
+/// is the "no bridge" variant — brittle, but the subscription never leaks to a
+/// third party.
+///
+/// # Errors
+/// `ErrorKind::Config` for an invalid or internal URL; `ErrorKind::Network`
+/// when the request fails, the status is not 2xx, the body cannot be read, or
+/// parsing fails; `ErrorKind::Internal` when the HTTP client cannot be built.
 #[tauri::command]
 pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
     let parsed = validate_external_url(&url)?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
 
     let client = reqwest::Client::builder()
-        // Редиректы обрабатываем сами: каждый следующий адрес проходит тот же
-        // фильтр, что и введённый человеком. См. [`fetch_following_redirects`].
+        // Redirects are handled here so every next address passes the same
+        // filter as user input. See [`fetch_following_redirects`].
         .redirect(reqwest::redirect::Policy::none())
-        // Системный прокси СОЗНАТЕЛЬНО не отключаем.
+        // The system proxy is deliberately left enabled.
         //
-        // Раньше здесь стоял `.no_proxy()`: исходили из того, что прямой выход
-        // есть всегда. На машине с `HTTP_PROXY`/`HTTPS_PROXY` это даёт
-        // `request failed: error sending request for url (...)`, то есть
-        // лента не грузится вообще — именно так и вышло на первой попытке
-        // открыть `t.me/s/status`.
+        // With `.no_proxy()` the app assumes a direct route always exists. On a
+        // machine with `HTTP_PROXY`/`HTTPS_PROXY` that yields `request failed:
+        // error sending request for url (...)`, i.e. the feed does not load at
+        // all — which is exactly what happened the first time `t.me/s/status`
+        // was opened.
         //
-        // Компромисс известен: при работе через прокси DNS разворачивает сам
-        // прокси, поэтому проверка [`validate_external_url`] остаётся первой
-        // линией (литеральные адреса и локальные имена), а не последней.
-        // Без прокси она проверяет и результат DNS.
+        // The trade-off is known: behind a proxy the proxy itself resolves DNS,
+        // so [`validate_external_url`] remains the first line (literal
+        // addresses and local names) rather than the last. Without a proxy it
+        // also checks the DNS result.
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
@@ -262,7 +279,7 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
         return Err(AppError::network(format!("HTTP {}", resp.status())));
     }
 
-    // Ограничение по размеру: читаем не больше лимита, остальное отбрасываем.
+    // Size cap: read no more than the limit, discard the rest.
     let bytes = resp
         .bytes()
         .await
@@ -296,10 +313,13 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
     Ok(result)
 }
 
-/// Разбирает RSS/Atom.
+/// Parses RSS/Atom.
 ///
-/// Через `quick-xml` в потоковом режиме: дерево не строим, поэтому большой
-/// фид не занимает память целиком.
+/// Uses `quick-xml` in streaming mode: no tree is built, so a large feed does
+/// not occupy memory in full.
+///
+/// # Errors
+/// `ErrorKind::Network` with the reader position when the XML is malformed.
 fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
     use quick_xml::Reader;
     use quick_xml::events::Event;
@@ -311,10 +331,10 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
     let mut items: Vec<FeedItem> = Vec::new();
 
     let mut cur: Option<FeedItem> = None;
-    // Стек полей: нужен из-за вложенности. `<description><p>x</p></description>`
-    // не должен превращать поле в `p`, как это было с одним `field`.
+    // Field stack: needed for nesting. `<description><p>x</p></description>`
+    // must not turn the field into `p`.
     let mut fields: Vec<String> = Vec::new();
-    // Накопитель текста: сущности приходят отдельными событиями `GeneralRef`.
+    // Text accumulator: entities arrive as separate `GeneralRef` events.
     let mut pending = String::new();
     let mut seen_feed_title = false;
 
@@ -352,7 +372,7 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
             }
 
             Ok(Event::Empty(e)) => {
-                // Atom хранит ссылку в атрибуте: <link href="..."/>
+                // Atom keeps the link in an attribute: <link href="..."/>
                 let name = local_name(e.name().as_ref());
                 if name == "link"
                     && let Some(href) = attr_value(&e, "href")
@@ -366,8 +386,8 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
             Ok(Event::Text(t)) => pending.push_str(&t.xml10_content()),
 
             Ok(Event::GeneralRef(r)) => {
-                // &lt;, &amp; и числовые ссылки. Раскрываем сразу: иначе
-                // экранированный HTML из `<description>` не будет снят.
+                // &lt;, &amp; and numeric references. Expanded here: otherwise
+                // escaped HTML inside `<description>` would never be unwrapped.
                 if let Ok(Some(ch)) = r.resolve_char_ref() {
                     pending.push(ch);
                 } else if let Some(rep) =
@@ -419,7 +439,8 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
             Ok(_) => {}
 
             Err(e) => {
-                // Битый фид — ошибка источника, а не наша: сообщаем с позицией.
+                // A broken feed is the source's failure, not ours: report it
+                // with the position.
                 return Err(AppError::network(format!(
                     "XML parse error at {}: {e}",
                     reader.buffer_position()
@@ -435,11 +456,11 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
     })
 }
 
-/// Записывает накопленный текст в текущую цель.
+/// Writes the accumulated text to its current target.
 ///
-/// Цель — запись, если мы внутри неё, иначе заголовок фида. Это единственное
-/// место, где решается, куда идёт текст: раньше заголовок фида терялся, потому
-/// что накопитель писал только в `cur`.
+/// The target is the entry when inside one, otherwise the feed title. This is
+/// the single place that decides where text goes, so the feed title cannot be
+/// lost to a writer that only knows about the current entry.
 fn flush(
     cur: &mut Option<FeedItem>,
     feed_title: &mut String,
@@ -467,7 +488,7 @@ fn flush(
     pending.clear();
 }
 
-/// Раскладывает текст по полям записи. Имена — из RSS и Atom.
+/// Distributes text across the entry fields. Names come from RSS and Atom.
 fn apply_field(item: &mut FeedItem, field: &str, text: &str) {
     match field {
         "title" => {
@@ -477,8 +498,9 @@ fn apply_field(item: &mut FeedItem, field: &str, text: &str) {
         }
         "description" | "summary" | "content" => {
             if item.summary.is_empty() {
-                // Сущности уже раскрыты читалкой (см. `read_text`), поэтому
-                // здесь только снимаем теги и нормализуем пробелы.
+                // Entities are already expanded by the reader (see
+                // `parse_rss`), so only tags are stripped and whitespace
+                // normalized here.
                 item.summary = clean_text(text);
             }
         }
@@ -496,19 +518,17 @@ fn apply_field(item: &mut FeedItem, field: &str, text: &str) {
     }
 }
 
-/// Предел длины отрывка.
+/// Maximum excerpt length.
 ///
-/// Раньше было 400 символов, и это резало текст на полуслове: в интерфейсе
-/// такой отрывок нельзя было раскрыть — «…» стояло в самой строке, а не в
-/// вёрстке. Теперь отрывок хранится почти целиком, а сокращает его только
-/// CSS (`line-clamp`), который снимается по клику.
+/// The excerpt is stored close to whole and shortened only by CSS
+/// (`line-clamp`), which is released on click. Truncating at this size would
+/// leave an ellipsis inside the string that the UI cannot expand.
 ///
-/// 4000 — компромисс: этого хватает большинству статей, а ограничение
-/// остаётся, потому что ленты целиком писать в память и в `localStorage`
-/// нельзя.
+/// 4000 is a compromise: enough for most articles, while the cap still exists
+/// because full feeds cannot be written to memory and `localStorage`.
 const MAX_SUMMARY_CHARS: usize = 4000;
 
-/// Дополняет запись: пустые поля — пустые строки, отрывок ограничен.
+/// Completes an entry: fields are trimmed and the excerpt is capped.
 fn finalize_item(mut item: FeedItem) -> FeedItem {
     item.title = item.title.trim().to_string();
     item.summary = item.summary.trim().to_string();
@@ -523,15 +543,15 @@ fn finalize_item(mut item: FeedItem) -> FeedItem {
     item
 }
 
-/// Убирает теги и нормализует пробелы.
+/// Strips tags and normalizes whitespace.
 ///
-/// RSS часто содержит HTML в `<description>`. По §9.5 разметка не должна
-/// доходить до интерфейса: только текст, без `{@html}`.
+/// RSS often carries HTML inside `<description>`. Per §9.5 markup must not
+/// reach the UI: text only, never `{@html}`.
 ///
-/// Сущности здесь **не** раскрываются: `quick-xml` 0.42 отдаёт `&lt;` отдельным
-/// событием `GeneralRef`, и читалка склеивает поток уже раскрытым (см.
-/// `read_text`). Если раскрывать здесь ещё раз, `<b>` из описания снова станет
-/// тегом — и вместо текста останется мусор.
+/// Entities are **not** expanded here: `quick-xml` 0.42 reports `&lt;` as a
+/// separate `GeneralRef` event and the reader concatenates the stream already
+/// expanded. Expanding again would turn `<b>` from a description back into a
+/// tag, leaving garbage instead of text.
 fn clean_text(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_tag = false;
@@ -549,13 +569,13 @@ fn clean_text(input: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// То же для случая, когда разметка пришла обычным текстом (HTML-страница).
+/// The same for markup delivered as plain text (an HTML page).
 fn strip_tags(input: &str) -> String {
     clean_text(&decode_entities(input))
 }
 
-/// Раскрывает частые HTML-сущности. Полный список не нужен: остальное
-/// останется как есть и не сломает отображение.
+/// Expands the common HTML entities. The full list is unnecessary: anything
+/// else is left as is and does not break rendering.
 fn decode_entities(input: &str) -> String {
     input
         .replace("&amp;", "&")
@@ -567,9 +587,9 @@ fn decode_entities(input: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-/// Локальное имя тега без namespace-префикса.
+/// Local tag name without the namespace prefix.
 ///
-/// В slice-режиме `quick-xml` 0.42 отдаёт имена как `&str`, а не как байты.
+/// In slice mode `quick-xml` 0.42 hands out names as `&str`, not as bytes.
 fn local_name(raw: &str) -> String {
     match raw.rsplit_once(':') {
         Some((_, local)) => local.to_ascii_lowercase(),
@@ -589,24 +609,26 @@ fn attr_value(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String
     None
 }
 
-/// Разбирает дату в миллисекунды.
+/// Parses a date into milliseconds.
 ///
-/// Поддерживаются форматы RSS (`RFC 2822`) и Atom (`RFC 3339`). Остальные —
-/// `None`: время не критично, а падать из-за формата незачем.
+/// RSS (`RFC 2822`) and Atom (`RFC 3339`) formats are expected; anything else
+/// yields `None`. Time is not critical, so a format mismatch must not fail the
+/// whole feed.
 fn parse_date(raw: &str) -> Option<i64> {
     let trimmed = raw.trim();
 
-    // RFC 3339: 2026-11-05T12:34:56Z или с смещением.
+    // RFC 3339: 2026-11-05T12:34:56Z, with or without an offset.
     if let Ok(dt) = chrono_lite_parse(trimmed) {
         return Some(dt);
     }
     None
 }
 
-/// Минимальный разбор ISO-8601 без внешней зависимости.
+/// Minimal ISO-8601 parsing without an external dependency.
 ///
-/// `chrono` в зависимостях нет, а тянуть её ради одного поля — избыточно.
-/// Понимает `YYYY-MM-DDTHH:MM:SS(Z|±HH:MM)` и `YYYY-MM-DD HH:MM:SS`.
+/// `chrono` is not a dependency and pulling it in for a single field would be
+/// excessive. Understands `YYYY-MM-DDTHH:MM:SS(Z|±HH:MM)` and
+/// `YYYY-MM-DD HH:MM:SS`.
 fn chrono_lite_parse(s: &str) -> Result<i64, ()> {
     let bytes = s.as_bytes();
     if bytes.len() < 19 {
@@ -628,7 +650,7 @@ fn chrono_lite_parse(s: &str) -> Result<i64, ()> {
     .ok_or(())
 }
 
-/// Дни от 1970-01-01 до даты (алгоритм Говарда Хиннанта).
+/// Days from 1970-01-01 to the given date (Howard Hinnant's algorithm).
 fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y } as i64;
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -639,32 +661,36 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Разбирает страницу `t.me/s/<name>`.
+/// Parses a `t.me/s/<name>` page.
 ///
-/// Структура страницы неофициальная и может измениться — по §9.6 это
-/// осознанно выбранный риск: без моста подписка не уходит третьей стороне.
-/// Нужны только текстовые поля, поэтому регулярки по классам достаточны и не
-/// тянут HTML-парсер.
+/// The page structure is unofficial and may change — per §9.6 this is an
+/// accepted risk in exchange for the subscription never reaching a third party.
+/// Only text fields are needed, so class-based regexes suffice and no HTML
+/// parser is required.
+///
+/// # Errors
+/// `ErrorKind::Internal` when a regex fails to compile; `ErrorKind::Network`
+/// when the page yields no messages, which usually means the layout changed.
 fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
     use regex::Regex;
 
-    // Записи канала: каждый блок сообщения.
+    // Channel messages: one block per post.
     let block_re =
         Regex::new(r#"(?s)<div class="tgme_widget_message_wrap.*?</div>\s*</div>\s*</div>"#)
             .map_err(|e| AppError::internal(format!("regex: {e}")))?;
-    // Ссылка на сообщение: data-post="channel/12345".
+    // Link to the post: data-post="channel/12345".
     let post_re = Regex::new(r#"data-post="([^"]+)""#)
         .map_err(|e| AppError::internal(format!("regex: {e}")))?;
-    // Запасной вариант: href="https://t.me/channel/12345".
+    // Fallback: href="https://t.me/channel/12345".
     let href_post_re = Regex::new(r#"href="https?://t\.me/([^"]+)""#)
         .map_err(|e| AppError::internal(format!("regex: {e}")))?;
-    // Текст сообщения.
+    // Message text.
     let text_re = Regex::new(r#"(?s)<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>"#)
         .map_err(|e| AppError::internal(format!("regex: {e}")))?;
-    // Время публикации.
+    // Publication time.
     let time_re = Regex::new(r#"<time[^>]+datetime="([^"]+)""#)
         .map_err(|e| AppError::internal(format!("regex: {e}")))?;
-    // Заголовок канала.
+    // Channel title.
     let title_re =
         Regex::new(r#"(?s)<div class="tgme_channel_info_header_title"[^>]*>(.*?)</div>"#)
             .map_err(|e| AppError::internal(format!("regex: {e}")))?;
@@ -678,10 +704,10 @@ fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
     for block in block_re.find_iter(html).take(MAX_ITEMS) {
         let chunk = block.as_str();
 
-        // Ссылка на сообщение. В реальной разметке Telegram это атрибут
-        // `data-post="channel/12345"` на внешнем `<a>`; в некоторых версиях
-        // страницы — обычный `href="https://t.me/channel/12345"`. Поддерживаем
-        // оба: опираться только на один значит ломаться при смене вёрстки.
+        // Link to the post. In the live Telegram markup this is a
+        // `data-post="channel/12345"` attribute on the outer `<a>`; some page
+        // versions use a plain `href="https://t.me/channel/12345"`. Both are
+        // supported: relying on one means breaking whenever the layout changes.
         let post = post_re
             .captures(chunk)
             .map(|c| c[1].to_string())
@@ -694,7 +720,7 @@ fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
             .captures(chunk)
             .and_then(|c| chrono_lite_parse(&c[1]).ok());
 
-        // Без текста запись бесполезна: это может быть служебный блок.
+        // A post without text is useless: it may be a service block.
         if text.trim().is_empty() {
             continue;
         }
@@ -703,7 +729,7 @@ fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
             .map(|p| format!("https://t.me/{p}"))
             .unwrap_or_default();
 
-        // Первая строка текста как заголовок: у Telegram его нет.
+        // The first line of text serves as the title: Telegram has none.
         let summary = text.trim().to_string();
         let first_line = summary.lines().next().unwrap_or_default().to_string();
         let title = if first_line.chars().count() > 80 {
@@ -715,9 +741,9 @@ fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
         items.push(FeedItem {
             url,
             title,
-            // Полный текст: сокращает его только вёрстка (`line-clamp`),
-            // снимаемая по клику. Обрезка здесь оставляла «…» внутри строки,
-            // и раскрыть такой отрывок было нельзя.
+            // Full text: only the layout shortens it (`line-clamp`, released on
+            // click). Truncating here would put the ellipsis inside the string,
+            // where the excerpt could not be expanded.
             summary: {
                 if summary.chars().count() > MAX_SUMMARY_CHARS {
                     summary.chars().take(MAX_SUMMARY_CHARS).collect::<String>() + "…"
@@ -793,12 +819,12 @@ mod tests {
         }
     }
 
-    /// Редирект на локальный адрес должен отвергаться.
+    /// A redirect to a local address must be rejected.
     ///
-    /// Встроенное следование `reqwest` проверяло бы только исходный адрес, и
-    /// сервер, отвечающий `302 Location: http://127.0.0.1:43057/<секрет>/1`,
-    /// уводил бы наш Rust в собственный форвардер. Здесь проверяется, что
-    /// каждый следующий переход идёт через тот же фильтр, что и ввод человека.
+    /// `reqwest`'s built-in following would check only the originating address,
+    /// so a server answering `302 Location: http://127.0.0.1:43057/<secret>/1`
+    /// would steer the Rust side into its own forwarder. This asserts that
+    /// every hop passes the same filter as user input.
     #[test]
     fn redirect_to_local_address_is_rejected() {
         let current = Url::parse("https://example.org/feed").expect("base url");
@@ -814,11 +840,11 @@ mod tests {
         }
     }
 
-    /// Относительный `Location` разворачивается, как в браузере, и тоже
-    /// проходит фильтр: `302 Location: /feed.xml` — обычное дело.
+    /// A relative `Location` is resolved as in a browser and still passes the
+    /// filter: `302 Location: /feed.xml` is routine.
     ///
-    /// Адрес — литеральный публичный IP: `validate_external_url` разыменовывает
-    /// имена, а тест не должен зависеть от DNS и сети.
+    /// The address is a literal public IP: `validate_external_url` resolves
+    /// names, and the test must not depend on DNS or the network.
     #[test]
     fn relative_redirect_is_resolved_against_current_url() {
         let current = Url::parse("https://93.184.216.34/posts/feed").expect("base url");
@@ -829,7 +855,7 @@ mod tests {
         assert_eq!(next.as_str(), "https://93.184.216.34/posts/atom.xml");
     }
 
-    /// `http→https` и смена хоста на публичный — законные переходы.
+    /// `http→https` and a switch to a public host are legitimate hops.
     #[test]
     fn redirect_to_public_host_is_allowed() {
         let current = Url::parse("http://93.184.216.34/feed").expect("base url");
@@ -850,7 +876,7 @@ mod tests {
 
     #[test]
     fn strips_html_from_summary() {
-        // §9.5: разметка провайдера не должна доходить до интерфейса.
+        // §9.5: provider markup must not reach the UI.
         assert_eq!(strip_tags("<b>hello</b> <i>world</i>"), "hello world");
         assert_eq!(strip_tags("a &amp; b"), "a & b");
         assert_eq!(strip_tags("  spaced   out  "), "spaced out");
@@ -879,7 +905,7 @@ mod tests {
         assert_eq!(feed.items.len(), 2);
         assert_eq!(feed.items[0].title, "First");
         assert_eq!(feed.items[0].url, "https://example.org/1");
-        // Теги из описания удалены, сущности раскрыты.
+        // Tags from the description are gone, entities are expanded.
         assert_eq!(feed.items[0].summary, "Hello there");
         assert_eq!(feed.items[1].summary, "Plain text");
     }
@@ -927,7 +953,7 @@ mod tests {
         let feed = parse_telegram_html(html, "t.me/testchannel").expect("must parse");
         assert_eq!(feed.title, "Test Channel");
         assert_eq!(feed.items.len(), 1);
-        // Разметка снята, остаётся текст.
+        // Markup is stripped, only text remains.
         assert_eq!(feed.items[0].summary, "First message");
         assert_eq!(feed.items[0].url, "https://t.me/testchannel/1");
     }

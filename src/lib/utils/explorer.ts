@@ -1,32 +1,32 @@
 /**
- * Адреса обозревателей для ссылки на транзакцию и адрес.
+ * Explorer URL templates for links to a transaction and to an address.
  *
- * ## Почему не Etherscan
+ * ## Why not Etherscan
  *
- * `etherscan.io` и его testnet-домены (`sepolia.etherscan.io`,
- * `hoodi.etherscan.io`, `optimistic.etherscan.io`) из этой сети не открываются
- * вовсе — соединение висит до таймаута. Проверено вживую: `code=000`,
- * 12 секунд, при этом `eth.blockscout.com` и
- * `eth-sepolia.blockscout.com` отвечают за 0.3 с. Ссылка на Etherscan
- * открывала пользователю белую страницу, хотя транзакция была подтверждена.
+ * `etherscan.io` and its testnet hosts (`sepolia.etherscan.io`,
+ * `hoodi.etherscan.io`, `optimistic.etherscan.io`) do not open from this
+ * network at all — the connection hangs until timeout (`code=000` after 12 s),
+ * while `eth.blockscout.com` and `eth-sepolia.blockscout.com` answer in 0.3 s.
+ * An Etherscan link shows a blank page even though the transaction was
+ * confirmed.
  *
- * Поэтому основным источником выбран Blockscout: он открывается без VPN и
- * даёт ту же информацию. У Optimism свой обозреватель (`explorer.optimism.io`,
- * `optimism.blockscout.com` редиректит туда).
+ * Blockscout is therefore the primary source: it opens without a VPN and
+ * carries the same information. Optimism has its own explorer
+ * (`explorer.optimism.io`; `optimism.blockscout.com` redirects there).
  *
- * ## Про BNB Chain
+ * ## BNB Chain
  *
- * У BSC своего Blockscout нет (`bsc.blockscout.com` → 404), поэтому там
- * остаётся BscScan. Он отдаёт `403` скриптам (защита Cloudflare), но в
- * браузере открывается — ссылку даём, это не наша ошибка.
+ * BSC has no Blockscout of its own (`bsc.blockscout.com` returns 404), so it
+ * keeps BscScan. BscScan answers `403` to scripts (Cloudflare protection) but
+ * opens in a browser; the link is still valid.
  *
- * ## Про неизвестную сеть
+ * ## Unknown networks
  *
- * Возвращаем `null`: лучше не дать ссылку, чем дать заведомо нерабочую и
- * заставить человека решить, что транзакция не отправилась.
+ * Return `null` rather than a dead link, so nobody concludes from a blank page
+ * that the transaction never went out.
  */
 
-/** Базовый адрес обозревателя для каждой поддерживаемой сети. */
+/** Base explorer URL per supported chain. */
 const EXPLORERS: Record<number, string> = {
   // mainnet
   1: 'https://eth.blockscout.com',
@@ -34,7 +34,7 @@ const EXPLORERS: Record<number, string> = {
   56: 'https://bscscan.com',
   8453: 'https://base.blockscout.com',
   42161: 'https://arbitrum.blockscout.com',
-  // тестовые
+  // testnets
   97: 'https://testnet.bscscan.com',
   560048: 'https://eth-hoodi.blockscout.com',
   84532: 'https://base-sepolia.blockscout.com',
@@ -44,14 +44,19 @@ const EXPLORERS: Record<number, string> = {
 };
 
 /**
- * Ссылка на транзакцию.
+ * Builds the explorer link for a transaction.
  *
- * @returns адрес или `null`, если для сети обозреватель неизвестен.
+ * @param chainId - The EIP-155 chain id the transaction was sent on.
+ * @param txHash - The transaction hash.
+ * @returns The URL, or `null` when the hash is blank or the network has no
+ * known explorer.
+ * @remarks The hash is trimmed before the emptiness check: a whitespace-only
+ * string passes that check but is not a hash, and would produce a dead `/tx/`
+ * link.
  */
 export function explorerTxUrl(chainId: number, txHash: string): string | null {
-  // Сначала обрезаем, потом проверяем: строка из одних пробелов проходит
-  // проверку на пустоту, но хэшем не является — ссылка получилась бы
-  // заведомо нерабочей (`/tx/`).
+  // Trim before testing: a whitespace-only string passes an emptiness check
+  // but is not a hash, and the link (`/tx/`) would be dead.
   const hash = txHash.trim();
   if (!hash) return null;
   const base = EXPLORERS[chainId];
@@ -59,7 +64,14 @@ export function explorerTxUrl(chainId: number, txHash: string): string | null {
   return `${base}/tx/${hash}`;
 }
 
-/** Ссылка на адрес — для экрана получения и списка аккаунтов. */
+/**
+ * Builds the explorer link for an address.
+ *
+ * @param chainId - The chain id the address is shown for.
+ * @param address - The account address.
+ * @returns The URL, or `null` when the address is blank or the network has no
+ * known explorer.
+ */
 export function explorerAddressUrl(chainId: number, address: string): string | null {
   const value = address.trim();
   if (!value) return null;

@@ -1,28 +1,27 @@
 /**
- * Схема АКК «Автор — Канал — Комментарии» поверх status-go.
+ * Author–Channel–Comments (AKK) scheme on top of status-go.
  *
- * ## Что видит пользователь и что делает код
+ * A user creates a channel and writes entries into it; comments are replies to
+ * entries. The word "community" does not appear in the interface.
  *
- * Пользователь создаёт канал и пишет в него записи. Комментарии — ответы на
- * записи. Слова «сообщество» в интерфейсе нет.
+ * status-go only keeps a channel inside a community, so each channel gets its
+ * own community holding exactly that one channel. The channel-to-community link
+ * is not stored anywhere: it is derived from `Community.chats` (see
+ * `communityChannels` in `messaging.ts`).
  *
- * Технически status-go держит канал только внутри сообщества. Поэтому на
- * каждый канал заводится **отдельное** сообщество, в котором ровно один канал.
- * Связь «канал → сообщество» не хранится нигде: она выводится из
- * `Community.chats` (см. `communityChannels` в `messaging.ts`).
+ * @remarks
+ * `wakuext_createCommunity` always creates a channel named `general`, so the
+ * name the author enters becomes the community name and is displayed as the
+ * channel name. Community names are limited to 30 bytes and descriptions to
+ * 140; both are checked here to avoid an internal backend error.
  *
- * ## Ограничения status-go, которые надо знать
+ * Replies rely on `responseTo` rather than threads: threads are disabled in this
+ * build and `responseTo` works without a feature flag. The full scheme is
+ * described in `docs/ru/akk_scheme.md`.
  *
- * - `createCommunity` сам заводит канал с фиксированным именем `general`.
- *   Поэтому имя, которое ввёл автор, становится **именем сообщества**, а
- *   интерфейс показывает его как имя канала.
- * - Имя сообщества: не пусто, до 30 символов. Описание: не пусто, до 140.
- *   Проверяем на нашей стороне, чтобы не получать внутреннюю ошибку.
- *
- * ## Почему `responseTo`, а не threads
- *
- * См. docs/ru/akk_scheme.md §2–§4: threads в сборке выключены, а `responseTo`
- * работает без флагов.
+ * Joining order matters: this build has no
+ * `wakuext_requestCommunityInfoFromMailserver`, so history is never backfilled
+ * and entries posted before a member joins are never delivered to them.
  */
 
 import { statusFetch } from './http';
@@ -33,42 +32,47 @@ export const CHANNEL_NAME_MAX = 30;
 export const CHANNEL_DESCRIPTION_MAX = 140;
 
 export interface CreateChannelParams {
-  /** Имя канала (оно же имя технического сообщества). */
+  /** Channel name, which is also the name of the backing community. */
   name: string;
-  /** Короткое описание канала. */
+  /** Short channel description. */
   description: string;
   /**
-   * Тип канала (правила из docs/ru/akk_scheme.md §7):
+   * Channel kind, which decides who may join and who may post.
    *
-   * - `news`    — открытый: вступить может любой; записи пишет только автор,
-   *        комментируют все вступившие;
-   * - `request` — по заявке: вступление по заявке; записи пишет только автор,
-   * комментируют вступившие.
+   * - `news` — open: anyone may join; only the author posts, members comment;
+   * - `request` — joining needs approval; only the author posts, members comment.
    *
-   * Записи и комментарии — одна и та же сущность для status-go (см. §4), поэтому
-   * «только автор пишет записи» проверяет клиент, а сервер — нет.
+   * Entries and comments are the same entity for status-go, so "only the author
+   * posts entries" is enforced by the client, not by the backend.
    */
   kind: ChannelKind;
 }
 
 export interface CreatedChannel {
-  /** id сообщества, которое содержит канал (0x-hex). */
+  /** Id of the community that holds the channel (`0x`-hex). */
   communityId: string;
-  /** Полный id канала для `sendChatMessage` (communityId + channelId). */
+  /** Full chat id for `sendChatMessage` (`communityId` + `channelId`). */
   chatId: string;
 }
 
 /**
- * Проверяет имя и описание до отправки в status-go.
+ * Validates a channel name and description before they reach status-go.
  *
- * Возвращает текст ошибки для пользователя или `null`, если всё в порядке.
+ * @param name - Channel name as entered by the author.
+ * @param description - Channel description as entered by the author.
+ * @returns An error message to show to the user, or `null` when the input is
+ * valid.
+ * @remarks
+ * Length is measured in UTF-8 bytes because status-go compares `len(c.Name)`: a
+ * Cyrillic or emoji name can pass a JavaScript character count here and still be
+ * rejected by the backend as `create-community: invalid name`.
  */
 export function validateChannelInput(name: string, description: string): string | null {
   const n = name.trim();
   const d = description.trim();
   if (!n) return 'Enter a channel name';
-  // Ссылку на канал вставили в поле имени: вместо «слишком длинное имя»
-  // объясняем, куда её вставлять.
+  // A channel link pasted into the name field: point at the search field
+  // instead of reporting an over-long name.
   if (/status\.app\//i.test(n) || /^0x[0-9a-fA-F]{32,}/.test(n)) {
     return 'This looks like an invite link. Paste it in the search field to join the channel.';
   }
@@ -83,20 +87,30 @@ export function validateChannelInput(name: string, description: string): string 
 }
 
 /**
- * Длина строки в байтах UTF-8 — так status-go считает `len(c.Name)`.
+ * Byte length of a string in UTF-8, the unit status-go uses for `len(c.Name)`.
  *
- * Кириллица занимает 2 байта на символ, эмодзи — 4. Счётчик символов JS
- * (`.length`) даёт меньше, и такое имя проходило бы проверку здесь, а потом
- * падало в status-go с `create-community: invalid name`.
+ * Cyrillic characters take 2 bytes and emoji 4, so `.length` undercounts and a
+ * name accepted here can still fail in status-go.
+ *
+ * @param s - String to measure.
+ * @returns Length of its UTF-8 encoding in bytes.
  */
 export function utf8Length(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
 /**
- * Создаёт канал: техническое сообщество с одним каналом.
+ * Creates a channel as a community that holds a single channel.
  *
- * @throws если status-go вернул ошибку или не отдал ни сообщество, ни канал.
+ * @param port - Auth proxy port.
+ * @param params - Name, description and kind of the new channel.
+ * @returns The community id and the full chat id of the created channel.
+ * @throws When status-go returns an error or yields no community or channel.
+ * @remarks
+ * The kind travels as a prefix inside the description (`withKindPrefix`) and
+ * decides the membership mode: `news` is accepted automatically, `request` and
+ * `issues` wait for the author. The returned chat is the `general` channel the
+ * backend creates.
  */
 export async function createChannel(
   port: number,
@@ -147,24 +161,28 @@ export async function createChannel(
 }
 
 // ===========================================================================
-// ЗАЯВКИ НА ВСТУПЛЕНИЕ (для автора)
+// JOIN REQUESTS (author side)
 // ===========================================================================
 
 export interface PendingJoinRequest {
-  /** id заявки: его передаём в accept/decline. */
+  /** Request id, passed to accept and decline. */
   id: string;
-  /** Публичный ключ того, кто просит доступ. */
+  /** Public key of the account asking for access. */
   publicKey: string;
   communityId: string;
   clock: number;
 }
 
 /**
- * Заявки, которые ждут решения автора канала.
+ * Join requests waiting for the channel author's decision.
  *
- * Возвращает пустой список при ошибке: отсутствие заявок и сбой запроса
- * для пользователя выглядят одинаково (пустой список), и это приемлемо —
- * сбой будет виден при следующем обновлении.
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @returns Pending requests, or an empty array when the call fails.
+ * @remarks
+ * Failures are reported as an empty list: a failed request and a community with
+ * no pending requests look the same to the user, and the next poll shows the
+ * real state.
  */
 export async function pendingJoinRequests(
   port: number,
@@ -183,7 +201,12 @@ export async function pendingJoinRequests(
   return res.result || [];
 }
 
-/** Принять заявку: участник получает доступ к каналу. */
+/**
+ * Accepts a join request, giving the requester access to the channel.
+ *
+ * @param port - Auth proxy port.
+ * @param requestId - Request id from `pendingJoinRequests`.
+ */
 export async function acceptJoinRequest(port: number, requestId: string): Promise<void> {
   await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -193,7 +216,12 @@ export async function acceptJoinRequest(port: number, requestId: string): Promis
   });
 }
 
-/** Отклонить заявку. */
+/**
+ * Declines a join request.
+ *
+ * @param port - Auth proxy port.
+ * @param requestId - Request id from `pendingJoinRequests`.
+ */
 export async function declineJoinRequest(port: number, requestId: string): Promise<void> {
   await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -204,15 +232,22 @@ export async function declineJoinRequest(port: number, requestId: string): Promi
 }
 
 // ===========================================================================
-// КОММЕНТАРИИ
+// COMMENTS
 // ===========================================================================
 
 /**
- * Отправляет комментарий к записи канала.
+ * Posts a comment on a channel entry.
  *
- * Комментарий — обычное сообщение с `responseTo`. Бэкенд принимает `responseTo`
- * только для сообщения, которое у него уже есть в базе, поэтому запись должна
- * быть загружена до ответа на неё.
+ * @param port - Auth proxy port.
+ * @param channelChatId - Full chat id of the channel.
+ * @param communityId - Community that owns the channel.
+ * @param parentMessageId - Id of the entry being answered.
+ * @param text - Comment body.
+ * @returns The created message, as returned by status-go.
+ * @remarks
+ * A comment is an ordinary message carrying `responseTo`. The backend accepts a
+ * `responseTo` only for a message it already holds, so the entry must be loaded
+ * before it can be answered.
  */
 export function sendComment(
   port: number,

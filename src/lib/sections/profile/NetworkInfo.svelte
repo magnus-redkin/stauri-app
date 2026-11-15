@@ -43,7 +43,6 @@
     </span>
   </div>
 
-  <!-- Waku Fleet -->
   <div class="flex items-center justify-between">
     <span class="text-[0.625rem] text-muted-foreground">Waku Fleet</span>
     <span class="text-[0.625rem] font-medium text-foreground">
@@ -51,7 +50,6 @@
     </span>
   </div>
 
-  <!-- Testnet Badge -->
   {#if statusState.isTestnet}
     <div class="pt-2">
       <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.5625rem] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">

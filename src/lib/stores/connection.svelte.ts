@@ -1,13 +1,9 @@
 /**
- * Жизненный цикл соединения с бэкендом: запуск ноды, вход, создание аккаунта.
+ * Backend connection lifecycle: node start, login, account creation.
  *
- * Разбито на модули (шаг 12 плана):
- *   - `rpcConfig.ts` — `configureWalletRpc`, настройка RPC-провайдеров;
- *   - `ws.ts`        — WebSocket к `/signals`;
- *   - этот файл       — состояние соединения и сценарии входа.
- *
- * Публичный API сохранён: внешний код по-прежнему импортирует всё
- * из `connectionStore.svelte` (см. реэкспорт в конце файла).
+ * Connection state and the login flows live here; RPC provider setup is in
+ * `rpcConfig` and the `/signals` socket in `ws`. The public API is re-exported
+ * from `connectionStore.svelte`.
  */
 
 import {
@@ -39,7 +35,10 @@ export const connectionState = $state({
 });
 
 /**
- * Запускает бэкенд, подключает WS и загружает аккаунты.
+ * Starts the backend, opens the WebSocket and loads the accounts.
+ *
+ * @param network - Network to start the backend on; omitted, the configured
+ * default is used.
  */
 export async function connect(network?: string) {
   if (statusState.isConnected || connectionState.isConnecting) return;
@@ -53,8 +52,8 @@ export async function connect(network?: string) {
 
   try {
     const backendInfo = await startBackend(network);
-    // Порт АУТЕНТИФИЦИРУЮЩЕГО ПРОКСИ, а не бэкенда: прокси проверяет
-    // токен и только потом пересылает запрос настоящему бэкенду.
+    // The AUTHENTICATING PROXY port, not the backend port: the proxy checks the
+    // token and only then forwards the request to the real backend.
     statusState.backendPort = backendInfo.authPort;
     statusState.backendDataDir = backendInfo.dataDir;
     connectionState.selectedNetwork = backendInfo.networkName;
@@ -84,20 +83,19 @@ export async function connect(network?: string) {
     await openWs(statusState.backendPort);
     statusState.isConnected = true;
 
-    // Провайдеры прописываем сразу после инициализации — ДО логина.
-    // RPC-клиенты status-go кэшируются по chainID и не инвалидируются,
-    // поэтому если клиент создан раньше (например, messenger'ом или
-    // фоновым refresher'ом), смена провайдера уже не подействует.
+    // Providers are written right after initialization, BEFORE login. status-go
+    // caches RPC clients by chainID and never invalidates them, so a client
+    // created earlier (by the messenger or a background refresher) will not
+    // pick up new providers.
     //
-    // Режим тестовых сетей здесь выставить НЕЛЬЗЯ: `settings_*`
-    // регистрируется в initServices, то есть после старта ноды, а нода
-    // стартует внутри LoginAccount. Переключение режима сделано в `login()`
-    // и `createAccount()` — см. `applyNetworkMode`.
+    // Test network mode CANNOT be set here: `settings_*` registers in
+    // initServices, i.e. after node start, and the node starts inside
+    // LoginAccount. Mode switching happens in `login` and `createAccount` —
+    // see `applyNetworkMode`.
     await configureWalletRpc(backendInfo.authPort);
 
-    // FIX: Блок preferences_set удалён отсюда.
-    // Сети регистрируются в processSignal ПОСЛЕ node.login через
-    // ensureNetworksConfigured, иначе LoginAccount перезатирает настройки.
+    // Networks are registered in processSignal AFTER node.login through
+    // ensureNetworksConfigured; otherwise LoginAccount overwrites the settings.
 
   } catch (e: any) {
     statusState.errorMsg = `${errorTag(e)}Connection failed: ${formatError(e)}`;
@@ -108,7 +106,9 @@ export async function connect(network?: string) {
 }
 
 /**
- * Перезапускает бэкенд для новой сети.
+ * Restarts the backend on another network.
+ *
+ * @param network - Network to reconnect to.
  */
 export async function changeNetwork(network: string) {
   await disconnect();
@@ -116,23 +116,27 @@ export async function changeNetwork(network: string) {
 }
 
 /**
- * Перезапускает ноду один раз, чтобы RPC-клиенты собрались заново.
+ * Restarts the node once so the RPC clients are rebuilt.
  *
- * Зачем. status-go создаёт и кэширует RPC-клиента при первом обращении к сети
- * (internal/rpc/client.go, getClientUsingCache) и не инвалидирует кэш до
- * StatusNode.Stop(). Нода стартует внутри loginAccount, а её кошелёк сразу
- * запускает фоновый опрос балансов — то есть клиент успевает собраться раньше,
- * чем мы запишем провайдеров. На чистом профиле (первый вход) это значит, что
- * клиент собран из встроенных провайдеров, и до перезапуска балансы будут с
- * ошибкой.
+ * status-go creates and caches an RPC client on the first network access
+ * (`internal/rpc/client.go`, getClientUsingCache) and does not invalidate the
+ * cache until `StatusNode.Stop()`. The node starts inside loginAccount and its
+ * wallet immediately polls balances, so the client is built before providers
+ * are written. On a fresh profile (first login) that means the client is built
+ * from the built-in providers, and balances keep failing until a restart.
  *
- * Порядок: выход → дождаться node.stopped → вход → провайдеры → messenger.
- * Провайдеры к этому моменту уже лежат в БД, а InitEmbeddedNetworks сохраняет
- * user-провайдеров при старте (pkg/services/networks/network.go), поэтому
- * новый клиент собирается уже с ними.
+ * Order: logout → wait for node.stopped → login → providers → messenger. By
+ * then the providers are already in the DB, and InitEmbeddedNetworks keeps user
+ * providers on start (`pkg/services/networks/network.go`), so the new client is
+ * built with them.
  *
- * Перезапуск делается один раз: повторный его результат не изменит, а цикл
- * входа мы себе позволить не можем.
+ * @param password - Profile password, reused for the second login.
+ * @param keyUid - Key uid of the account being logged in.
+ * @returns `true` once the restart finished; `false` when the port or key uid
+ * is missing.
+ * @remarks
+ * Restarting happens once only: a second pass would not change the outcome, and
+ * a login loop is not acceptable.
  */
 async function restartNodeForProviders(password: string, keyUid: string): Promise<boolean> {
   const port = statusState.backendPort;
@@ -140,16 +144,16 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
 
   debug('[login] провайдеры записаны после старта ноды — перезапускаю ноду');
 
-  // Ждать начинаем ДО logout: сигнал node.stopped может прийти раньше, чем
-  // управление вернётся из вызова, и тогда ожидание продлилось бы все 15 с.
-  // Нода останавливается асинхронно; вход до её остановки вернёт тот же
-  // закэшированный клиент.
+  // Start waiting BEFORE logout: the node.stopped signal can arrive before
+  // control returns from the call, and a wait set up afterwards would run for
+  // the full 15s. The node stops asynchronously; logging in before it stops
+  // returns the same cached client.
   const stopped = waitForNodeStopped(15000);
   await apiLogout(port);
   await stopped;
 
-  // Ошибку входа не глотаем: если нода не поднялась, продолжать не с чем —
-  // пусть вызывающий код покажет её пользователю.
+  // A login error is not swallowed: without the node there is nothing to
+  // continue with, so let the caller surface it.
   await traceSecret('login', password);
   await loginAccount(port, password, keyUid);
   await waitForLoginReady(port, 30000);
@@ -160,29 +164,23 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
 }
 
 /**
- * Приводит режим сетей (mainnet / testnet) к тому, который задан запуском.
+ * Brings the network mode (mainnet / testnet) in line with the launch config.
  *
- * ## Зачем это нужно
+ * `STAURI_NETWORK` is Rust configuration — the primary network, waku fleet and
+ * data directory. status-go knows nothing about it; it has its own
+ * `test-networks-enabled?` flag, and `networks.GetActiveNetworks()` filters
+ * networks by it. Until the flag is set, a profile launched as "sepolia" still
+ * computes balances over the mainnet chains (1, 10, 56, 8453, 42161) and the
+ * user sees zeros instead of Sepolia assets.
  *
- * `STAURI_NETWORK` — конфиг Rust: какая сеть основная, какой waku-fleet и
- * какой каталог данных. Самому status-go он ничего не говорит: там есть
- * отдельный флаг `test-networks-enabled?`, и `networks.GetActiveNetworks()`
- * фильтрует сети по нему. Пока флаг не выставлен, профиль, запущенный как
- * «sepolia», считает балансы по mainnet-сетям (1, 10, 56, 8453, 42161) —
- * и пользователь видит нули вместо сеполовских активов.
- *
- * ## Почему здесь, а не в `connect()`
- *
- * `settings_*` регистрируется в `initServices`, то есть после старта ноды, а
- * нода стартует внутри `loginAccount`. До входа вызов отвечает «method not
- * found» — ровно как `networks_*`.
- *
- * ## Что возвращаем
- *
- * `true`, если флаг пришлось переписать. Смена режима меняет набор активных
- * сетей, а RPC-клиенты бэкенда кэшированы по chainID (см.
- * `restartNodeForProviders`), поэтому вызывающий код должен перезапустить
- * ноду — иначе балансы придут по прежним сетям.
+ * @param port - Port of the authenticating proxy.
+ * @returns `true` when the flag had to be rewritten.
+ * @remarks
+ * Runs after login, not in `connect`: `settings_*` registers in initServices,
+ * i.e. after node start, and the node starts inside `loginAccount`. Changing
+ * the mode changes the active network set, and the backend RPC clients are
+ * cached by chainID (see `restartNodeForProviders`), so the caller must restart
+ * the node — otherwise balances keep coming from the previous networks.
  */
 async function applyNetworkMode(port: number): Promise<boolean> {
   try {
@@ -194,8 +192,8 @@ async function applyNetworkMode(port: number): Promise<boolean> {
     }
     return changed;
   } catch (e) {
-    // Не валим вход: кошелёк покажет то, что считает бэкенд, и это видно
-    // на экране «Активы». Сообщение объясняет, почему числа не те.
+    // Do not fail the login: the wallet shows whatever the backend computes,
+    // and the message explains why the numbers look wrong.
     statusState.errorMsg = `Failed to set network mode: ${formatError(e)}`;
     console.error('[connect] ensureTestNetworkMode failed:', e);
     return false;
@@ -203,16 +201,19 @@ async function applyNetworkMode(port: number): Promise<boolean> {
 }
 
 /**
- * Вход в аккаунт.
+ * Logs into the account.
  *
- * Порядок важен: сначала прописываем RPC-провайдеры (configureWalletRpc),
- * и только потом стартуем messenger. RPC-клиенты status-go кэшируются по
- * chainID и не инвалидируются, поэтому messenger, запущенный раньше, создаст
- * клиентов с прежними (мёртвыми) URL, и балансы останутся с hasError.
+ * @param password - Profile password used to unlock the key.
+ * @param keyUid - Key uid of the account.
+ * @remarks
+ * Order matters: RPC providers are written (`configureWalletRpc`) before the
+ * messenger starts. status-go caches RPC clients by chainID and never
+ * invalidates them, so a messenger started earlier would create clients with
+ * the previous (dead) URLs and balances would stay in `hasError`.
  *
- * Если провайдеров пришлось дописывать, значит клиент мог быть собран раньше
- * них (типичный случай — первый вход на чистом профиле): ноду перезапускаем
- * один раз, см. restartNodeForProviders.
+ * If providers had to be written, the client may have been built before them —
+ * typical on a fresh profile's first login — and the node is restarted once;
+ * see `restartNodeForProviders`.
  */
 export async function login(password: string, keyUid: string) {
   if (!statusState.backendPort) return;
@@ -223,7 +224,8 @@ export async function login(password: string, keyUid: string) {
   await loginAccount(port, password, keyUid);
   await waitForLoginReady(port, 30000);
 
-  // Режим сетей — до провайдеров: он определяет, для каких сетей их писать.
+  // The network mode comes before the providers: it decides which networks they
+  // are written for.
   const modeChanged = await applyNetworkMode(port);
 
   const { wroteProviders } = await configureWalletRpc(port);
@@ -233,12 +235,14 @@ export async function login(password: string, keyUid: string) {
 }
 
 /**
- * Создание аккаунта.
+ * Creates a new account and logs it in.
  *
- * Это заведомо чистый профиль: провайдеров в БД ещё нет, поэтому
- * configureWalletRpc наверняка что-то запишет, а RPC-клиенты к тому моменту
- * уже собраны из встроенных. Перезапуск ноды здесь не исключение, а норма —
- * см. restartNodeForProviders.
+ * @param password - Profile password for the new account.
+ * @remarks
+ * This is always a fresh profile: no providers are in the DB yet, so
+ * `configureWalletRpc` will certainly write something, while the RPC clients
+ * have already been built from the built-in providers. A node restart is the
+ * normal path here, not an exception — see `restartNodeForProviders`.
  */
 export async function createAccount(password: string) {
   if (!statusState.backendPort) return;
@@ -248,8 +252,8 @@ export async function createAccount(password: string) {
   const createResult = await createAccountAndLogin(port, statusState.backendDataDir, password);
   if (createResult?.error) throw new Error(createResult.error);
   if (isAndroidRuntime()) {
-    // Android: сигнала node.login нет (колбэк SetSignalEventCallback не подключён),
-    // поэтому ждём, пока нода сама ответит на settings_getSettings.
+    // Android has no node.login signal (the SetSignalEventCallback hook is not
+    // wired), so wait until the node answers settings_getSettings itself.
     await waitForNodeLogin(port, 30000);
   } else {
     await waitForLogin(30000);
@@ -263,24 +267,27 @@ export async function createAccount(password: string) {
   await startMessenger(port);
 }
 
-/** Ожидание входа: на десктопе по сигналу node.login, на Android — опросом ноды. */
+/** Waits for login: by the node.login signal on desktop, by polling on Android. */
 async function waitForLoginReady(port: number, timeoutMs: number): Promise<void> {
   if (isAndroidRuntime()) return waitForNodeLogin(port, timeoutMs);
   return waitForLogin(timeoutMs);
 }
 
-/** Тестовая трасса: одна строка в bridge-trace.log через status_call. */
+/** Test trace: one line in bridge-trace.log through status_call. */
 async function traceNote(note: unknown): Promise<void> {
   try {
     await invoke('status_call', { endpoint: 'TraceNote', body: JSON.stringify(note) });
   } catch {
-    /* трасса не должна ломать вход */
+    /* tracing must not break the login */
   }
 }
 
 /**
- * Тестовая трасса: длина пароля и SHA-256-префикс в bridge-trace.log.
- * Сам пароль никуда не пишется.
+ * Test trace: password length and a SHA-256 prefix in bridge-trace.log.
+ *
+ * @param kind - Trace kind, for example `login` or `create`.
+ * @param password - Profile password; only its length and hash prefix are
+ * written, never the password itself.
  */
 async function traceSecret(kind: string, password: string): Promise<void> {
   if (!isAndroidRuntime()) return;
@@ -289,18 +296,23 @@ async function traceSecret(kind: string, password: string): Promise<void> {
     const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
     await traceNote({ kind, len: password.length, sha256_16: hex.slice(0, 16) });
   } catch {
-    /* трасса не должна ломать вход */
+    /* tracing must not break the login */
   }
 }
 
-/** Android: сигналов из libstatus.so пока нет, проверяем вход опросом ноды. */
+/** Android: libstatus.so emits no signals yet, so login is checked by polling. */
 function isAndroidRuntime(): boolean {
   return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }
 
 /**
- * Ждёт, пока нода вошла в аккаунт: settings_getSettings вернёт key-uid.
- * Выставляет isLoggedIn и accountKeyUid, как это делает сигнал node.login.
+ * Waits until the node is logged in: settings_getSettings returns the key-uid.
+ *
+ * Sets `isLoggedIn` and `accountKeyUid` the way the node.login signal does.
+ *
+ * @param port - Port of the authenticating proxy.
+ * @param timeoutMs - How long to poll before giving up.
+ * @throws When the node does not report a key-uid within the timeout.
  */
 async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -310,7 +322,7 @@ async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> 
     attempt += 1;
     try {
       const raw = await getSettings(port);
-      // CallRPC отдаёт конверт JSON-RPC: настройки лежат в result.
+      // CallRPC returns a JSON-RPC envelope: the settings are in `result`.
       const settings = raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw;
       const keyUid = settings?.['key-uid'];
       if (attempt <= 5 && isAndroidRuntime()) {
@@ -323,8 +335,9 @@ async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> 
       }
       if (typeof keyUid === 'string' && keyUid.length > 0) {
                statusState.accountKeyUid = keyUid;
- // Те же поля, что приходят в сигнале node.login: без сигнала на Android
-        // публичный ключ и alias иначе не появятся в профиле и в инвайте.
+ // Same fields as the node.login signal: without signals on Android the
+        // public key and alias would otherwise never reach the profile and the
+        // invite link.
         if (typeof settings['public-key'] === 'string' && settings['public-key']) {
    statusState.publicKey = settings['public-key'];
         }
@@ -348,13 +361,13 @@ async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> 
 }
 
 /**
- * Отключает WS и останавливает бэкенд.
+ * Closes the WebSocket and stops the backend.
  */
 export async function disconnect() {
   await closeWs();
   if (statusState.backendPort) {
     try { await stopBackend(); } catch {
-      /* закрытие сокета не критично: следующий connect создаст новый */
+      /* a failed stop is not critical: the next connect starts a new backend */
     }
   }
   await new Promise(r => setTimeout(r, 500));

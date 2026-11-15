@@ -1,27 +1,22 @@
 /**
- * Состояние регистрации имени ENS (`<имя>.stateofus.eth`).
+ * ENS name registration state (`<name>.stateofus.eth`).
  *
- * ## Где живёт пароль
+ * @remarks
+ * The password comes from the shared session (`sendState.password`) rather than
+ * being asked for here: registration is a transaction too, and a second password
+ * prompt would be redundant input.
  *
- * Тот же принцип, что в `sendStore`: пароль берётся из общей сессии
- * (`sendState.password`), а не спрашивается отдельно и не хранится здесь.
- * Регистрация — тоже транзакция, и второй запрос пароля на пустом месте был
- * бы просто лишним вводом.
+ * The whole sequence runs in Rust. Registration signs as many transactions as the
+ * Router returned, and `wallet_signMessage` signs any 32 bytes; if the hashes
+ * reached the webview, a foreign script could ask for any of them to be signed.
+ * `register_ens_name` keeps the hashes, the password and signature parsing
+ * inside, so only "register this name" crosses the boundary. See
+ * `src-tauri/src/ens.rs`.
  *
- * ## Почему вся последовательность — в Rust
- *
- * Регистрация подписывает столько транзакций, сколько вернул Router, а
- * `wallet_signMessage` подписывает любые 32 байта. Если бы хэши приходили в
- * webview, чужой скрипт мог бы попросить подписать любой из них. Команда
- * `register_ens_name` держит и хэши, и пароль, и разбор подписи внутри себя;
- * наружу уходит только «зарегистрируй такое-то имя». См. `src-tauri/src/ens.rs`.
- *
- * ## Почему имя вводится без домена
- *
- * `.stateofus.eth` — единственный домен, который умеет регистратор Status
- * (`UsernameToLabel` хэширует именно этот label). Писать его в поле рядом с
- * именем значило бы позволять ввести `.eth` и получить `.eth.stateofus.eth`.
- * Поэтому поле — только имя, домен дописывается сам и показан рядом.
+ * The name is entered without the domain: `.stateofus.eth` is the only domain the
+ * Status registrar handles (`UsernameToLabel` hashes exactly this label), and
+ * showing it in the input would let a user type `.eth` and get
+ * `.eth.stateofus.eth`. The domain is appended and shown next to the field.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -34,37 +29,37 @@ import { formatError } from '$lib/utils/errors';
 
 export type EnsStep = 'form' | 'confirm' | 'sending' | 'done' | 'failed';
 
-/** Домен, под которым регистратор Status выдаёт имена. */
+/** Domain under which the Status registrar issues names. */
 export const ENS_DOMAIN = 'stateofus.eth';
 
 export const ensState = $state({
   step: 'form' as EnsStep,
-  /** Имя без домена, как ввёл человек. */
+  /** Name without the domain, as entered. */
   username: '',
-  /** Цена в минимальных единицах SNT/STT (строкой: 18 знаков). */
+  /** Price in the smallest units of SNT/STT (18 decimals). */
   price: null as bigint | null,
-  /** Комиссия сети в wei. */
+  /** Network fee in wei. */
   fee: null as bigint | null,
-  /** Имя занято кем-то другим. */
+  /** The name is taken by someone else. */
   taken: false,
-  /** Владелец, если имя занято. */
+  /** Owner, when the name is taken. */
   owner: '',
   isChecking: false,
-  /** Почему не удалось проверить цену/занятость. */
+  /** Why the price or availability check failed. */
   checkError: '',
   isSending: false,
   error: '',
   txHash: '',
-  /** Полное имя после успешной регистрации. */
+  /** Full name after a successful registration. */
   fullName: '',
-  /** Сети, где регистрация невозможна (не mainnet и не Sepolia). */
+  /** Networks where registration is impossible (neither mainnet nor Sepolia). */
   unsupportedChain: false,
   /**
-   * Имена этого профиля, записанные в его базу (`ens_getEnsUsernames`).
+   * Names of this profile recorded in its database (`ens_getEnsUsernames`).
    *
-   * Отдельно от `fullName`: `fullName` — результат последней регистрации в
-   * этой сессии, а здесь — то, что профиль знает о себе постоянно. Именно
-   * это показывается под именем в профиле.
+   * Kept apart from `fullName`: `fullName` is the result of the last registration
+   * in this session, while this is what the profile permanently knows about
+   * itself, and it is what the profile shows under the name.
    */
   profileNames: [] as string[],
 });
@@ -86,17 +81,20 @@ export function resetEns(): void {
   ensState.profileNames = [];
 }
 
-/** Сети, где у Status есть регистратор (совпадает с `snt_address` в Rust). */
+/** Networks with a Status registrar (matches `snt_address` in Rust). */
 export function ensSupported(chainId: number): boolean {
   return chainId === 1 || chainId === 11155111;
 }
 
 /**
- * Правила имени — те же, что в Rust (`validate_username`).
+ * Name rules — the same as in Rust (`validate_username`).
  *
- * Дублирование осознанное: здесь оно нужно, чтобы не отправлять заведомо
- * неверный запрос и сразу подсказать, что не так. Решает всё равно Rust —
- * эта проверка только для подсказки на форме.
+ * @param name - Raw name from the form.
+ * @returns An i18n error key, or an empty string when the name is valid.
+ * @remarks
+ * The duplication is deliberate: this check avoids sending a request that is
+ * bound to fail and gives an immediate hint. Rust still makes the decision; this
+ * is only for the form hint.
  */
 export function usernameError(name: string): string {
   const value = name.trim();
@@ -108,34 +106,37 @@ export function usernameError(name: string): string {
 }
 
 /**
- * Адрес залогового токена по сети.
+ * Stake token address per network.
  *
- * Обязан совпадать с `snt_address` в `src-tauri/src/ens.rs`, иначе баланс
- * не найдётся и человек увидит «нет средств» при полном кошельке. Один и
- * тот же контракт называется SNT на mainnet и STT на Sepolia — поэтому
- * ищем по адресу, а не по символу.
+ * @remarks
+ * Must match `snt_address` in `src-tauri/src/ens.rs`, or the balance is not found
+ * and the user sees "no funds" with a full wallet. The same contract is SNT on
+ * mainnet and STT on Sepolia, so it is looked up by address, not by symbol.
  */
 const STAKE_ADDRESS: Record<number, string> = {
   1: '0x744d70fdbe2ba4cf95131626614a1763df805b9e',
   11155111: '0xe452027cdef746c7cd3db31cb700428b16cd8e51',
 };
 
-/** Нативный актив в ответе бэкенда — нулевой адрес. */
+/** Native asset in the backend response — the zero address. */
 const NATIVE_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export interface ChainBalances {
-  /** Залоговый токен (SNT/STT). `null` — не загружен или RPC не ответил. */
+  /** Stake token (SNT/STT). `null` when not loaded or RPC did not answer. */
   stake: bigint | null;
-  /** Нативный ETH этой сети: им платится комиссия. */
+  /** Native ETH of this network, which pays the fee. */
   native: bigint | null;
 }
 
 /**
- * Балансы, которые решают, пройдёт ли регистрация.
+ * Balances that decide whether registration can go through.
  *
- * `null` вместо нуля там, где баланс неизвестен: токен мог не прийти в
- * ответе или прийти с `hasError`. Показывать «0» в этом случае значило бы
- * утверждать, что денег нет, хотя их просто не спросили.
+ * @param chainId - Chain to read the balances for.
+ * @returns Stake and native balances in smallest units.
+ * @remarks
+ * `null` instead of zero where the balance is unknown: the token may be missing
+ * from the response or come back with `hasError`. Showing "0" there would assert
+ * there is no money when it was simply never asked for.
  */
 export function chainBalances(chainId: number): ChainBalances {
   const find = (address: string): bigint | null => {
@@ -160,18 +161,17 @@ export function chainBalances(chainId: number): ChainBalances {
 }
 
 /**
- * Адрес кошелька для подписи и адресата.
+ * Wallet address used for signing and as the recipient.
  *
- * ## Почему не просто `walletState.address`
+ * @returns The loaded wallet address, possibly empty when it cannot be loaded.
+ * @remarks
+ * The ENS block sits in the profile, which the user can open first without ever
+ * opening the wallet, so `walletState.address` may still be empty. Without a
+ * loaded address `checkName` would silently return and the field would look
+ * broken.
  *
- * Пока ENS жил вкладкой кошелька, адрес уже был загружен: `walletStore` читает
- * его при входе в раздел. Теперь блок стоит в профиле, куда человек может
- * прийти первым делом, ни разу не открыв кошелёк, — и `walletState.address`
- * там пуст. Без этого `checkName` молча выходил бы, а поле выглядело бы
- * нерабочим (ровно та жалоба, из-за которой вкладка и переехала).
- *
- * `loadWallet()` идемпотентен: если данные уже есть, он только перечитает
- * их при `force`, а при загруженном состоянии сразу вернётся.
+ * `loadWallet` is idempotent: with data already present it returns immediately
+ * and only re-reads on `force`.
  */
 async function ensureWalletAddress(): Promise<string> {
   if (walletState.address) return walletState.address;
@@ -183,7 +183,7 @@ async function ensureWalletAddress(): Promise<string> {
   return walletState.address;
 }
 
-/** Цена и занятость имени. Только чтение: пароль не нужен. */
+/** Price and availability of the name. Read-only: no password needed. */
 export async function checkName(): Promise<void> {
   const port = statusState.backendPort;
   if (!port) return;
@@ -209,24 +209,24 @@ export async function checkName(): Promise<void> {
   try {
     const quote = await invoke<{
       price: string;
-      /** `null` — комиссию получить не удалось (не ноль!). */
+      /** `null` when the fee could not be obtained (not zero!). */
       fee: string | null;
       expires_at: string;
       owner: string;
       available: boolean;
     }>('get_ens_quote', {
       port,
-      // Имя аргумента — `chainId`, а не `chain_id`: Tauri сам приводит
-      // параметры команды к camelCase, и на `chain_id` отвечает
-      // «missing required key chainId». В Rust параметр остаётся `chain_id`.
+      // The argument name is `chainId`, not `chain_id`: Tauri converts command
+      // parameters to camelCase and answers "missing required key chainId"
+      // otherwise. In Rust the parameter stays `chain_id`.
       chainId,
       from: walletState.address,
       username: name,
     });
 
     ensState.price = BigInt(quote.price);
-    // `null` остаётся `null`: иначе интерфейс показал бы «0», то есть
-    // «перевод бесплатный», хотя комиссия просто неизвестна.
+    // `null` stays `null`: otherwise the UI would show "0", i.e. "free", when
+    // the fee is merely unknown.
     ensState.fee = quote.fee === null ? null : BigInt(quote.fee);
     ensState.taken = !quote.available;
     ensState.owner = quote.owner;
@@ -234,8 +234,8 @@ export async function checkName(): Promise<void> {
       `[ens] quote for ${name}: price ${quote.price}, fee ${quote.fee}, available ${quote.available}`
     );
   } catch (e) {
-    // Не блокируем: цену можно перепроверить на подтверждении, а решение
-    // всё равно за контрактом.
+    // Not blocking: the price can be rechecked on confirmation, and the contract
+    // makes the decision anyway.
     ensState.price = null;
     ensState.fee = null;
     ensState.checkError = formatError(e, 'Failed to check the name');
@@ -245,7 +245,7 @@ export async function checkName(): Promise<void> {
   }
 }
 
-/** Перейти к экрану подтверждения, обновив цену. */
+/** Moves to the confirmation screen after refreshing the price. */
 export async function goToConfirm(): Promise<void> {
   await checkName();
   ensState.error = '';
@@ -253,18 +253,17 @@ export async function goToConfirm(): Promise<void> {
 }
 
 /**
- * Читает имена, записанные в профиль.
+ * Reads the names recorded in the profile.
  *
- * ## Почему из профиля, а не с контракта
+ * @remarks
+ * Name ownership lives on chain, but "which of my names to show next to the nick"
+ * is a profile property kept in its database, so this reads `ens_getEnsUsernames`
+ * rather than `ens_getName`: reverse resolution (address → name) only works with
+ * a reverse record, and the Status registrar does not create one — after
+ * registering `magnus-redkin` the live backend returned nothing.
  *
- * Владельца имени знает блокчейн, но «какое из моих имён показывать рядом с
- * ником» — это свойство профиля, и живёт оно в его базе. Читаем
- * `ens_getEnsUsernames`, а не `ens_getName`: обратное разрешение (адрес →
- * имя) работает только при наличии reverse-записи, а регистратор Status её
- * не создаёт — проверено на живом бэкенде после регистрации `magnus-redkin`,
- * вернулось пусто.
- *
- * Ошибку не пробрасываем: имя в профиле — украшение, а не условие работы.
+ * An error is not propagated: a profile name is decoration, not a condition for
+ * the app to work.
  */
 export async function loadProfileNames(): Promise<void> {
   const port = statusState.backendPort;
@@ -281,11 +280,14 @@ export async function loadProfileNames(): Promise<void> {
 }
 
 /**
- * Зарегистрировать имя.
+ * Registers the name.
  *
- * Пароль берётся из сессии (`sendState.password`). Если его нет — возвращаем
- * `false` и поднимаем флаг, чтобы экран показал поле ввода: ровно так же
- * поступает `sendTransfer`.
+ * @returns `true` on success; `false` when the wallet is not ready, the password
+ * is missing or registration failed.
+ * @remarks
+ * The password comes from the session (`sendState.password`). When it is absent,
+ * the flag is raised so the screen shows the input field — the same behaviour as
+ * `sendTransfer`.
  */
 export async function registerName(): Promise<boolean> {
   const port = statusState.backendPort;
@@ -295,8 +297,8 @@ export async function registerName(): Promise<boolean> {
     return false;
   }
 
-  // Адрес мог не загрузиться, если человек пришёл в профиль, не открывая
-  // кошелёк. Догружаем тем же способом, что и в `checkName`.
+  // The address may be unloaded when the user came to the profile without
+  // opening the wallet. Load it the same way as in `checkName`.
   const address = await ensureWalletAddress();
   if (!address) {
     ensState.error = 'Wallet is not ready';
@@ -316,9 +318,9 @@ export async function registerName(): Promise<boolean> {
   try {
     const result = await invoke<{ tx_hash: string; full_name: string }>('register_ens_name', {
       request: {
-        // Внутри `request` имена остаются snake_case: это serde-структура
-        // `EnsRegisterRequest`, а camelCase-преобразование Tauri касается
-        // только верхнеуровневых аргументов команды (как `chainId` выше).
+        // Inside `request` names stay snake_case: it is the serde
+        // `EnsRegisterRequest`, and Tauri's camelCase conversion covers only the
+        // top-level command arguments (like `chainId` above).
         port,
         chain_id: statusState.chainId,
         from: walletState.address,
@@ -332,16 +334,17 @@ export async function registerName(): Promise<boolean> {
     ensState.step = 'done';
     info(`[ens] registered ${ensState.fullName} in ${ensState.txHash}`);
 
-    // Записываем имя в профиль. Транзакция в блокчейне профиль ни о чём не
-    // извещает: `ens_getEnsUsernames` читает его собственную таблицу, и без
-    // этой записи имя осталось бы видимым только на цепи.
+    // Record the name in the profile. A transaction on chain does not notify the
+    // profile: `ens_getEnsUsernames` reads its own table, and without this write
+    // the name would only be visible on chain.
     if (ensState.fullName) {
       try {
         await addEnsUsername(port, statusState.chainId, ensState.fullName);
         await loadProfileNames();
       } catch (e) {
-        // Не валим регистрацию: имя уже в блокчейне, и повторять транзакцию
-        // из-за несохранённой строки в профиле было бы дорого.
+        // Do not fail the registration: the name is already on chain, and
+        // repeating the transaction over an unsaved profile row would be
+        // expensive.
         warn('[ens] registered on chain but failed to record it in the profile:', e);
       }
     }
@@ -349,7 +352,7 @@ export async function registerName(): Promise<boolean> {
     return true;
   } catch (e) {
     const message = formatError(e, 'Failed to register the name');
-    // Неверный пароль стираем, чтобы не повторять неудачу молча.
+    // Drop a wrong password so the failure is not silently repeated.
     if (/incorrect password|decrypt|authentication/i.test(message)) {
       sendState.password = '';
       sendState.needsPassword = true;
@@ -363,7 +366,7 @@ export async function registerName(): Promise<boolean> {
   }
 }
 
-/** Вернуться к форме. */
+/** Returns to the form. */
 export function backToEnsForm(): void {
   ensState.step = 'form';
   ensState.error = '';

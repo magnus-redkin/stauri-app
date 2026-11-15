@@ -8,7 +8,7 @@ export const statusState = $state({
   isLoggedIn: false,
   accountKeyUid: '',
   publicKey: '',
-  /** Сжатый ключ `zQ3…` (base58btc, multicodec) — основа ссылки на профиль. */
+  /** Compressed `zQ3…` key (base58btc, multicodec) that a profile link is built from. */
   compressedKey: '',
   alias: '',
   chainId: 1,
@@ -21,14 +21,14 @@ export const statusState = $state({
   accounts: [] as any[],
   events: [] as StatusEvent[],
   errorMsg: '',
-  /// Временная отметка моста (B.2): какие вызовы status-go прошли.
+  /// Temporary bridge marker (B.2): which status-go calls went through.
   probe: '',
   pendingRequestsCount: 0,
   lastMessageSignal: 0,
   /**
-   * Чаты, из которых пришли сообщения после последней обработки сигнала.
-   * Позволяет не перечитывать весь список при каждом сообщении из чата,
-   * которого в списке нет (например, снятый с отображения канал).
+   * Chats that delivered messages since the last signal was processed.
+   * Lets the list skip a full reload for messages from a chat it does not contain (for instance,
+   * a channel that was hidden).
    */
   pendingChatIds: new SvelteSet<string>(),
   isSeedSaved: false,
@@ -66,17 +66,16 @@ export function processSignal(rawJson: string) {
         loginTimeoutId = null;
       }
 
-      // startMessenger здесь БОЛЬШЕ НЕ вызывается.
-      // RPC-клиенты status-go кэшируются по chainID и не инвалидируются при
-      // смене провайдеров, поэтому провайдеры нужно прописать ДО первого
-      // обращения к сети. Messenger стартует из connectionStore.login()
-      // после configureWalletRpc().
+      // startMessenger is deliberately NOT called here.
+      // status-go RPC clients are cached per chainID and not invalidated when providers change, so
+      // providers must be set before the first network call. The messenger starts from
+      // connectionStore.login() after configureWalletRpc().
     }
 
     if (parsed.type === 'node.stopped') {
-      // Нода остановилась: isLoggedIn больше не соответствует реальности.
-      // Без этого повторный waitForLogin() разрешился бы мгновенно на старом
-      // флаге, и перезапуск ноды «проходил» бы, ничего не дождавшись.
+      // The node stopped: `isLoggedIn` no longer reflects reality. Without this a repeated
+      // `waitForLogin()` would resolve at once on the stale flag, and a node restart would
+      // "succeed" without waiting for anything.
       statusState.isLoggedIn = false;
       if (stoppedResolver) {
         if (stoppedTimeoutId) clearTimeout(stoppedTimeoutId);
@@ -98,15 +97,16 @@ export function processSignal(rawJson: string) {
 }
 
 /**
- * Ждёт сигнал node.stopped.
+ * Waits for a `node.stopped` signal.
  *
- * Нужен для перезапуска ноды: logout останавливает её асинхронно, и повторный
- * вход возможен только после того, как нода действительно встала. Иначе
- * второй loginAccount приходит к ещё живому узлу, а флаг isLoggedIn остаётся
- * старым — и перезапуск оказывается пустым.
+ * A node restart needs it because logout stops the node asynchronously and signing in again is only
+ * possible once it has really stopped; otherwise a second `loginAccount` reaches a live node while
+ * `isLoggedIn` keeps its old value, making the restart a no-op.
  *
- * Таймаут не ошибка: если сигнал не пришёл за отведённое время, продолжаем —
- * хуже от этого не станет, а вечное ожидание заблокировало бы вход.
+ * @param timeoutMs - How long to wait before giving up.
+ * @returns Resolves on the signal or on timeout.
+ * @remarks
+ * The timeout is not an error: a missing signal is better tolerated than blocking sign-in forever.
  */
 export function waitForNodeStopped(timeoutMs = 15000): Promise<void> {
   return new Promise((resolve) => {

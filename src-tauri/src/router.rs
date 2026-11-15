@@ -1,26 +1,20 @@
-//! Общий путь отправки через Router status-go.
+//! Shared send path through the status-go Router.
 //!
-//! ## Зачем отдельный модуль
+//! ENS registration and token swaps use the same mechanism: build a route,
+//! build transactions, sign, send. Only the route parameters differ
+//! (`sendType`, tokens, amount), so both operations share this module instead
+//! of keeping two copies of the signal handling.
 //!
-//! Регистрация ENS и обмен токенов идут через один и тот же механизм: маршрут
-//! → сборка → подпись → отправка. Отличаются только параметры маршрута
-//! (`sendType`, токены, сумма). Если бы каждая операция реализовывала этот путь
-//! сама, любая правка в обработке сигналов делалась бы дважды, и одна из копий
-//! неизбежно отстала бы.
+//! Unlike `transfer.rs`, which is three synchronous calls, two of the four steps
+//! here are asynchronous: `buildTransactionsFromRoute` and
+//! `sendRouterTransactionsWithSignatures` return nothing and deliver the result
+//! as a WebSocket signal, hence the separate connection to `/signals`.
 //!
-//! ## Почему это не похоже на перевод
-//!
-//! `transfer.rs` — три синхронных вызова. Здесь два шага из четырёх
-//! асинхронны: `buildTransactionsFromRoute` и
-//! `sendRouterTransactionsWithSignatures` ничего не возвращают, а результат
-//! приходит сигналом по WebSocket. Отсюда отдельное соединение к `/signals`.
-//!
-//! ## Почему подпись здесь, а не в webview
-//!
-//! Router может вернуть несколько транзакций (например, approve + обмен), и
-//! `wallet_signMessage` подписывает любые 32 байта, не зная, что это. Если бы
-//! хэши уходили во фронтенд, чужой скрипт мог бы попросить подписать любой из
-//! них. Поэтому хэши, пароль и разбор подписи не покидают Rust.
+//! Signing happens here rather than in the webview. The Router can return
+//! several transactions (approve + swap, for instance), and `wallet_signMessage`
+//! signs any 32 bytes without knowing what they are, so a foreign script holding
+//! the hashes could ask for a signature on any of them. Hashes, password and
+//! signature parsing never leave Rust.
 
 use std::time::Duration;
 
@@ -34,19 +28,20 @@ use crate::error::{AppError, AppResult};
 /// `fees.GasFeeMode`: Low=0, Medium=1, High=2.
 pub const GAS_FEE_MEDIUM: u64 = 1;
 
-/// Сигнал с хэшами, которые нужно подписать.
+/// Signal carrying the hashes that need signing.
 const SIGNAL_ROUTER_TXS: &str = "wallet.router.sign-transactions";
 
-/// Сигнал о том, что транзакции отправлены.
+/// Signal reporting that the transactions were sent.
 const SIGNAL_TXS_SENT: &str = "wallet.router.transactions-sent";
 
-/// Сколько ждём ответа бэкенда.
+/// How long to wait for the backend.
 ///
-/// Сборка маршрута ходит в сеть за газом и ценой провайдера, затем ждёт
-/// подписи. На медленной сети и при обмене через агрегатор это небыстро.
+/// Route building goes to the network for gas and the provider price before
+/// waiting for signatures; on a slow network, or a swap through an aggregator,
+/// that is not quick.
 const SIGNAL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Адрес EVM: `0x` и ровно 40 шестнадцатеричных цифр.
+/// Checks for an EVM address: `0x` followed by exactly 40 hex digits.
 pub fn is_address(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 42
@@ -55,7 +50,7 @@ pub fn is_address(value: &str) -> bool {
         && bytes[2..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Снимает префикс `0x`, если он есть.
+/// Removes the `0x` prefix, if present.
 pub fn strip_hex_prefix(value: &str) -> &str {
     value
         .strip_prefix("0x")
@@ -63,18 +58,25 @@ pub fn strip_hex_prefix(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-/// Читает hex-число из ответа бэкенда (`0x…` или голый hex).
+/// Reads a hex number from a backend reply (`0x…` or bare hex).
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the value is not a valid hex number.
 pub fn hex_u128(value: &str) -> AppResult<u128> {
     u128::from_str_radix(strip_hex_prefix(value), 16)
         .map_err(|e| AppError::backend(format!("invalid hex number from backend: {e}")))
 }
 
-/// Разбирает 65-байтную подпись на компоненты, как их ждёт status-go.
+/// Splits a 65-byte signature into the components status-go expects.
 ///
-/// `SignatureDetails.Validate` требует ровно 64 hex-символа в `r`, 64 в `s`
-/// и 2 в `v`; значение `v` читается как «единица только если строка равна
-/// `01`», поэтому 27/28 (как в подписи Ethereum) здесь означали бы `0`.
-/// Единицу восстанавливаем сами.
+/// `SignatureDetails.Validate` requires exactly 64 hex characters in `r`, 64 in
+/// `s` and 2 in `v`, and it reads `v` as "one only when the string is `01`", so
+/// an Ethereum-style 27/28 would mean `0` there. The recovery id is normalised
+/// to 0/1 here.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the signature is not 130 hex characters
+/// after the prefix, or when `v` is outside 0/1 and 27/28.
 pub fn split_signature(signature: &str) -> AppResult<(String, String, String)> {
     let raw = strip_hex_prefix(signature);
     if raw.len() != 130 {
@@ -89,8 +91,8 @@ pub fn split_signature(signature: &str) -> AppResult<(String, String, String)> {
 
     let v_byte = u8::from_str_radix(&raw[128..130], 16)
         .map_err(|e| AppError::backend(format!("invalid signature v: {e}")))?;
-    // 0/1 — «сырой» recovery id (так подписывает status-go), 27/28 — вариант
-    // Ethereum. Оба приводим к одному виду.
+    // 0/1 is the raw recovery id status-go signs with, 27/28 the Ethereum
+    // variant; both are reduced to one form.
     let v = match v_byte {
         0 | 1 => v_byte,
         27 | 28 => v_byte - 27,
@@ -104,11 +106,12 @@ pub fn split_signature(signature: &str) -> AppResult<(String, String, String)> {
     Ok((r, s, format!("{v:02x}")))
 }
 
-/// Идентификатор запроса для Router.
+/// Builds a request identifier for the Router.
 ///
-/// Бэкенд хранит только последний маршрут, поэтому достаточно уникальности в
-/// пределах процесса. Случайные байты надёжнее счётчика: при перезапуске
-/// счётчик начался бы снова, а при двух одновременных запросах совпал бы.
+/// The backend keeps only the most recent route, so uniqueness within the
+/// process is enough. Random bytes are safer than a counter: a counter would
+/// restart at zero after a restart and could collide between two concurrent
+/// requests.
 pub fn unique_uuid() -> String {
     let mut buf = [0u8; 8];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom")
@@ -125,12 +128,18 @@ pub fn unique_uuid() -> String {
     format!("stauri-{nanos:x}")
 }
 
-/// Подключение к `/signals` через аутентифицирующий прокси.
+/// Opens a `/signals` connection through the authenticating proxy.
 ///
-/// Прокси проверяет токен до upgrade и дальше просто перекачивает байты
-/// (`auth_proxy.rs`, `copy_bidirectional`), поэтому WebSocket проходит насквозь.
-/// Соединение своё: бэкенд рассылает сигналы во все подключения, так что
-/// фронтенд о нём не догадывается и ничего не теряет.
+/// The proxy checks the token before the upgrade and then copies bytes in both
+/// directions (`auth_proxy.rs`, `copy_bidirectional`), so the WebSocket passes
+/// through untouched. This is a dedicated connection: the backend broadcasts
+/// signals to every subscriber, so the frontend neither sees them nor loses
+/// any.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the request cannot be built or the
+/// token is not a valid header value, and [`crate::error::ErrorKind::Backend`] when the
+/// WebSocket handshake fails.
 pub async fn connect_signals(
     port: u16,
 ) -> AppResult<
@@ -156,10 +165,14 @@ pub async fn connect_signals(
     Ok(ws)
 }
 
-/// Ждёт сигнал заданного типа, относящийся к нашему `uuid`.
+/// Waits for a signal of the given type that belongs to `uuid`.
 ///
-/// Сигналы чужих запросов (другой uuid) пропускаются: в соединении идёт
-/// общий поток, и первый пришедший может быть не нашим.
+/// Signals of other requests (another uuid) are skipped: the connection carries
+/// one shared stream, and the first message to arrive may not be ours.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] on timeout, when the connection closes or
+/// fails, and when the backend reports an error in `sendDetails.errorResponse`.
 async fn wait_for_signal<S>(ws: &mut S, signal_type: &str, uuid: &str) -> AppResult<Value>
 where
     S: futures_util::Stream<
@@ -212,7 +225,7 @@ where
         }
 
         let event = parsed.get("event").cloned().unwrap_or(Value::Null);
-        // uuid лежит в sendDetails; сигнал другого запроса нам не подходит.
+        // The uuid sits in sendDetails; a signal for another request is not ours.
         let matches_uuid = event
             .get("sendDetails")
             .and_then(|d| d.get("uuid"))
@@ -223,7 +236,7 @@ where
             continue;
         }
 
-        // Ошибку бэкенд кладёт в sendDetails.errorResponse.
+        // The backend puts the error in sendDetails.errorResponse.
         if let Some(err) = event
             .get("sendDetails")
             .and_then(|d| d.get("errorResponse"))
@@ -241,11 +254,16 @@ where
     }
 }
 
-/// Выполняет маршрут целиком и возвращает хэши отправленных транзакций.
+/// Runs a route end to end and returns the hashes of the sent transactions.
 ///
-/// Подключение к сигналам открывается ДО первого запроса: сборка маршрута
-/// может ответить быстрее, чем мы успели бы подписаться, и тогда сигнал ушёл
-/// бы в пустоту.
+/// The signals connection opens before the first request: building a route can
+/// answer faster than a subscription could be established, and the signal would
+/// then be delivered to nobody.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when `params` carries no uuid, and
+/// [`crate::error::ErrorKind::Backend`] when signals are unavailable for the backend or any
+/// round step fails.
 pub async fn execute_route(
     backend: Backend,
     params: Value,
@@ -268,30 +286,33 @@ pub async fn execute_route(
     Ok(sent.into_iter().map(|tx| tx.hash).collect())
 }
 
-/// Отправленная транзакция из сигнала `wallet.router.transactions-sent`.
+/// A sent transaction from the `wallet.router.transactions-sent` signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentTx {
     pub hash: String,
-    /// Это `approve`, а не основная операция.
+    /// This is an `approve`, not the main operation.
     pub is_approval: bool,
 }
 
-/// Один раунд «собрать → подписать → отправить».
+/// One round of build → sign → send.
 ///
-/// ## Зачем параметры опциональны
+/// Params are optional because `wallet_getSuggestedRoutes` stores the route in
+/// the backend under `uuid`. A second round (a swap after the `approve` is
+/// mined) reuses the **same** route and the same `uuid`, so it needs no
+/// parameters: requesting the route again would recompute it and replace the
+/// price the user agreed to.
 ///
-/// `wallet_getSuggestedRoutes` запоминает маршрут в бэкенде под `uuid`. Второй
-/// раунд (у обмена после майнинга `approve`) переиспользует **тот же** маршрут
-/// и тот же `uuid`, поэтому параметры ему не нужны: повторный запрос маршрута
-/// пересчитал бы его заново и подменил бы цену, на которую человек согласился.
+/// A round can return only the `approve`. LiFi builds the main swap transaction
+/// only once the approval is in a block
+/// (`transaction_manager_route.go`: "we cannot build the swap tx before the
+/// approval tx is mined"), so the first round of a swap with an ERC-20 input
+/// returns a single transaction and the caller must wait for it to be mined and
+/// run the round again.
 ///
-/// ## Почему раунд может вернуть только `approve`
-///
-/// LiFi строит основную транзакцию обмена только после того, как `approve`
-/// попадёт в блок (`transaction_manager_route.go`: «we cannot build the swap tx
-/// before the approval tx is mined»). Поэтому первый раунд у обмена с
-/// ERC-20 на входе отдаёт **одну** транзакцию, и вызывающий обязан дождаться
-/// её майнинга и запустить раунд ещё раз.
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when a route step fails, when no transactions
+/// come back to sign, when no signature or hash is returned, or when the
+/// signals connection fails.
 pub async fn execute_round<S>(
     ws: &mut S,
     backend: Backend,
@@ -308,14 +329,14 @@ where
             >,
         > + Unpin,
 {
-    // 1. Маршрут. Только в первом раунде.
+    // 1. Route. First round only.
     if let Some(params) = params {
         backend
             .call("wallet_getSuggestedRoutes", json!([params]))
             .await?;
     }
 
-    // 2. Собрать транзакции.
+    // 2. Build the transactions.
     backend
         .call("wallet_buildTransactionsFromRoute", json!([uuid]))
         .await?;
@@ -329,7 +350,7 @@ where
         ));
     }
 
-    // 3. Подписать каждый хэш. Пароль живёт только внутри этого цикла.
+    // 3. Sign each hash. The password lives only inside this loop.
     let mut signatures = serde_json::Map::new();
     for hash in &hashes {
         let signature = backend
@@ -340,12 +361,12 @@ where
             .to_string();
 
         let (r, s, v) = split_signature(&signature)?;
-        // Ключ — хэш в том же виде, в каком его отдал Router: по нему
-        // бэкенд сопоставляет подпись с транзакцией.
+        // The key is the hash exactly as the Router returned it: the backend
+        // matches a signature to a transaction by it.
         signatures.insert(hash.clone(), json!({ "r": r, "s": s, "v": v }));
     }
 
-    // 4. Отправить.
+    // 4. Send.
     backend
         .call(
             "wallet_sendRouterTransactionsWithSignatures",
@@ -363,7 +384,7 @@ where
     Ok(txs)
 }
 
-/// Хэши для подписи из сигнала `wallet.router.sign-transactions`.
+/// Signing hashes from the `wallet.router.sign-transactions` signal.
 fn signing_hashes(event: &Value) -> Vec<String> {
     event
         .get("signingDetails")
@@ -377,11 +398,11 @@ fn signing_hashes(event: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Отправленные транзакции из сигнала `wallet.router.transactions-sent`.
+/// Sent transactions from the `wallet.router.transactions-sent` signal.
 ///
-/// Флаг `approvalTx` обязателен: по нему отличают `approve` от основной
-/// операции. Без него обмен с несостоявшейся второй транзакцией выглядел бы
-/// как успешный.
+/// The `approvalTx` flag is required to tell the `approve` from the main
+/// operation. Without it a swap whose second transaction failed would look
+/// successful.
 fn sent_transactions(event: &Value) -> Vec<SentTx> {
     event
         .get("sentTransactions")
@@ -408,7 +429,7 @@ mod tests {
 
     #[test]
     fn splits_signature_into_components() {
-        // 64 + 64 + 2 hex-символа — ровно то, что требует SignatureDetails.
+        // 64 + 64 + 2 hex characters: exactly what SignatureDetails requires.
         let signature = format!("0x{}{}{}", "11".repeat(32), "22".repeat(32), "01");
         let (r, s, v) = split_signature(&signature).expect("valid signature");
         assert_eq!(r, "11".repeat(32));
@@ -478,8 +499,8 @@ mod tests {
                 { "hash": "0xbb", "approvalTx": true }
             ]
         });
-        // Возвращаются все: у обмена их два (approve + сам обмен), и
-        // показать надо последний, но решать это вызывающему.
+        // All of them are returned: a swap has two (approve + the swap itself),
+        // and the last one is what gets shown, but choosing is up to the caller.
         assert_eq!(
             sent_transactions(&event),
             vec![
@@ -497,9 +518,9 @@ mod tests {
 
     #[test]
     fn approval_only_batch_is_recognized() {
-        // Ровно то, что приходит первым раундом у обмена через LiFi: одна
-        // транзакция approve, потому что основную нельзя собрать до её
-        // майнинга. Вызывающий обязан это увидеть и запустить второй раунд.
+        // Exactly what the first round of a LiFi swap delivers: a single
+        // approve transaction, because the main one cannot be built before it is
+        // mined. The caller must recognise this and start a second round.
         let event = json!({
             "sentTransactions": [
                 { "hash": "0x394f", "approvalTx": true }

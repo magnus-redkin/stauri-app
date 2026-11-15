@@ -1,31 +1,30 @@
-//! Локальный HTTP-форвардер для RPC.
+//! Local HTTP forwarder for RPC.
 //!
-//! Зачем он нужен: status-go переиспользует TCP-соединения из пула
-//! (`http.DefaultTransport`), а в этом канале соединения тихо умирают —
-//! сокет остаётся ESTAB, пакеты уходят, ответов нет, повторы копятся
-//! до `tcp_retries2`. В результате запрос к живому RPC висит 20 секунд
-//! и падает по таймауту circuit breaker'а.
+//! status-go reuses TCP connections from its pool (`http.DefaultTransport`),
+//! and on this channel those connections die silently: the socket stays ESTAB,
+//! packets go out, no replies come back, and retries pile up until
+//! `tcp_retries2`. A request to a healthy RPC then hangs for 20 seconds and
+//! trips the circuit breaker's timeout.
 //!
-//! Поэтому status-go смотрит не на провайдера напрямую, а на
-//! `http://127.0.0.1:<port>/<секрет>/<chainId>`, а этот форвардер на каждый
-//! запрос открывает НОВОЕ соединение к upstream (пул отключён через
-//! `pool_max_idle_per_host(0)`) — ровно так ведёт себя curl, который
-//! в тех же условиях работает.
+//! So status-go talks to `http://127.0.0.1:<port>/<secret>/<chainId>` instead
+//! of the provider, and this forwarder opens a NEW connection to the upstream
+//! for every request (pooling disabled via `pool_max_idle_per_host(0)`) — the
+//! way curl behaves, which works under the same conditions.
 //!
-//! # Почему секрет в пути, а не заголовок
+//! # Why the secret lives in the path
 //!
-//! В форвардер ходит **status-go**, а не наш фронтенд: URL провайдера
-//! записывается через `networks_setChainUserRpcProviders` и используется
-//! внутри ноды. Заголовок `X-Stauri-Token` нода не пошлёт, поэтому защита
-//! живёт в самом URL — единственном, что мы можем туда передать.
+//! The caller is **status-go**, not our frontend: the provider URL is written
+//! through `networks_setChainUserRpcProviders` and used inside the node. The
+//! node will not send an `X-Stauri-Token` header, so the protection has to be
+//! part of the URL — the only thing that can be handed over.
 //!
-//! Без этого любой процесс на машине (и любой сайт, открытый в WebView
-//! dApp) мог обратиться к `127.0.0.1:<port>/1` и получить доступ к RPC.
-//! Проверено: до правки запрос без параметров отвечал `HTTP 200`.
+//! Without it, any process on the machine (and any site opened in the dApp
+//! WebView) could reach `127.0.0.1:<port>/1` and use the RPC. A request with no
+//! parameters used to answer `HTTP 200`.
 //!
-//! Секрет генерируется один раз, хранится в файле и переживает перезапуск:
-//! URL провайдеров уже записан в базу status-go, и со случайным секретом на
-//! новом старте они указывали бы в никуда.
+//! The secret is generated once, stored in a file and survives restarts:
+//! provider URLs are already recorded in the status-go database, and a random
+//! secret on the next start would leave them pointing at nothing.
 
 use crate::error::{AppError, AppResult};
 use std::collections::HashMap;
@@ -36,29 +35,30 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, error, info};
 
-/// Максимальный размер заголовков и тела входящего запроса.
+/// Maximum size of an incoming request's headers and body.
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
-/// Порт, который форвардер старается занять.
+/// Port the forwarder tries to take.
 ///
-/// Порт обязан быть постоянным: URL провайдера (`http://127.0.0.1:<port>/<chain>`)
-/// сохраняется в БД status-go и переживает перезапуск приложения. Со случайным
-/// портом на следующем старте провайдер указывал бы в никуда, и RPC-клиент,
-/// созданный при инициализации ноды, был бы уже нерабочим.
+/// The port must be stable: provider URLs
+/// (`http://127.0.0.1:<port>/<chain>`) are stored in the status-go database and
+/// survive an app restart. With a random port, on the next start the provider
+/// would point at nothing and the RPC client created during node
+/// initialization would already be broken.
 const PREFERRED_PORT: u16 = 43057;
 
-/// Длина секрета в пути, в hex-символах.
+/// Secret length in the path, in hex characters.
 ///
-/// 32 символа = 128 бит энтропии. Перебирать его по сети бессмысленно, а
-/// короткий был бы уязвим к перебору с той же машины.
+/// 32 characters = 128 bits of entropy. Brute-forcing it over the network is
+/// pointless, while a short one would be guessable from the same machine.
 const SECRET_HEX_LEN: usize = 32;
 
 type Upstreams = Arc<Mutex<HashMap<u64, String>>>;
 
 struct Handle {
     port: u16,
-    /// Секрет, который обязан быть в пути каждого запроса.
+    /// Secret that must be present in every request path.
     secret: String,
     task: tokio::task::JoinHandle<()>,
     upstreams: Upstreams,
@@ -74,13 +74,13 @@ impl RpcProxyState {
         self.handle.lock().ok()?.as_ref().map(|h| h.port)
     }
 
-    /// Секрет пути. `None`, если форвардер не запущен.
+    /// Path secret. `None` when the forwarder is not running.
     pub fn secret(&self) -> Option<String> {
         self.handle.lock().ok()?.as_ref().map(|h| h.secret.clone())
     }
 }
 
-/// Каталог для секрета — рядом с конфигом приложения.
+/// Directory for the secret — next to the application config.
 fn secret_path() -> Option<std::path::PathBuf> {
     let dir = crate::appdirs::config_dir()?.join(env_identifier());
     Some(dir.join("rpc-proxy.secret"))
@@ -90,16 +90,20 @@ fn env_identifier() -> &'static str {
     crate::env::APP_IDENTIFIER
 }
 
-/// Читает секрет из файла или создаёт новый.
+/// Reads the secret from a file, or creates a new one.
 ///
-/// ## Почему файл, а не память
+/// The file is used rather than memory because a provider URL
+/// (`http://127.0.0.1:<port>/<secret>/<chainId>`) is written to the status-go
+/// database and survives a restart. With an in-memory secret, on the next start
+/// every provider would point at nothing and the wallet would have no RPC.
 ///
-/// URL провайдера (`http://127.0.0.1:<port>/<секрет>/<chainId>`) записывается
-/// в базу status-go и переживает перезапуск. С секретом в памяти на новом
-/// старте все провайдеры указывали бы в никуда, и кошелёк остался бы без RPC.
+/// On Unix the file is created with mode `0600`: the secret grants access to
+/// the forwarder and through it to the RPC endpoints.
 ///
-/// Файл создаётся с правами `0600`: секрет даёт доступ к форвардеру, а через
-/// него — к RPC-эндпоинтам.
+/// # Errors
+/// `ErrorKind::Config` when the config directory cannot be determined;
+/// `ErrorKind::Io` when the directory or the file cannot be created or
+/// written; `ErrorKind::Internal` when randomness cannot be read.
 fn load_or_create_secret() -> AppResult<String> {
     let path = secret_path()
         .ok_or_else(|| AppError::config("cannot determine config dir for rpc proxy secret"))?;
@@ -109,9 +113,9 @@ fn load_or_create_secret() -> AppResult<String> {
         if trimmed.len() == SECRET_HEX_LEN && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
             return Ok(trimmed);
         }
-        // Файл есть, но содержимое негодное: перегенерируем, а не падаем.
-        // Худшее последствие — провайдеры в базе перестанут совпадать, и
-        // `configureWalletRpc` перезапишет их новым URL.
+        // The file exists but holds garbage: regenerate it instead of failing.
+        // The worst consequence is a mismatch with the providers in the
+        // database, and `configureWalletRpc` rewrites them with the new URL.
         debug!(?path, "rpc proxy secret file is malformed, regenerating");
     }
 
@@ -125,7 +129,7 @@ fn load_or_create_secret() -> AppResult<String> {
 
     let secret = generate_secret()?;
 
-    // Права выставляем до записи, чтобы не было окна с читаемым файлом.
+    // Permissions are set before writing so the file is never readable.
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -143,20 +147,21 @@ fn load_or_create_secret() -> AppResult<String> {
 
     #[cfg(not(unix))]
     {
-        // ## Почему здесь только предупреждение, а не ACL
+        // Only a warning here, not an ACL.
         //
-        // Секрет даёт доступ к RPC-форвардеру. На Unix файл создаётся с
-        // правами `0600` (ветка выше), а на Windows — с наследованием прав
-        // каталога, то есть читаемым для других пользователей машины.
+        // The secret grants access to the RPC forwarder. On Unix the file is
+        // created with `0600` (branch above); on Windows it inherits the
+        // directory's permissions, i.e. it is readable by other users of the
+        // machine.
         //
-        // Ограничить его можно `SetNamedSecurityInfoW` через `windows-sys`,
-        // но эта сборка под Windows не собирается и не проверяется, а
-        // непроверенный код работы с ACL опаснее его отсутствия: ошибка в
-        // правах выглядит как успешная защита. Поэтому сейчас платформа
-        // прямо сообщает о состоянии, а задача записана в `docs/PLAN.md`.
+        // It could be restricted with `SetNamedSecurityInfoW` through
+        // `windows-sys`, but this build does not compile or test on Windows,
+        // and unverified ACL code is more dangerous than none: a bug in the
+        // permissions looks like working protection. Until then the platform
+        // states its condition explicitly.
         //
-        // Практическое следствие: Stauri поставляется как Linux AppImage,
-        // и на текущей платформе это не открытая дыра.
+        // Practical consequence: Stauri ships as a Linux AppImage, so on the
+        // current platform this is not an open hole.
         std::fs::write(&path, secret.as_bytes())
             .map_err(|e| AppError::io(format!("cannot write secret file: {e}")))?;
         tracing::warn!(
@@ -169,7 +174,7 @@ fn load_or_create_secret() -> AppResult<String> {
     Ok(secret)
 }
 
-/// 16 случайных байт в hex.
+/// 16 random bytes in hex.
 fn generate_secret() -> AppResult<String> {
     use std::io::Read;
     let mut buf = [0u8; 16];
@@ -179,33 +184,38 @@ fn generate_secret() -> AppResult<String> {
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Запускает форвардер с картой chainId -> upstream.
+/// Starts the forwarder with a chainId -> upstream map.
 ///
-/// Повторный вызов возвращает уже занятый порт, второй слушатель не
-/// поднимается, но карта upstream-ов обновляется.
+/// A repeated call returns the port already in use and does not start a second
+/// listener, but the upstream map is updated.
 ///
-/// ## Почему порт не должен меняться молча
+/// The port must never change silently: the provider URL
+/// (`http://127.0.0.1:<port>/<chain>`) is stored in the status-go database and
+/// survives a restart. Taking a random port at startup would leave the client
+/// built during node initialization pointing at `<port>`, where it would either
+/// get answers from a **foreign** process if one listens there — requests going
+/// somewhere unknown — or be refused and look like "the provider is dead".
 ///
-/// URL провайдера (`http://127.0.0.1:<port>/<chain>`) сохраняется в БД
-/// status-go и переживает перезапуск приложения. Если при старте занять
-/// вместо него случайный порт:
+/// Hence the fixed port: if it is taken, an error explains why. The caller
+/// decides what to do instead of silently receiving a broken configuration.
 ///
-/// * клиент, собранный при инициализации ноды, смотрит на `<port>` и будет
-///   получать ответы от **чужого** процесса, если тот его слушает, —
-///   запросы уходят в неизвестное место;
-/// * либо получает отказ от чужого процесса и выглядит как «провайдер мёртв».
-///
-/// Поэтому порт фиксирован: занят — возвращаем ошибку с объяснением.
-/// Вызывающая сторона сама решает, что делать, а не получает втихую
-/// нерабочую конфигурацию.
+/// # Errors
+/// `ErrorKind::Config` when the config directory cannot be determined;
+/// `ErrorKind::Io` when the secret file cannot be written; `ErrorKind::Internal`
+/// when the port is taken or the client cannot be built.
 pub async fn start(state: &RpcProxyState, upstreams: HashMap<u64, String>) -> AppResult<u16> {
     start_on(state, upstreams, PREFERRED_PORT).await
 }
 
-/// Запуск на заданном порту. `0` — любой свободный.
+/// Starts on the given port. `0` means any free port.
 ///
-/// Отдельно от [`start`], чтобы тесты не дрались за production-порт:
-/// два теста `#[tokio::test]` идут параллельно и оба биндили бы 43057.
+/// Separate from [`start`] so tests do not fight over the production port: two
+/// `#[tokio::test]` cases run in parallel and would both bind 43057.
+///
+/// # Errors
+/// `ErrorKind::Config` when the config directory cannot be determined;
+/// `ErrorKind::Io` when the secret file cannot be written; `ErrorKind::Internal`
+/// when the port cannot be bound or the client cannot be built.
 pub async fn start_on(
     state: &RpcProxyState,
     upstreams: HashMap<u64, String>,
@@ -233,7 +243,8 @@ pub async fn start_on(
 
     let shared: Upstreams = Arc::new(Mutex::new(upstreams));
 
-    // Пул отключён: каждое соединение живёт один запрос. Это и есть суть фикса.
+    // Pooling is disabled: each connection serves one request. That is the
+    // whole point of the fix.
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(0)
         .connect_timeout(Duration::from_secs(10))
@@ -307,8 +318,8 @@ async fn accept_loop(
     }
 }
 
-/// Сравнение без раннего выхода — чтобы по времени ответа нельзя было
-/// подобрать секрет посимвольно.
+/// Constant-time comparison, so the secret cannot be guessed character by
+/// character from response timing.
 fn constant_time_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
@@ -339,12 +350,12 @@ async fn handle_conn(
     let given_secret = parts.next().unwrap_or("");
     let chain_part = parts.next().unwrap_or("");
 
-    // Проверка секрета — до любого разбора: неверный путь не должен
-    // раскрывать, существует ли такая сеть, и не должен считаться ошибкой.
+    // The secret is checked before any parsing: a wrong path must not reveal
+    // whether a given chain exists, and must not count as an error.
     if !constant_time_eq(given_secret, secret) {
-        // Отвечаем как на отсутствующий ресурс, а не 403: иначе чужая
-        // программа узнаёт, что попала на наш форвардер, и может подбирать
-        // дальше. Секрет при этом не логируем.
+        // Answer as if the resource were missing rather than with 403:
+        // otherwise a foreign program learns it hit our forwarder and can keep
+        // guessing. The secret is never logged.
         debug!("rpc proxy request with invalid secret rejected");
         return write_plain(&mut stream, 404, "not found").await;
     }
@@ -370,9 +381,9 @@ async fn handle_conn(
     {
         Ok(r) => r,
         Err(e) => {
-            // Отдаём 502 с JSON-RPC-ошибкой, а не рвём соединение молча:
-            // иначе ethclient видит EOF и тратит время на повтор запроса,
-            // хотя причина уже известна.
+            // Return 502 with a JSON-RPC error instead of dropping the
+            // connection silently: otherwise ethclient sees EOF and wastes time
+            // retrying, although the cause is already known.
             let body = format!(
                 "{{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{{\"code\":-32603,\"message\":\"rpc proxy: {}\"}}}}",
                 e.to_string().replace('\\', "\\\\").replace('"', "\\\"")
@@ -405,7 +416,7 @@ async fn handle_conn(
     Ok(())
 }
 
-/// Отдаёт JSON-тело с указанным статусом и закрывает соединение.
+/// Serves a JSON body with the given status and closes the connection.
 async fn write_json(stream: &mut TcpStream, status: u16, body: &[u8]) -> AppResult<()> {
     let head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -425,7 +436,12 @@ async fn write_json(stream: &mut TcpStream, status: u16, body: &[u8]) -> AppResu
     Ok(())
 }
 
-/// Читает запрос целиком: строку запроса, заголовки и тело по Content-Length.
+/// Reads a whole request: request line, headers and a body of `Content-Length`.
+///
+/// # Errors
+/// `ErrorKind::Internal` when the headers or the body exceed their caps, or
+/// when the connection closes before either is complete; `ErrorKind::Io` on a
+/// read error.
 async fn read_request(
     stream: &mut TcpStream,
 ) -> AppResult<(String, HashMap<String, String>, Vec<u8>)> {
@@ -536,10 +552,11 @@ fn reason(code: u16) -> &'static str {
 mod tests {
     use super::*;
 
-    /// Поднимает локальный HTTP-сервер, отвечающий фиксированным JSON.
+    /// Starts a local HTTP server answering with a fixed JSON body.
     ///
-    /// Нужен вместо настоящего провайдера: тесты не должны ходить в сеть.
-    /// Иначе они падают в CI без интернета и страдают от чужих лимитов.
+    /// Used instead of a real provider: tests must not touch the network,
+    /// otherwise they fail in CI without internet and suffer from other
+    /// people's rate limits.
     async fn mock_upstream(response_body: &'static str) -> (u16, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
         let port = listener.local_addr().expect("mock addr").port();
@@ -550,7 +567,7 @@ mod tests {
                     break;
                 };
                 tokio::spawn(async move {
-                    // Читаем запрос целиком, чтобы клиент не получил RST.
+                    // The request is read in full so the client does not get an RST.
                     let _ = read_request(&mut socket).await;
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -566,15 +583,15 @@ mod tests {
         (port, handle)
     }
 
-    /// Собирает URL форвардера так, как это делает фронтенд в
-    /// `rpcConfig.ts`: секрет идёт первым сегментом пути.
+    /// Builds a forwarder URL the way the frontend does in `rpcConfig.ts`: the
+    /// secret is the first path segment.
     fn url_for(state: &RpcProxyState, port: u16, tail: &str) -> String {
         let secret = state.secret().expect("running proxy must expose a secret");
         format!("http://127.0.0.1:{port}/{secret}/{tail}")
     }
 
-    /// Сквозной путь: запрос на локальный порт -> отдельный сокет к upstream
-    /// -> ответ JSON-RPC обратно клиенту.
+    /// End to end: request to the local port -> a separate socket to the
+    /// upstream -> the JSON-RPC answer back to the client.
     #[tokio::test]
     async fn proxies_json_rpc_request() {
         let (mock_port, mock) =
@@ -609,7 +626,7 @@ mod tests {
         mock.abort();
     }
 
-    /// Неизвестная сеть должна давать 503, а не молчаливый таймаут.
+    /// An unknown network must answer 503, not time out silently.
     #[tokio::test]
     async fn unknown_chain_returns_503() {
         let state = RpcProxyState::default();
@@ -629,13 +646,14 @@ mod tests {
         stop(&state);
     }
 
-    /// Мёртвый upstream — 502 с JSON-RPC-ошибкой, а не обрыв соединения.
+    /// A dead upstream yields 502 with a JSON-RPC error, not a dropped
+    /// connection.
     ///
-    /// Иначе ethclient видит EOF и тратит время на повтор, хотя причина
-    /// уже известна.
+    /// Otherwise ethclient sees EOF and wastes time retrying, although the
+    /// cause is already known.
     #[tokio::test]
     async fn dead_upstream_returns_502() {
-        // Занимаем порт и сразу отпускаем: почти наверняка там никого нет.
+        // Take a port and release it at once: almost certainly nothing is there.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let dead_port = listener.local_addr().expect("addr").port();
         drop(listener);
@@ -662,8 +680,8 @@ mod tests {
         stop(&state);
     }
 
-    /// Смена таблицы на лету: новый chainId становится доступен без
-    /// перезапуска форвардера.
+    /// The table changes at runtime: a new chainId becomes available without
+    /// restarting the forwarder.
     #[tokio::test]
     async fn set_upstreams_takes_effect_without_restart() {
         let (mock_port, mock) = mock_upstream(r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#).await;
@@ -676,7 +694,7 @@ mod tests {
         let client = reqwest::Client::new();
         let url = url_for(&state, port, "42161");
 
-        // До обновления таблицы сети нет.
+        // The network is absent before the table is updated.
         assert_eq!(
             client.post(&url).body("{}").send().await.unwrap().status(),
             503
@@ -695,7 +713,7 @@ mod tests {
         mock.abort();
     }
 
-    /// Запрос с испорченным chainId не должен ронять процесс.
+    /// A malformed chainId must not bring the process down.
     #[tokio::test]
     async fn bad_chain_id_does_not_panic() {
         let state = RpcProxyState::default();
@@ -709,8 +727,8 @@ mod tests {
             .send()
             .await;
 
-        // Соединение может быть закрыто без ответа — главное, что процесс
-        // жив и следующий запрос обслуживается.
+        // The connection may be closed without a response — what matters is
+        // that the process survives and the next request is served.
         let _ = resp;
 
         let ok = reqwest::Client::new()
@@ -724,14 +742,14 @@ mod tests {
         stop(&state);
     }
 
-    /// Запрос без секрета в пути должен отклоняться.
+    /// A request without the secret in its path must be rejected.
     ///
-    /// Это регрессия на реальную дыру: до появления секрета любой процесс на
-    /// машине (и любая страница в WebView dApp) мог обратиться к
-    /// `127.0.0.1:<port>/1` и получить `HTTP 200` — то есть доступ к RPC.
+    /// Without the secret, any process on the machine (and any page in the dApp
+    /// WebView) could reach `127.0.0.1:<port>/1` and get `HTTP 200` — that is,
+    /// access to the RPC.
     ///
-    /// Отвечаем именно 404, а не 403: 403 подтвердил бы, что на порту
-    /// действительно живёт форвардер, и подсказал бы перебирать пути дальше.
+    /// The answer is 404 rather than 403: a 403 would confirm that a forwarder
+    /// lives on the port and suggest probing further.
     #[tokio::test]
     async fn request_without_secret_is_rejected() {
         let (mock_port, mock) = mock_upstream(r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#).await;
@@ -743,7 +761,7 @@ mod tests {
 
         let client = reqwest::Client::new();
 
-        // Голый chainId без секрета — ровно то, чем эксплуатировалась дыра.
+        // A bare chainId without the secret — exactly the shape of the hole.
         let bare = client
             .post(format!("http://127.0.0.1:{port}/1"))
             .body("{}")
@@ -756,7 +774,7 @@ mod tests {
             "request without secret must be rejected"
         );
 
-        // Чужой секрет той же длины.
+        // A foreign secret of the same length.
         let wrong = client
             .post(format!(
                 "http://127.0.0.1:{port}/{}",
@@ -772,8 +790,8 @@ mod tests {
             "request with wrong secret must be rejected"
         );
 
-        // А правильный пропускает — иначе тест выше проходил бы и на
-        // форвардере, который отклоняет всё подряд.
+        // The correct secret must pass — otherwise the checks above would also
+        // hold for a forwarder that rejects everything.
         let ok = client
             .post(url_for(&state, port, "1"))
             .body("{}")

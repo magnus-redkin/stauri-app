@@ -1,19 +1,19 @@
-//! Stauri — точка входа Tauri-приложения.
+//! Stauri: the Tauri application entry point.
 //!
-//! Здесь только сборка приложения и регистрация обработчиков. Вся логика
-//! разнесена по модулям:
+//! Only application assembly and handler registration live here. The logic is
+//! split across the modules:
 //!
-//! * [`config`] — определение и загрузка сетевой конфигурации;
-//! * [`env`] — поиск и загрузка `.env`;
-//! * [`sidecar`] — запуск и остановка `status-backend`;
-//! * [`commands`] — команды, доступные фронтенду;
-//! * [`rpc_proxy`] — форвардер RPC-провайдеров;
-//! * [`auth_proxy`] — аутентифицирующий прокси к бэкенду;
-//! * [`seed`] — работа с seed-фразой вне webview;
-//! * [`market`] — данные CoinGecko;
-//! * [`logging`] — логирование в файл и stderr с вычищением секретов;
-//! * [`updater`] — проверка и установка обновлений;
-//! * [`error`] — типизированные ошибки команд.
+//! * [`config`] — network configuration detection and loading;
+//! * [`env`] — locating and loading `.env`;
+//! * [`sidecar`] — starting and stopping `status-backend`;
+//! * [`commands`] — commands exposed to the frontend;
+//! * [`rpc_proxy`] — forwarder for RPC providers;
+//! * [`auth_proxy`] — authenticating proxy in front of the backend;
+//! * [`seed`] — seed phrase handling outside the webview;
+//! * [`market`] — CoinGecko data;
+//! * [`logging`] — file and stderr logging with secret scrubbing;
+//! * [`updater`] — update check and installation;
+//! * [`error`] — typed command errors.
 
 use tauri::Manager;
 
@@ -45,10 +45,10 @@ mod updater;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Порядок важен. `.env` грузим первым: в нём может лежать `RUST_LOG`,
-    // а `EnvFilter` читается при создании подписчика. Предупреждение об
-    // отсутствии файла печатаем уже после `logging::init` — иначе оно
-    // уходит в никуда.
+    // Order matters. `.env` is loaded first because it can carry `RUST_LOG`, and
+    // `EnvFilter` is read when the subscriber is created. The warning about a
+    // missing file is printed after `logging::init` — before that it would go
+    // nowhere.
     let env_found = env::load_env();
     logging::init();
     if !env_found {
@@ -58,20 +58,31 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_websocket::init())
         .plugin(tauri_plugin_http::init())
-        // Плагин обновлений регистрируется ради конфигурации (endpoints +
-        // pubkey из tauri.conf.json). Его команды фронтенду недоступны:
-        // permission не выдан в capabilities, фронтенд ходит через
-        // commands::check_for_update / install_update.
+        // The updater plugin is registered for its configuration alone
+        // (endpoints and pubkey from tauri.conf.json). Its commands are not
+        // available to the frontend: no permission is granted in capabilities,
+        // and the frontend goes through commands::check_for_update and
+        // commands::install_update instead.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            // Каталог конфигурации от Tauri: на Android dirs::config_dir() не работает (B.2).
+            // Directories from Tauri: on Android `dirs::config_dir()` and
+            // `dirs::data_local_dir()` do not work. `STAURI_CONFIG_DIR` and
+            // `STAURI_DATA_DIR` take priority; see `appdirs`.
             use tauri::Manager;
-            if let Ok(dir) = app.path().app_config_dir() {
+            if let Some(dir) = appdirs::env_override("STAURI_CONFIG_DIR") {
+                appdirs::set_config_dir(dir);
+            } else if let Ok(dir) = app.path().app_config_dir() {
                 appdirs::set_config_dir(dir);
             }
-     if let Ok(dir) = app.path().app_data_dir() {
-  trace::set_dir(dir);
-     }
+            let data_dir = appdirs::env_override("STAURI_DATA_DIR")
+                .or_else(|| app.path().app_data_dir().ok());
+            if let Some(dir) = &data_dir {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    tracing::warn!(dir = %dir.display(), error = %e, "не удалось создать каталог данных");
+                }
+                trace::set_dir(dir.clone());
+                appdirs::set_data_dir(dir.clone());
+            }
             Ok(())
         })
         .manage(sidecar::BackendState::default())
@@ -121,7 +132,7 @@ pub fn run() {
 
                 sidecar::shutdown(app_handle);
 
-                // Последним: дописывает то, что ещё лежит в очереди лога.
+                // Last: flushes what is still queued in the log.
                 logging::shutdown();
             }
         });

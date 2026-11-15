@@ -4,16 +4,16 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ContactsLeft from './ContactsLeft.svelte';
 import { contactsState } from '$lib/stores/contactsStore.svelte';
 
-// Мокаем store, чтобы не вызывать реальную загрузку
+// The store is mocked so the real load is not triggered.
 vi.mock('$lib/stores/contactsStore.svelte', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/stores/contactsStore.svelte')>();
   return {
     ...actual,
-    loadContacts: vi.fn(), // Не загружаем реально
+    loadContacts: vi.fn(), // Keep the load itself out of the test.
   };
 });
 
-// Мокаем getDisplayName
+// getDisplayName is mocked as well.
 vi.mock('$lib/utils/user', () => ({
   getDisplayName: (contact: any) => contact.displayName || contact.id.slice(0, 8),
 }));
@@ -45,7 +45,8 @@ describe('ContactsLeft', () => {
 
   it('должен показывать кнопку Accept для pending-запроса', () => {
     render(ContactsLeft);
-    // Bob прислал запрос (RemoteState = Received), мы его не добавляли — кнопка Accept
+    // Bob sent a request (RemoteState = Received) and was never added, so the
+    // Accept button must appear.
     expect(screen.getAllByText(/Accept/i).length).toBeGreaterThan(0);
   });
 });

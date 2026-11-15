@@ -1,7 +1,9 @@
 <script lang="ts">
   /**
-   * Правая панель «новый канал»: та же форма, что и раньше в левой колонке,
-   * но с большим описанием. Закрытие возвращает переписку.
+   * Right panel for creating a channel.
+   *
+   * Renders `CreateChannelForm` at panel size, which gives the description field
+   * more room. Closing the panel returns to the conversation.
    */
   import { i18n } from '$lib/i18n';
   import CreateChannelForm from './CreateChannelForm.svelte';

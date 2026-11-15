@@ -1,29 +1,28 @@
-//! Обмен токенов (`Swap`) внутри одной сети.
+//! Token swaps within a single network.
 //!
-//! ## Почему через Router, а не своим путём
+//! The swap is executed by a provider (Paraswap or LI.FI) and the route is
+//! built by the status-go Router: it fetches the price, computes
+//! `minAmountOut` from the slippage allowance and decides whether a separate
+//! `approve` is needed. Replicating that outside would mean diverging from the
+//! provider's calculations.
 //!
-//! Обмен выполняет провайдер (Paraswap или LI.FI), и маршрут строит Router
-//! status-go: он сам запрашивает цену, считает `minAmountOut` по допуску
-//! проскальзывания и решает, нужен ли отдельный `approve`. Повторять это
-//! снаружи значило бы расходиться с провайдером в расчётах.
+//! The signal and signature machinery is shared with ENS registration and lives
+//! in `router.rs`.
 //!
-//! Механизм сигналов и подписей общий с регистрацией ENS — он в `router.rs`.
+//! # Mainnet only
 //!
-//! ## Почему только mainnet
+//! Providers have no liquidity on test networks: `getPartnerAddressAndFeePcnt`
+//! knows five mainnet networks and LI.FI is not configured on Sepolia. A swap
+//! attempt on a test network returns "no routes found", so the network is
+//! checked here to give a clear message instead of the provider's refusal.
 //!
-//! У провайдеров нет ликвидности в тестовых сетях: `getPartnerAddressAndFeePcnt`
-//! знает пять mainnet-сетей, LI.FI на Sepolia не настроен. Попытка обмена в
-//! тестовой сети вернёт «no routes found», и это не наша недоработка. Раньше
-//! проверяем сеть здесь, чтобы человек получил понятный текст, а не отказ
-//! провайдера.
+//! # Slippage
 //!
-//! ## Проскальзывание
-//!
-//! `slippagePercentage` — допуск, на который сумма на выходе может оказаться
-//! меньше рассчитанной. Контракт его требует строго положительным
-//! (`ErrSwapSlippagePercentageMustBePositive`), поэтому ноль отправить нельзя.
-//! Значение 1 % — разумный компромисс: меньше — обмен часто отваливается при
-//! движении цены, больше — человека можно сильно обделить.
+//! `slippagePercentage` is the allowance by which the output may fall short of
+//! the quote. The contract requires it to be strictly positive
+//! (`ErrSwapSlippagePercentageMustBePositive`), so zero cannot be sent. 1% is a
+//! reasonable compromise: less and the swap often fails on price movement, more
+//! and the user can be short-changed significantly.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -36,78 +35,84 @@ use crate::router::{
     GAS_FEE_MEDIUM, connect_signals, execute_round, hex_u128, is_address, unique_uuid,
 };
 
-/// `SendType` из `pkg/services/wallet/router/sendtype/send_type.go`: Swap=8.
+/// `SendType` from `pkg/services/wallet/router/sendtype/send_type.go`: Swap=8.
 const SEND_TYPE_SWAP: u64 = 8;
 
-/// Допуск проскальзывания в процентах.
+/// Slippage allowance in percent.
 const SLIPPAGE_PERCENT: f64 = 1.0;
 
-/// Сети, где обмен реально работает: те же, что знает Paraswap.
+/// Networks where swaps actually work: the ones Paraswap knows.
 const SWAP_CHAINS: [u64; 5] = [1, 10, 42161, 8453, 56];
 
-/// Сколько ждём, пока `approve` перестанет быть незавершённым.
+/// How long to wait for an `approve` to stop being pending.
 ///
-/// Минута — с запасом: обычный `approve` в Ethereum попадает в блок за
-/// несколько секунд, а при заторе сеть всё равно не отвечает быстрее.
-/// Дольше держать команду нельзя: человек уже нажал «обменять».
+/// A minute is generous: a normal `approve` is mined within seconds on
+/// Ethereum, and under congestion the network will not answer faster. Holding
+/// the command longer is not an option — the user has already pressed "swap".
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Первые проверки — частые: чаще всего `approve` майнится почти сразу, и
-/// ждать три секунды, когда блок уже есть, незачем.
+/// The first polls are frequent: an `approve` is usually mined almost
+/// immediately, so waiting three seconds for a block that already exists is
+/// pointless.
 const MINING_POLL_FAST: Duration = Duration::from_millis(700);
 
-/// Дальше — реже, чтобы не заваливать форвардер запросами.
+/// Later polls are rarer, to avoid flooding the forwarder with requests.
 const MINING_POLL_SLOW: Duration = Duration::from_millis(2500);
 
-/// Тело запроса на обмен.
+/// Swap request body.
 #[derive(Debug, Deserialize)]
 pub struct SwapRequest {
     pub port: u16,
     pub chain_id: u64,
-    /// Адрес кошелька: и плательщик, и получатель обмена.
+    /// Wallet address: both payer and recipient of the swap.
     pub from: String,
-    /// Токен, который отдаём.
+    /// Token being given up.
     pub from_token: String,
-    /// Токен, который получаем.
+    /// Token being received.
     pub to_token: String,
-    /// Сколько отдаём, в минимальных единицах.
+    /// Amount given up, in the smallest unit.
     pub amount: String,
     pub password: String,
 }
 
-/// Оценка обмена: сколько получим и во что обойдётся.
+/// Swap quote: how much is received and what it costs.
 #[derive(Debug, Serialize)]
 pub struct SwapQuote {
-    /// Сколько получим, в минимальных единицах целевого токена.
+    /// Amount received, in the smallest unit of the target token.
     pub amount_out: String,
-    /// Минимум, который устроит при текущем проскальзывании.
+    /// Minimum acceptable at the current slippage.
     pub min_amount_out: String,
-    /// Комиссия сети в wei. `null` — маршрут не собрал цену газа.
+    /// Network fee in wei. `null` when the route did not price gas.
     pub fee: Option<String>,
-    /// Нужен ли отдельный `approve` перед обменом (для ERC-20 на входе).
+    /// Whether a separate `approve` is needed before the swap (for an ERC-20
+    /// input).
     pub needs_approval: bool,
-    /// Через кого пойдёт обмен: `Paraswap`, `Lifi` и т. п.
+    /// Who executes the swap: `Paraswap`, `Lifi`, etc.
     pub provider: String,
 }
 
-/// Результат обмена.
+/// Swap result.
 #[derive(Debug, Serialize)]
 pub struct SwapResult {
-    /// Хэш основной транзакции обмена.
+    /// Hash of the main swap transaction.
     pub tx_hash: String,
-    /// Хэш `approve`, если он был отдельной транзакцией.
+    /// Hash of the `approve`, when it was a separate transaction.
     pub approval_tx_hash: String,
 }
 
-/// Нативный актив в ответе бэкенда — нулевой адрес.
+/// The native asset as the backend reports it: the zero address.
 const NATIVE_TOKEN: &str = "0x0000000000000000000000000000000000000000";
 
-/// `tokenKey` в том виде, в каком его ждёт Router: `<chainId>-<адрес строчными>`.
+/// `tokenKey` in the form the Router expects: `<chainId>-<lowercase address>`.
 fn token_key(chain_id: u64, address: &str) -> String {
     format!("{chain_id}-{}", address.to_lowercase())
 }
 
-/// Проверяет сеть и пару токенов до обращения к провайдеру.
+/// Validates the network and the token pair before contacting the provider.
+///
+/// # Errors
+/// `ErrorKind::Config` for a test network, a malformed token address, identical
+/// tokens, a non-integer amount or a zero amount.
 fn validate(from_chain: u64, from_token: &str, to_token: &str, amount: &str) -> AppResult<u128> {
     if !SWAP_CHAINS.contains(&from_chain) {
         return Err(AppError::config(
@@ -134,10 +139,10 @@ fn validate(from_chain: u64, from_token: &str, to_token: &str, amount: &str) -> 
     Ok(value)
 }
 
-/// Параметры маршрута обмена.
+/// Swap route parameters.
 ///
-/// Общие для оценки и для отправки: расхождение означало бы «показали одну
-/// сумму, получили другую».
+/// Shared by the quote and the send: a divergence would mean showing one amount
+/// and executing another.
 fn route_params(
     uuid: &str,
     chain_id: u64,
@@ -150,8 +155,8 @@ fn route_params(
         "uuid": uuid,
         "sendType": SEND_TYPE_SWAP,
         "addrFrom": from,
-        // Получатель обмена — тот же кошелёк: обмен не перевод, деньги
-        // остаются у владельца.
+        // The swap recipient is the same wallet: a swap is not a transfer, the
+        // funds stay with the owner.
         "addrTo": from,
         "amountIn": format!("0x{amount:x}"),
         "tokenKey": token_key(chain_id, from_token),
@@ -160,20 +165,25 @@ fn route_params(
         "fromChainID": chain_id,
         "toChainID": chain_id,
         "gasFeeMode": GAS_FEE_MEDIUM,
-        // Строго больше нуля: контракт отвергает ноль.
+        // Strictly greater than zero: the contract rejects zero.
         "slippagePercentage": SLIPPAGE_PERCENT,
     })
 }
 
-/// Первый путь маршрута — обмен всегда однопутный в одной сети.
+/// First route path — a swap is always a single path within one network.
 fn first_path(route: &Value) -> Option<&Value> {
     route.get("Route")?.as_array()?.first()
 }
 
-/// Сколько получим и нужен ли `approve`.
+/// How much is received and whether an `approve` is needed.
 ///
-/// Только чтение: провайдер считает маршрут, ключ не используется. Поэтому
-/// оценку можно показать до ввода пароля.
+/// Read-only: the provider computes the route, the key is not used, so the
+/// quote can be shown before the password is entered.
+///
+/// # Errors
+/// `ErrorKind::Config` for a missing backend port, a bad wallet address or
+/// validation failures; `ErrorKind::Backend` when the backend call fails or no
+/// route is available.
 #[tauri::command]
 pub async fn get_swap_quote(
     port: u16,
@@ -206,9 +216,10 @@ pub async fn get_swap_quote(
         .and_then(|v| hex_u128(v).ok())
         .unwrap_or(0);
 
-    // Минимум на выходе Router не отдаёт отдельным полем: он уже зашит в
-    // calldata. Считаем сами тем же проскальзыванием, что уйдёт в маршрут,
-    // чтобы цифра на экране соответствовала контракту.
+    // The Router does not expose the output minimum as a separate field: it is
+    // already baked into the calldata. It is computed here with the same
+    // slippage that goes into the route, so the figure on screen matches the
+    // contract.
     let min_amount_out = (amount_out as f64 * (1.0 - SLIPPAGE_PERCENT / 100.0)).floor() as u128;
 
     let fee = path
@@ -221,7 +232,8 @@ pub async fn get_swap_quote(
         amount_out: amount_out.to_string(),
         min_amount_out: min_amount_out.to_string(),
         fee,
-        // Нативный токен не требует approve: он сразу уходит в транзакции.
+        // The native token needs no approve: it leaves directly with the
+        // transaction.
         needs_approval: path
             .get("ApprovalRequired")
             .and_then(|v| v.as_bool())
@@ -234,23 +246,27 @@ pub async fn get_swap_quote(
     })
 }
 
-/// Выполняет обмен и возвращает хэши транзакций.
+/// Executes the swap and returns the transaction hashes.
 ///
-/// ## Почему раундов может быть два
+/// Two rounds may be needed because LiFi does not return the main swap
+/// transaction together with `approve`: it is built only once `approve` is
+/// mined. `transaction_manager_route.go` states it plainly — "we cannot build
+/// the swap tx before the approval tx is mined" — and the loop breaks
+/// (`continue`) after sending `approve`. The first round therefore returns
+/// **one** transaction, and mistaking it for the swap yields an approval that
+/// went through, tokens that were not swapped, and a screen reporting "Swap
+/// executed".
 ///
-/// LiFi не отдаёт основную транзакцию обмена вместе с `approve`: она
-/// собирается только после того, как `approve` попадёт в блок. В
-/// `transaction_manager_route.go` это записано прямо — «we cannot build the
-/// swap tx before the approval tx is mined», — и после отправки `approve`
-/// цикл обрывается (`continue`). Первый раунд поэтому возвращает **одну**
-/// транзакцию, и если её принять за обмен, получится ровно то, что случилось
-/// 2026-11-08: `approve` ушёл, токены не обменялись, а экран сообщил «Swap
-/// executed».
+/// Hence: if the answer contains only `approve`, wait for it to be mined and
+/// run the round again **with the same `uuid`**. The route is kept in the
+/// backend, while a fresh `wallet_getSuggestedRoutes` would reprice at a rate
+/// the user has not agreed to.
 ///
-/// Поэтому здесь: если в ответе есть только `approve`, ждём его майнинга и
-/// запускаем раунд повторно **с тем же `uuid`**. Маршрут в бэкенде сохранён,
-/// а повторный `wallet_getSuggestedRoutes` пересчитал бы цену, на которую
-/// человек уже согласился.
+/// # Errors
+/// `ErrorKind::Config` for a missing backend port, a bad wallet address, an
+/// empty password or validation failures; `ErrorKind::Backend` when building the
+/// route, signing or sending fails; `ErrorKind::Internal` when the signals
+/// connection cannot be built.
 #[tauri::command]
 pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
     if request.port == 0 {
@@ -292,14 +308,15 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
     )
     .await?;
 
-    // Один `approve` без основной транзакции — не обмен, а его подготовка.
+    // A lone `approve` without the main transaction is not a swap but its
+    // preparation.
     let approval_only = first.len() == 1 && first[0].is_approval;
 
     let final_txs = if approval_only {
         let approval_hash = first[0].hash.clone();
         wait_until_not_pending(backend, &approval_hash).await?;
 
-        // Второй раунд по тому же uuid: маршрут уже в бэкенде.
+        // Second round with the same uuid: the route is already in the backend.
         let second = execute_round(
             &mut ws,
             backend,
@@ -325,8 +342,8 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
 
     let (approval_tx_hash, txs) = final_txs;
 
-    // Основная транзакция — последняя не-approve. Если её нет, обмен не
-    // состоялся, и сообщать об успехе нельзя.
+    // The main transaction is the last non-approve one. Without it the swap did
+    // not happen and success must not be reported.
     let tx_hash = txs
         .iter()
         .rev()
@@ -344,35 +361,33 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
     })
 }
 
-/// Ждёт, пока транзакция перестанет быть незавершённой.
+/// Waits until the transaction stops being pending.
 ///
-/// ## Почему `wallet_getPendingTransactions`, а не квитанция
+/// `wallet_getPendingTransactions` is used rather than a receipt because
+/// `wallet_getTransactionReceipt` does not exist in status-go ("method does not
+/// exist/is not available") and `eth_getTransactionReceipt` lives in the `eth`
+/// namespace, unreachable through `CallRPC` as well. The pending-transaction
+/// tracker, however, removes its entry once the transaction is mined or
+/// dropped — exactly the event being awaited.
 ///
-/// `wallet_getTransactionReceipt` в status-go не существует (проверено
-/// запросом: «method does not exist/is not available»), а
-/// `eth_getTransactionReceipt` живёт в пространстве `eth` и через
-/// `CallRPC` тоже недоступен. Зато трекер незавершённых транзакций сам
-/// убирает запись, когда она попала в блок или отброшена, — и это ровно то
-/// событие, которого мы ждём.
+/// Success and failure cannot be distinguished from this list, deliberately: if
+/// `approve` failed, the second round returns the provider's error and the user
+/// sees the cause. Inventing a verdict from a missing entry would be a guess.
 ///
-/// Отличить успех от провала по этому списку нельзя, и это осознанно: если
-/// `approve` провалился, второй раунд вернёт ошибку от провайдера, и человек
-/// увидит причину. Выдумывать здесь вердикт по отсутствию записи было бы
-/// догадкой.
+/// Waiting is bounded because the transaction may never be mined: a timeout
+/// returns a clear error — tokens not taken, `approve` sent, the swap can be
+/// retried.
 ///
-/// ## Почему ждём с ограничением
-///
-/// Транзакция может не попасть в блок вовсе. Вечное ожидание заблокировало бы
-/// команду, поэтому по таймауту возвращаем понятную ошибку: токены не
-/// списаны, `approve` отправлен, обмен можно повторить.
+/// # Errors
+/// `ErrorKind::Backend` when the approval is still pending at the deadline.
 async fn wait_until_not_pending(backend: Backend, tx_hash: &str) -> AppResult<()> {
     let deadline = tokio::time::Instant::now() + MINING_TIMEOUT;
     let hash = tx_hash.to_ascii_lowercase();
     let mut attempt = 0u32;
 
     loop {
-        // Первая проверка — сразу: `approve` часто майнится быстрее, чем мы
-        // успеваем дойти сюда.
+        // The first check happens at once: an `approve` is often mined before
+        // execution reaches here.
         if let Ok(pending) = backend
             .call("wallet_getPendingTransactions", json!([]))
             .await
@@ -387,8 +402,9 @@ async fn wait_until_not_pending(backend: Backend, tx_hash: &str) -> AppResult<()
                             .unwrap_or(false)
                     })
                 })
-                // Список не разобрался — считаем, что ждать больше нечего:
-                // второй раунд сам вернёт ошибку, если что-то не так.
+                // The list could not be parsed — treat it as nothing left to
+                // wait for: the second round will return the error if something
+                // is wrong.
                 .unwrap_or(false);
             if !still_pending {
                 return Ok(());
@@ -411,7 +427,8 @@ async fn wait_until_not_pending(backend: Backend, tx_hash: &str) -> AppResult<()
     }
 }
 
-/// Собирает адрес нативного токена — для фронтенда, чтобы не хардкодить.
+/// Builds the native token address — for the frontend, so it need not be
+/// hardcoded.
 #[tauri::command]
 pub fn native_token_address() -> String {
     NATIVE_TOKEN.to_string()
@@ -439,8 +456,8 @@ mod tests {
 
     #[test]
     fn rejects_test_networks_with_a_clear_message() {
-        // В тестовых сетях ликвидности у провайдеров нет, и отказ провайдера
-        // ничего не объясняет. Проверяем заранее.
+        // Providers have no liquidity on test networks, and their refusal
+        // explains nothing, so this is checked in advance.
         for chain in [11155111u64, 84532, 421614, 560048] {
             let err = validate(
                 chain,
@@ -478,7 +495,8 @@ mod tests {
 
     #[test]
     fn token_key_uses_the_status_go_format() {
-        // Дефис, а не двоеточие: на двоеточии бэкенд молча не найдёт токен.
+        // A hyphen, not a colon: with a colon the backend silently finds no
+        // token.
         assert_eq!(
             token_key(1, "0x744D70FDBE2BA4CF95131626614A1763DF805B9E"),
             "1-0x744d70fdbe2ba4cf95131626614a1763df805b9e"
@@ -498,9 +516,9 @@ mod tests {
 
         assert_eq!(params["sendType"], 8, "Swap");
         assert_eq!(params["amountIn"], "0x3e8");
-        // Ноль контракт отвергает (ErrSwapSlippagePercentageMustBePositive).
+        // Zero is rejected by the contract (ErrSwapSlippagePercentageMustBePositive).
         assert!(params["slippagePercentage"].as_f64().unwrap() > 0.0);
-        // Обмен не перевод: получатель — тот же кошелёк.
+        // A swap is not a transfer: the recipient is the same wallet.
         assert_eq!(params["addrFrom"], params["addrTo"]);
     }
 
@@ -530,7 +548,7 @@ mod tests {
 
     #[test]
     fn min_amount_out_respects_slippage() {
-        // 1000 на выходе при 1 % проскальзывания — минимум 990.
+        // 1000 out at 1% slippage leaves a minimum of 990.
         let amount_out: u128 = 1000;
         let min = (amount_out as f64 * (1.0 - SLIPPAGE_PERCENT / 100.0)).floor() as u128;
         assert_eq!(min, 990);

@@ -1,26 +1,28 @@
 /**
- * Тип канала АКК.
+ * Channel kind for the AKK scheme.
  *
- * Тип хранится **префиксом в описании канала**, например `[issues] Баги`.
- * Описание видят все участники и оно синхронизируется через status-go, поэтому
- * тип одинаков у всех. В status-go своего поля типа канала нет, а теги
- * сообщества принимают только фиксированный список, поэтому префикс — единственный
- * вариант без форка.
+ * The kind is stored as a prefix in the channel description, for example
+ * `[issues] Bugs`. Every member sees the description and status-go syncs it, so
+ * the kind is the same for all of them. status-go has no channel kind field, and
+ * community tags accept only a fixed list, so the prefix is the only option that
+ * needs no fork.
  *
- * Это соглашение Stauri, а не протокол. При переходе на Logos его нужно
- * заменить на поле канала: вся работа с типом сосредоточена в этом файле.
+ * @remarks
+ * This is a Stauri convention, not a protocol one. Moving to Logos means
+ * replacing it with a real channel field; all kind handling is confined to this
+ * file for that reason.
  */
 
 export type ChannelKind = 'news' | 'request' | 'issues';
 
-/** Какие типы вступают по заявке. `news` — открытый, остальные — по заявке. */
+/** Which kinds require an approved join request. `news` is open. */
 export const KIND_JOINS_BY_REQUEST: Record<ChannelKind, boolean> = {
   news: false,
   request: true,
   issues: true,
 };
 
-/** Кто пишет записи: только автор, или все вступившие. */
+/** Who may post entries: the author only, or every joined member. */
 export const KIND_RECORDS_BY_AUTHOR_ONLY: Record<ChannelKind, boolean> = {
   news: true,
   request: true,
@@ -35,16 +37,26 @@ const PREFIX: Record<ChannelKind, string> = {
 
 const PREFIX_RE = /^\[(news|request|issues)\]\s*/;
 
-/** Добавляет тип в описание канала. */
+/**
+ * Encodes the channel kind into its description.
+ *
+ * @param kind - Kind to encode.
+ * @param description - Description as entered by the author.
+ * @returns Description prefixed with the kind tag.
+ */
 export function withKindPrefix(kind: ChannelKind, description: string): string {
   return `${PREFIX[kind]} ${description}`.trim();
 }
 
 /**
- * Достаёт тип и чистое описание из описания канала.
+ * Splits a channel description into its kind and the plain description.
  *
- * Канал без префикса (созданный не через Stauri) считаем `request`: это
- * безопаснее, чем открытый. Сами права на бэкенде при этом не меняются.
+ * @param description - Raw channel description from status-go.
+ * @returns The parsed kind and the description with the prefix removed.
+ * @remarks
+ * A description without a prefix, typically a channel created outside Stauri,
+ * is treated as `request`: that is safer than assuming it is open. Backend
+ * permissions are unaffected either way, since the kind is client-side only.
  */
 export function parseKind(description: string | undefined): { kind: ChannelKind; description: string } {
   const m = (description || '').match(PREFIX_RE);

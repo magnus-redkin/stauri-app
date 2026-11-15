@@ -1,20 +1,15 @@
 <script lang="ts">
   /**
-   * Форма вступления в сообщество.
+   * Join form for a community.
    *
-   * ## Почему отдельным компонентом
+   * A separate component because the steps are not about the directory tree: choosing the
+   * addresses to reveal, the airdrop address, the password and the token gate check. Keeping
+   * them in `DappsMain` would mix directory navigation with a form that has its own logic
+   * and state.
    *
-   * Шагов много и они не про дерево каталога: выбор раскрываемых адресов,
-   * airdrop-адрес, пароль, проверка токен-гейта. Держать это в `DappsMain`
-   * значило бы смешать навигацию по каталогу с формой, у которой своя
-   * логика и своё состояние.
-   *
-   * ## Почему «Вступить» — не одно нажатие
-   *
-   * В status-go `requestToJoinCommunity` требует непустой список адресов,
-   * `airdropAddress` внутри него и подпись на каждый адрес — а подпись
-   * проверяет пароль (`GetVerifiedWalletAccount`). Поэтому сначала выбор
-   * адресов и пароль.
+   * Joining is not a single click: status-go's `requestToJoinCommunity` requires a non-empty
+   * address list, an `airdropAddress` contained in it, and a signature per address — and
+   * signing verifies the password through `GetVerifiedWalletAccount`.
    */
   import { i18n } from '$lib/i18n';
   import { SvelteSet } from 'svelte/reactivity';
@@ -30,11 +25,10 @@
 
   let password = $state('');
   /**
-   * Отмеченные адреса.
+   * Addresses marked for sharing.
    *
-   * `SvelteSet` нельзя оборачивать в `$state`: он реактивен сам. Поэтому
-   * множество не пересоздаётся, а очищается и наполняется — переприсваивание
-   * потеряло бы подписки.
+   * `SvelteSet` is reactive on its own and must not be wrapped in `$state`, so the set is
+   * cleared and refilled rather than replaced — reassigning would drop the subscriptions.
    */
   const selectedAddresses = new SvelteSet<string>();
   let airdropAddress = $state('');
@@ -43,14 +37,14 @@
   const entry = $derived(communitiesState.selected);
 
   /**
-   * Готовит форму при монтировании: тянет адреса и проверяет токен-гейт.
+   * Prepares the form on mount: loads the wallet addresses and checks the token gate.
    *
-   * По умолчанию отмечаем все адреса — это и есть «Share all addresses to
-   * join» из SIM. Снять лишние пользователь может вручную.
+   * All addresses are selected by default, matching "Share all addresses to join" in Status.
+   * Extra ones can be unchecked by hand.
    *
-   * Готовим здесь, а не в родителе: компонент монтируется ровно тогда, когда
-   * пользователь раскрыл форму, и это же место знает о своём состоянии.
-   * `untrack` не нужен — `$effect` ниже пишет только в локальные `$state`.
+   * Preparation happens here rather than in the parent because the component mounts exactly
+   * when the user expands the form, and it is the place that owns this state. No `untrack`
+   * is needed: the `$effect` below writes only to local `$state`.
    */
   let prepared = false;
   $effect(() => {
@@ -62,8 +56,8 @@
       for (const addr of addresses) selectedAddresses.add(addr);
       airdropAddress = addresses[0] || '';
 
-      // Для токен-гейта сразу проверяем, проходят ли адреса: иначе
-      // пользователь введёт пароль и получит отказ от владельца.
+      // For a token gate, check eligibility up front: otherwise the user types a password
+      // only to be refused by the community owner.
       if (entry.access === 'token') await checkEligibility();
     })();
   });
@@ -87,8 +81,8 @@
 
     if (result.ok) {
       password = '';
-      // Каналы появятся после ответа владельца, но список стоит обновить
-      // сразу: для AUTO_ACCEPT сообщества ответ приходит почти мгновенно.
+      // Channels appear only after the owner responds, but the list is refreshed right
+      // away: for AUTO_ACCEPT communities the response arrives almost instantly.
       await loadChats(true);
       message = { kind: 'pending', text: i18n.t('Request sent') };
     } else {
@@ -115,9 +109,9 @@
   {/if}
 
   <!--
-    Выбор адресов — не формальность: без него status-go откажет
-    (RequestToJoinCommunity.Validate требует непустой список и
-    airdropAddress внутри него).
+    Address selection is not a formality: status-go refuses a request without it
+    (`RequestToJoinCommunity.Validate` requires a non-empty list and an `airdropAddress`
+    contained in it).
   -->
   <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
     {i18n.t('Select address to share')}
@@ -165,8 +159,9 @@
     aria-label={i18n.t('Password')}
   />
   <!--
-    Пароль нужен потому, что подпись адресов делает status-go и проверяет его
-    через GetVerifiedWalletAccount. Не наша проверка и наружу не передаётся.
+    The password is needed because signing the revealed addresses is done by status-go,
+    which verifies it through GetVerifiedWalletAccount. It is not checked here and never
+    leaves the request.
   -->
   <p class="text-[0.625rem] text-muted-foreground">
     {i18n.t('The password is needed to sign the revealed addresses')}

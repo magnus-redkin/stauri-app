@@ -9,10 +9,10 @@
   import { error } from '$lib/utils/log';
 
   /**
-   * Запись, к которой открыт экран, и её ответы.
+   * The post this screen is open for, plus its replies.
    *
-   * Ответы приходят уже отфильтрованными родителем: здесь только отображение
-   * и отправка.
+   * `replies` arrive already filtered by the parent, so this screen only renders
+   * them and sends new ones.
    */
   let {
     post,
@@ -65,7 +65,7 @@
 
   <ScrollArea class="flex-1 min-h-0">
     <div class="p-4 space-y-4">
-      <!-- Исходная запись: только текст -->
+      <!-- The source post is shown as text only. -->
       <div class="text-sm">
         <div class="font-bold">{authorNameOf(post)}</div>
         <div class="whitespace-pre-wrap break-words">{formatMessageText(post.text, chatsState.contacts)}</div>

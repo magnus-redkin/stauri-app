@@ -20,8 +20,8 @@ function token(over: Partial<WalletToken> & { symbol: string }): WalletToken {
 
 describe('MAINNET_CHAINS', () => {
   it('includes production networks only', () => {
-    // Компаратор обязателен: `.sort()` по умолчанию сравнивает строки, и
-    // [1, 10, 42161, 56, 8453] выглядело бы как ошибка в наборе.
+    // The numeric comparator matters: a default `.sort()` compares strings and
+    // would make [1, 10, 42161, 56, 8453] look like a broken set.
     expect([...MAINNET_CHAINS].sort((a, b) => a - b)).toEqual([1, 10, 56, 8453, 42161]);
   });
 
@@ -34,8 +34,8 @@ describe('MAINNET_CHAINS', () => {
 
 describe('priceKey', () => {
   it('uses the status-go key format', () => {
-    // status-go строит ключ как "<chainId>-<адрес строчными>".
-    // Двоеточие вместо дефиса дало бы пустую цену без всякой ошибки.
+    // status-go builds the key as "<chainId>-<lower-cased address>". A colon
+    // instead of the dash yields an empty price with no error at all.
     expect(priceKey(1, '0x744D70FDBE2BA4CF95131626614A1763DF805B9E')).toBe(
       '1-0x744d70fdbe2ba4cf95131626614a1763df805b9e'
     );
@@ -71,7 +71,7 @@ describe('totalBalance', () => {
     const result = totalBalance(
       [
         token({ symbol: 'ETH', balance: '1000000000000000000' }),
-        // Sepolia ETH: не конвертируется в настоящий ETH.
+        // Sepolia ETH does not convert to real ETH.
         token({ symbol: 'ETH', balance: '50000000000000000000', chainId: 11155111 }),
       ],
       { '1-0x0000000000000000000000000000000000000000': 2000 }
@@ -101,7 +101,7 @@ describe('totalBalance', () => {
   });
 
   it('skips tokens whose RPC call failed', () => {
-    // hasError — «не знаем баланс», а не «ноль».
+    // hasError means "balance unknown", not "zero".
     const result = totalBalance(
       [token({ symbol: 'ETH', balance: '1000000000000000000', hasError: true })],
       { '1-0x0000000000000000000000000000000000000000': 2000 }
@@ -124,7 +124,7 @@ describe('totalBalance', () => {
   });
 
   it('keeps precision beyond 15 digits', () => {
-    // 1.234567890123456789 ETH: через number это округлилось бы.
+    // 1.234567890123456789 ETH: a `number` parse would round this away.
     const result = totalBalance(
       [token({ symbol: 'ETH', balance: '1234567890123456789' })],
       { '1-0x0000000000000000000000000000000000000000': 1 }
@@ -155,7 +155,7 @@ describe('totalBalance', () => {
       }
     );
 
-    // 1 ETH + 3 ETH по 2000
+    // 1 ETH + 3 ETH at 2000 each
     expect(result.total).toBeCloseTo(8000, 6);
     expect(result.priced).toBe(2);
   });

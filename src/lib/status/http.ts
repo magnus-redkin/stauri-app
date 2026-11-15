@@ -4,22 +4,20 @@ import { debug, error } from '$lib/utils/log';
 import { statusState } from '$lib/stores/statusStore.svelte';
 
 /**
- * Клиент status-go RPC.
+ * status-go RPC client.
  *
- * Тела запросов и ответов НЕ логируются. Раньше здесь печатались первые
- * 200 символов ответа — а `settings_getSettings` возвращает seed-фразу
- * в поле `mnemonic`, то есть фраза уходила в консоль webview при каждом
- * открытии экрана с ней.
+ * Request and response bodies are NEVER logged: `settings_getSettings` returns
+ * the seed phrase in the `mnemonic` field, so any body logging writes it to the
+ * webview console. What is logged: the method name, the duration and, on
+ * failure, the status code and the error text. Error text carries no profile
+ * data, because status-go puts it in a separate `error` field.
  *
- * Осталось логирование имени метода, длительности и, при ошибке, кода
- * статуса и текста ошибки (текст ошибки status-go не содержит данных
- * профиля — он уходит в отдельное поле `error`).
- *
- * `port` — порт АУТЕНТИФИЦИРУЮЩЕГО ПРОКСИ, а не бэкенда. Прокси требует
- * заголовок с токеном и только после проверки пересылает запрос дальше.
+ * @remarks
+ * `port` is the port of the AUTHENTICATING PROXY, not of the backend. The proxy
+ * requires a token header and forwards the request only after checking it.
  */
 
-/** Токен прокси. Кэш на время жизни страницы. */
+/** Proxy token, cached for the lifetime of the page. */
 let authToken: string | null = null;
 
 async function token(): Promise<string> {
@@ -28,7 +26,7 @@ async function token(): Promise<string> {
   return authToken;
 }
 
-/** Достаёт имя RPC-метода из тела — для лога. */
+/** Extracts the RPC method name from a request body, for logging. */
 function methodOf(body: any): string {
   if (body && typeof body === 'object' && typeof body.method === 'string') {
     return body.method;
@@ -41,7 +39,7 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
   const method = methodOf(body);
   const label = `${endpoint}/${method}`;
   const started = performance.now();
-  // Android: HTTP-сервера нет, запрос идёт через мост libstatus.so (B.2).
+  // Android has no HTTP server; requests go through the libstatus.so bridge.
   if (isAndroid()) {
     const started = performance.now();
     debug(`[statusFetch] → ${label} (bridge)`);
@@ -68,9 +66,8 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
 
   const ms = Math.round(performance.now() - started);
 
-  // 1. Проверка HTTP-статуса.
-  //    Тело ответа не печатаем и не вкладываем в текст ошибки: оно может
-  //    содержать данные профиля. Оставляем только статус и длину.
+  // Check the HTTP status first. The body is neither logged nor included in the
+  // error text: it may carry profile data. Only the status and its length stay.
   if (!response.ok) {
     const errorText = await response.text();
     error(`[statusFetch] ← ${label} HTTP ${response.status} ${ms}ms len=${errorText.length}`);
@@ -84,14 +81,14 @@ export async function statusFetch<T>(port: number, endpoint: string, body: any):
 }
 
 
-/** Разбор текста ответа status-go: пустой ответ, JSON, ошибки JSON-RPC. */
+/** Parses a status-go response: empty body, JSON, and JSON-RPC errors. */
 function parseBody<T>(text: string, label: string, endpoint: string): T {
-  // 2. Пустой ответ (например, LoginAccount) — это нормально
+  // An empty body is a normal answer, for example from LoginAccount.
   if (!text || text.trim() === '') {
     return {} as T;
   }
 
-  // 3. Парсинг JSON
+  // Parse the JSON.
   let data: any;
   try {
     data = JSON.parse(text);
@@ -100,7 +97,7 @@ function parseBody<T>(text: string, label: string, endpoint: string): T {
     throw new Error(`Invalid JSON response from ${endpoint}`, { cause: e });
   }
 
-  // 4. Обработка ошибок (единый блок для JSON-RPC и обычного API)
+  // Handle errors from both JSON-RPC and the plain API in one place.
   if (data && data.error) {
     let errorMessage: string;
 
@@ -112,8 +109,9 @@ function parseBody<T>(text: string, label: string, endpoint: string): T {
       errorMessage = JSON.stringify(data.error);
     }
 
-    // Текст ошибки логируем целиком: в нём причина отказа бэкенда, без него
-    // разбор невозможен. Данных профиля в нём нет — они в `result`.
+    // Log the full error text: it names the backend's reason for refusing, and
+    // without it the failure cannot be diagnosed. It holds no profile data —
+    // that lives in `result`.
     error(`[statusFetch] ← ${label} error: ${errorMessage}`);
     throw new Error(errorMessage);
   }
@@ -121,7 +119,7 @@ function parseBody<T>(text: string, label: string, endpoint: string): T {
   return data as T;
 }
 
-/** Android: HTTP-сервера бэкенда нет, поэтому запросы идут через мост. */
+/** On Android there is no backend HTTP server, so requests go through a bridge. */
 function isAndroid(): boolean {
   return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }

@@ -24,10 +24,9 @@
   {:else}
     <div class="flex flex-col items-center gap-4 max-w-md">
       <!--
-        QR рисуется локально: адрес никуда не отправляется. Раньше картинка
-        запрашивалась у api.qrserver.com, и этот хост, во-первых, отсутствует
-        в CSP (то есть QR не показывался вовсе), а во-вторых, получал бы
-        адрес пользователя при каждом открытии вкладки.
+        The QR code is drawn locally, so the address never leaves the app. A remote image
+        service would both sit outside the CSP and receive the user's address on every
+        visit to the tab.
       -->
       <QrCode value={walletState.address} size={192} />
 
@@ -49,9 +48,8 @@
       </div>
 
       <!--
-        Адрес один на все EVM-сети: тот, кто отправит USDT в сети Optimism
-        на этот адрес, получит его там же, где и ETH. Человек должен видеть
-        это до перевода, а не после.
+        One address serves every EVM network: USDT sent on Optimism arrives at the same
+        address as ETH. The limitation is explained before the transfer, not after it.
       -->
       <div class="w-full p-3 rounded-md bg-secondary/60 border border-border">
         <p class="text-xs text-muted-foreground">

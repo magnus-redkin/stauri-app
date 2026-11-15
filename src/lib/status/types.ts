@@ -1,7 +1,7 @@
 export interface StartBackendResponse {
-  /** Настоящий порт status-backend. Внутренний, фронтенд его не использует. */
+  /** Real status-backend port. Internal; the frontend does not use it. */
   port: number;
-  /** Порт аутентифицирующего прокси — через него идёт весь трафик. */
+  /** Authenticating proxy port, through which all traffic flows. */
   authPort: number;
   dataDir: string;
   networkName: string;
@@ -28,10 +28,10 @@ export interface NodeLoginEvent extends StatusEventBase {
       'key-uid': string;
       'display-name': string;
       'public-key': string;
-      /** Сжатый ключ `zQ3…` — основа ссылки на профиль. */
+      /** Compressed key, `zQ3…`, which the profile link is built from. */
       compressedKey?: string;
       mnemonic: string;
-      /** Трёхсловный псевдоним, например "Sarcastic Kind Eidolonhelvum". */
+      /** Three-word alias, for example "Sarcastic Kind Eidolonhelvum". */
       alias?: string;
     };
   };
@@ -45,7 +45,7 @@ export type StatusEvent = NodeLoginEvent | MessagesNewEvent | GenericEvent;
 
 export interface WalletBalance {
   symbol: string;
-  balance: string; // wei или минимальные единицы, в виде строки
+  balance: string; // wei or the token's smallest unit, as a string
   decimals: number;
 }
 
@@ -58,11 +58,12 @@ export interface ChatMessage {
 }
 
 /**
- * Запись чата в том виде, в каком её отдаёт status-go.
+ * Chat record as status-go returns it.
  *
- * Поле `chatType` — число, а не строка (см. `ChatType` в `messaging.ts`).
- * Поля сообщества (`communityId`, `categoryId`) заполнены только у каналов
- * внутри сообществ: по ним строится группировка в списке.
+ * `chatType` is a number, not a string (see `ChatType` in `messaging.ts`), and
+ * filtering by string silently finds nothing. The community fields
+ * (`communityId`, `categoryId`) are set only on channels inside communities;
+ * the list groups chats by them.
  */
 export interface Chat {
   id: string;
@@ -70,7 +71,7 @@ export interface Chat {
   description?: string;
   color?: string;
   emoji?: string;
-  /** Мягкое удаление: чат скрыт из списка. */
+  /** Soft delete: the chat is hidden from the list. */
   active: boolean;
   chatType: number;
   timestamp: number;
@@ -78,15 +79,15 @@ export interface Chat {
   unviewedMentionsCount: number;
   lastMessage?: ChatMessage | null;
   muted?: boolean;
-  /** id сообщества, если чат принадлежит сообществу. */
+  /** Community id, when the chat belongs to a community. */
   communityId?: string;
-  /** id категории внутри сообщества. */
+  /** Category id inside the community. */
   categoryId?: string;
-  /** Можно ли писать в канал (учитывает права и токен-гейт). */
+  /** Whether posting is allowed (accounts for permissions and token gating). */
   canPost?: boolean;
 }
 
-/** Канал внутри сообщества (`Community.chats` в ответе status-go). */
+/** A channel inside a community (`Community.chats` in a status-go response). */
 export interface CommunityChat {
   id: string;
   name: string;
@@ -98,7 +99,7 @@ export interface CommunityChat {
   position?: number;
   categoryID?: string;
   tokenGated?: boolean;
-  /** Подставляется на нашей стороне при разворачивании списка. */
+  /** Filled in on our side when the list is flattened. */
   communityId?: string;
   communityName?: string;
 }
@@ -110,24 +111,24 @@ export interface CommunityCategory {
 }
 
 /**
- * Как сообщество пускает внутрь (`CommunityPermissions_Access`).
+ * How a community lets people in (`CommunityPermissions_Access`).
  *
- * Значения из internal/protocol/protobuf/communities.pb.go — можно
- * сравнивать числом, но в коде удобнее строкой:
- *   * `open`    — AUTO_ACCEPT (1), заявка принимается автоматически;
- *   * `request` — MANUAL_ACCEPT (3), решает владелец;
- *   * `token`   — есть право BECOME_MEMBER (type = 2), нужен токен;
- *   * `unknown` — UNKNOWN_ACCESS (0) или поля нет; трактуем как `request`,
- *                 потому что «всегда нужно просить доступ» — поведение
- *                 по умолчанию в status-go.
+ * Values come from internal/protocol/protobuf/communities.pb.go. They can be
+ * compared as numbers, but a string is easier to read in code:
+ *   * `open`    — AUTO_ACCEPT (1), the request is accepted automatically;
+ *   * `request` — MANUAL_ACCEPT (3), the owner decides;
+ *   * `token`   — there is a BECOME_MEMBER right (type = 2), a token is required;
+ *   * `unknown` — UNKNOWN_ACCESS (0) or the field is absent; treated as
+ *                 `request`, because "access must always be requested" is the
+ *                 status-go default.
  */
 export type CommunityAccess = 'open' | 'request' | 'token' | 'unknown';
 
 /**
- * Права сообщества, вложенный объект `permissions`.
+ * Community permissions, the nested `permissions` object.
  *
- * `access` — число из перечисления; `ensOnly` приходит как `ens_only`
- * (тег encoding/json на protobuf-структуре).
+ * `access` is a number from the enum. `ensOnly` arrives as `ens_only`, the JSON
+ * tag on the protobuf struct.
  */
 export interface CommunityPermissions {
   access?: number;
@@ -136,9 +137,9 @@ export interface CommunityPermissions {
 }
 
 /**
- * Токен-право (`CommunityTokenPermission`).
+ * Token permission (`CommunityTokenPermission`).
  *
- * `type` — перечисление: 1 BECOME_ADMIN, 2 BECOME_MEMBER, 3 CAN_VIEW_CHANNEL,
+ * `type` is an enum: 1 BECOME_ADMIN, 2 BECOME_MEMBER, 3 CAN_VIEW_CHANNEL,
  * 4 CAN_VIEW_AND_POST_CHANNEL, 5 BECOME_TOKEN_MASTER, 6 BECOME_TOKEN_OWNER.
  */
 export interface CommunityTokenPermission {
@@ -149,7 +150,7 @@ export interface CommunityTokenPermission {
   is_private?: boolean;
 }
 
-/** Сообщество со всеми каналами и категориями. */
+/** A community with all its channels and categories. */
 export interface Community {
   id: string;
   name: string;
@@ -158,33 +159,33 @@ export interface Community {
   joined: boolean;
   isMember?: boolean;
   muted?: boolean;
-  /** Просматривается без вступления (spectate). */
+  /** Viewing without joining (spectate). */
   spectated?: boolean;
-  /** Карта id канала -> канал. Именно объект, а не массив. */
+  /** Map of channel id to channel. A map, not an array. */
   chats: Record<string, CommunityChat>;
-  /** Карта id категории -> категория. */
+  /** Map of category id to category. */
   categories: Record<string, CommunityCategory>;
   activeMembersCount?: number;
   /**
-   * Вступление по заявке (MANUAL_ACCEPT).
+   * Joining requires approval (MANUAL_ACCEPT).
    *
-   * Внимание: `false` из-за того, что мы УЖЕ участники, и `false` из-за
-   * того, что сообщество открытое, — неразличимы. Поэтому само по себе поле
-   * не ответ: смотреть надо вместе с `joined`/`isMember`, а лучше — на
-   * `permissions.access` через `communityAccess()`.
+   * `false` because the user is ALREADY a member and `false` because the
+   * community is open are indistinguishable here, so this field alone is not an
+   * answer: read it together with `joined`/`isMember`, or prefer
+   * `permissions.access` through `communityAccess()`.
    */
   canRequestAccess?: boolean;
   /**
-   * Может ли текущий пользователь решать заявки (владелец или админ).
-   * Для АКК это признак «автор канала».
+   * Whether the current user may decide join requests (owner or admin).
+   * For AKK this marks the channel author.
    */
   canManageUsers?: boolean;
   /**
-   * Роль текущего пользователя в сообществе (`CommunityMember_Roles`):
-   * 1 — владелец (автор канала), 4 — админ, 0 — обычный участник.
+   * Role of the current user in the community (`CommunityMember_Roles`):
+   * 1 is owner (channel author), 4 is admin, 0 is a regular member.
    */
   memberRole?: number;
-  /** Вступление без заявки (AUTO_ACCEPT) и мы ещё не участники. */
+  /** Joining needs no approval (AUTO_ACCEPT) and the user is not a member yet. */
   canJoin?: boolean;
   permissions?: CommunityPermissions;
   tokenPermissions?: Record<string, CommunityTokenPermission>;

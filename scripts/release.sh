@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# release.sh — сборка AppImage для Stauri (нативно, Ubuntu 24.04+).
+# release.sh — builds the Stauri AppImage natively (Ubuntu 24.04+).
 #
-# Использование (из stauri-app/):
+# Usage (from stauri-app/):
 #   ./scripts/release.sh 0.2.0
 #
-# Предполагается, что src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu
-# и src-tauri/binaries/libsds.so уже собраны в Nix (см. docs/BUILDING.md).
-# Скрипт только собирает фронтенд, Rust-бинарник, AppDir и AppImage.
+# Expects src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu and
+# src-tauri/binaries/libsds.so to be built in Nix already (see docs/BUILDING.md).
+# The script only builds the frontend, the Rust binary, the AppDir and the
+# AppImage.
 
 set -euo pipefail
 
@@ -23,8 +24,8 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# Режим «только Android»: собрать и подписать APK, выйти до сборки AppImage.
-# Используется release-android.sh. Версия передаётся первым аргументом.
+# Android-only mode: build and sign the APK, then exit before the AppImage.
+# release-android.sh uses it and passes the version as the first argument.
 if [[ "${RELEASE_ONLY_ANDROID:-0}" == "1" ]]; then
   VERSION="${1:?usage: RELEASE_ONLY_ANDROID=1 release.sh <version>}"
   echo "=== Android APK только: $VERSION ==="
@@ -32,18 +33,17 @@ if [[ "${RELEASE_ONLY_ANDROID:-0}" == "1" ]]; then
   exit 0
 fi
 
-# ---------- Целостность внешних загрузок ----------
+# ---------- Integrity of downloaded tools ----------
 #
-# linuxdeploy и плагин appimage скачиваются с GitHub и исполняются.
-# Подмена CDN, компрометация аккаунта или подмена релиза даёт выполнение
-# произвольного кода на машине разработчика.
+# linuxdeploy and its AppImage plugin are downloaded from GitHub and executed.
+# A hijacked CDN, a compromised account or a swapped release would mean arbitrary
+# code running on the build machine.
 #
-# Поэтому версия зафиксирована тегом (не `continuous`, который плавает),
-# а содержимое сверяется по sha256. Скачанные ранее файлы тоже проверяются:
-# файл мог быть изменён на диске.
+# Both are therefore pinned to a tag (not the floating `continuous` release) and
+# verified by sha256, including files already on disk, which may have been
+# modified since they were downloaded.
 #
-# Плагин закреплён на версионном релизе. Чтобы получить его хеш при
-# обновлении версии:
+# To get the plugin hash when bumping the version:
 #   wget -q "$PLUGIN_URL" -O /tmp/p.AppImage && sha256sum /tmp/p.AppImage
 
 LINUXDEPLOY_URL="https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage"
@@ -52,8 +52,7 @@ LINUXDEPLOY_SHA256="36a2d7e274d12e1050d0e9ecfe11d339ed54720b2bec464c286d53f8b07f
 PLUGIN_URL="https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/1-alpha-20250213-1/linuxdeploy-plugin-appimage-x86_64.AppImage"
 PLUGIN_SHA256="992d502a248e14ab185448ddf6f6e7d25558cb84d4623c354c3af350c25fccb3"
 
-# Скачивает файл и проверяет sha256. Повторно не скачивает, но всегда
-# проверяет: локальная копия могла быть подменена.
+# fetch_verified — downloads a tool if absent and always verifies its sha256.
 fetch_verified() {
   local url="$1" dest="$2" expected="$3"
 
@@ -80,7 +79,7 @@ fetch_verified() {
 echo "=== Stauri release $VERSION ==="
 echo "Root: $ROOT"
 
-# ---------- 1. Проверка зависимостей ----------
+# ---------- 1. Dependency checks ----------
 echo
 echo "[1/8] Checking dependencies"
 
@@ -91,9 +90,9 @@ for cmd in pnpm patchelf wget node git; do
   fi
 done
 
-# Необязательные проверяльщики: без них релиз не останавливаем, но честно
-# говорим, что проверка пропущена. На CI их легко поставить пакетами
-# appstream и desktop-file-utils.
+# Optional validators: their absence does not stop the release, but the skipped
+# check is reported. On CI they come from the appstream and desktop-file-utils
+# packages.
 MISSING_TOOLS=()
 command -v appstreamcli         >/dev/null 2>&1 || MISSING_TOOLS+=(appstreamcli)
 command -v desktop-file-validate >/dev/null 2>&1 || MISSING_TOOLS+=(desktop-file-validate)
@@ -102,14 +101,13 @@ if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
   echo "  WARNING: missing tools, checks will be skipped: ${MISSING_TOOLS[*]}" >&2
 fi
 
-# Подпись и обновления обязательны.
+# Signing and updates are mandatory: a missing key or password is an error, not a
+# warning.
 #
-# Раньше отсутствие ключа или пароля давало предупреждение, и релиз собирался
-# без подписи. Практика показала, чем это кончается: AppImage выглядит
-# готовым, но `check_for_update` в нём навсегда возвращает «обновлений нет»,
-# и пользователи остаются на версии без возможности обновиться. Поэтому
-# теперь это ошибка, а не предупреждение: собранный без подписи артефакт
-# нельзя пускать в раздачу, и лучше упасть до трёхминутной сборки, чем после.
+# Without them the AppImage looks finished, but its `check_for_update` returns
+# "no updates" forever, stranding users on a version they cannot update from. An
+# unsigned artifact must not be distributed, and failing before the three-minute
+# build beats failing after it.
 SIGN_KEY="${TAURI_SIGNING_PRIVATE_KEY_PATH:-}"
 if [[ -z "$SIGN_KEY" && -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   SIGN_KEY="<TAURI_SIGNING_PRIVATE_KEY>"
@@ -126,11 +124,11 @@ if [[ "$SIGN_KEY" != "<TAURI_SIGNING_PRIVATE_KEY>" && ! -f "$SIGN_KEY" ]]; then
 fi
 echo "  signing key: ${SIGN_KEY}"
 
-# Пароль тоже обязателен. Сам по себе факт его наличия не гарантирует
-# правильность — это выяснится на подписи, — но его отсутствие гарантирует
-# провал, и узнать об этом сейчас дешевле, чем после сборки.
-# Пароль берём из системного keyring (secret-tool), если переменной нет:
-# в файлах проекта и в выводе он не появляется. Иначе — ввод скрыто.
+# The password is mandatory too. Its presence does not prove it is correct —
+# signing will reveal that — but its absence guarantees failure, and finding out
+# now is cheaper than after the build. It is read from the system keyring
+# (secret-tool) when unset, so it never appears in project files or output;
+# otherwise it is prompted for with echo disabled.
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]] && command -v secret-tool >/dev/null 2>&1; then
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(secret-tool lookup service stauri-app key tauri-signing-password 2>/dev/null || true)"
   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
@@ -146,9 +144,9 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
 fi
 echo "  signing password: set"
 
-# Публичный ключ обязан быть в конфиге заранее: он инлайнится в бинарник при
-# компиляции, и добавить его после сборки нельзя. Пустой ключ = сборка без
-# обновлений, поэтому проверяем до компиляции, а не после.
+# The public key must already be in the config: it is inlined into the binary at
+# compile time and cannot be added afterwards. An empty key means a build with
+# no updates, so this is checked before compiling rather than after.
 CONFIG_PUBKEY="$(python3 -c "
 import json
 print(json.load(open('$ROOT/src-tauri/tauri.conf.json'))['plugins']['updater']['pubkey'].strip())
@@ -177,13 +175,14 @@ echo "  patchelf: $(patchelf --version)"
 echo "  libsds:   OK"
 echo "  backend:  OK"
 
-# COINGECKO_KEY не обязателен: публичный эндпоинт отдаёт данные без ключа,
-# ключ только повышает лимит запросов. Если он есть в $ROOT/.env — попадёт
-# в бандл на этапе Vite-сборки. .env в AppImage не кладётся: артефакт
-# распространяется, и секреты из него получил бы любой скачавший.
+# COINGECKO_KEY is optional: the public endpoint serves data without a key,
+# which only raises rate limits. If present in $ROOT/.env it is picked up at the
+# Vite build stage and ends up in the bundle; .env itself is not placed in the
+# AppImage, because the artifact is distributed and its secrets would reach
+# every downloader.
 echo "  COINGECKO_KEY: $(grep -q '^COINGECKO_KEY=' "$ROOT/.env" 2>/dev/null && echo 'present (optional)' || echo 'absent (optional, keyless mode)')"
 
-# ---------- 2. Обновление версии ----------
+# ---------- 2. Version bump ----------
 echo
 echo "[2/8] Bumping version to $VERSION"
 
@@ -200,9 +199,9 @@ p.version = '$VERSION';
 fs.writeFileSync('$ROOT/src-tauri/tauri.conf.json', JSON.stringify(p, null, 2) + '\n');
 "
 
-# Cargo.toml: версия в секции [package] — единственная, которую надо трогать.
-# Без неё `cargo` и Tauri расходятся: сборка идёт с одной версией, а
-# метаданные пакета содержат другую (так и было: 0.1.0 против 0.2.0).
+# Cargo.toml: only the version in the [package] section matters. Leaving it out
+# makes cargo and Tauri disagree — the build uses one version while the package
+# metadata carries another.
 python3 - "$ROOT/src-tauri/Cargo.toml" "$VERSION" <<'PY'
 import re, sys
 path, version = sys.argv[1], sys.argv[2]
@@ -218,8 +217,8 @@ if count != 1:
 open(path, 'w', encoding='utf-8').write(new)
 PY
 
-# AppStream: самый свежий <release> должен совпадать с версией сборки, иначе
-# центры установки показывают неверную.
+# AppStream: the newest <release> must match the built version, or software
+# centers display the wrong one.
 python3 - "$ROOT/src-tauri/metainfo/com.magnus.stauri-app.appdata.xml" "$VERSION" "$(date +%Y-%m-%d)" <<'PY'
 import re, sys
 path, version, today = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -236,15 +235,15 @@ echo "  tauri.conf.json  -> $VERSION"
 echo "  Cargo.toml       -> $VERSION"
 echo "  appdata.xml      -> $VERSION"
 
-# ---------- 2a. Проверки перед сборкой ----------
+# ---------- 2a. Pre-build checks ----------
 echo
 echo "[2a/8] Pre-build checks"
 
-# AppStream и .desktop можно проверить до сборки: файлы статические.
+# AppStream and .desktop files can be validated before the build: they are static.
 METAINFO="$ROOT/src-tauri/metainfo/com.magnus.stauri-app.appdata.xml"
 if [[ -f "$METAINFO" && -n "$(command -v appstreamcli || true)" ]]; then
   appstreamcli validate --no-net "$METAINFO" 2>&1 | sed 's/^/  /'
-  # appstreamcli возвращает 0 и на info-замечаниях, ненулевой — только ошибки.
+  # appstreamcli returns 0 for info notices and non-zero only for errors.
   if ! appstreamcli validate --no-net "$METAINFO" >/dev/null 2>&1; then
     echo "ERROR: metainfo не прошёл валидацию" >&2
     exit 1
@@ -254,8 +253,8 @@ else
   echo "  WARNING: metainfo или appstreamcli отсутствуют — проверка пропущена" >&2
 fi
 
-# Git-состояние. Тег ставим ПОСЛЕ успешной сборки, поэтому сейчас только
-# предупреждаем: тегировать грязное дерево значит потерять точку сборки.
+# Git state. The tag is created only after a successful build, so a dirty tree
+# is a warning here: tagging it would lose the exact build point.
 if git rev-parse --git-dir >/dev/null 2>&1; then
   if [[ -n "$(git status --porcelain)" ]]; then
     echo "  WARNING: рабочее дерево содержит незакоммиченные изменения." >&2
@@ -271,23 +270,23 @@ else
   echo "  WARNING: не git-репозиторий — тег не будет поставлен" >&2
 fi
 
-# ---------- 3. Фронтенд ----------
+# ---------- 3. Frontend ----------
 echo
 echo "[3/8] Building frontend"
 pnpm install --frozen-lockfile
 pnpm build
 
-# ---------- 4. Rust-бинарник (без bundle) ----------
+# ---------- 4. Rust binary (no bundle) ----------
 echo
 echo "[4/8] Building Rust binary"
 
-# `--no-bundle` больше не передаём: в tauri.conf.json стоит "targets": [],
-# то есть штатный `tauri build` и так не собирает ни deb, ни AppImage.
+# `--no-bundle` is not passed: tauri.conf.json sets "targets": [], so a plain
+# `tauri build` already builds neither deb nor AppImage.
 #
-# Раньше конфиг объявлял "targets": "deb", а флаг молча отменял это обещание.
-# Несовпадение вводило в заблуждение: конфиг говорил одно, скрипт делал другое,
-# а `tauri build` без скрипта неожиданно собирал .deb. Пустой список — это
-# единственная правда: упаковкой занимается этот скрипт, см. шаг 5.
+# The empty list is the single source of truth — packaging belongs to this
+# script (step 5). A non-empty target list would make the config promise one
+# thing while the script did another, and a bare `tauri build` would surprise
+# the developer with a .deb.
 export NO_STRIP=1
 pnpm tauri build
 
@@ -306,37 +305,38 @@ echo "  tauri-app:      OK"
 echo "  status-backend: OK"
 echo "  libsds.so:      OK"
 
-# ---------- 5. Ручное создание AppDir ----------
+# ---------- 5. Manual AppDir ----------
 echo
 echo "[5/8] Creating AppDir manually"
 
 APPDIR="$ROOT/src-tauri/target/release/bundle/appimage/stauri-app.AppDir"
 rm -rf "$APPDIR"
-# Убираем AppImage от прошлой сборки: иначе при сбое linuxdeploy проверка на
-# шаге 7 найдёт старый файл и отрапортует об успехе, отдав пользователю
-# предыдущую версию с тем же именем.
+# Remove the AppImage from a previous build: otherwise, if linuxdeploy fails,
+# the step-7 check finds the old file and reports success, shipping the previous
+# version under the same name.
 rm -f "$ROOT/src-tauri/target/release/bundle/appimage/"*.AppImage
 mkdir -p "$APPDIR/usr/bin"
 mkdir -p "$APPDIR/usr/lib"
 mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
 
-# Бинарники
+# Binaries
 cp "$TAURI_BIN"   "$APPDIR/usr/bin/stauri-app"
 cp "$STATUS_BIN"  "$APPDIR/usr/bin/status-backend"
 cp "$LIBSDS"      "$APPDIR/usr/lib/libsds.so"
 
-# ---------- Зачистка nix-зависимостей ----------
+# ---------- Stripping Nix dependencies ----------
 #
-# status-backend и libsds.so собраны в Nix, поэтому у них:
-#   * INTERP указывает на /nix/store/.../ld-linux-x86-64.so.2 — на машине без
-#     этого стора execve вернёт ENOENT и AppImage не запустится вообще;
-#   * RUNPATH содержит /nix/store/...glibc... — при старте грузится nix-овский
-#     загрузчик (2.40), но системная libc.so.6 находится раньше по
-#     LD_LIBRARY_PATH (унаследованному из шелла), и в одном процессе
-#     оказываются две несовместимые glibc → SIGSEGV в конструкторах libsds.so.
+# status-backend and libsds.so are built in Nix, so they carry:
+#   * an INTERP pointing at /nix/store/.../ld-linux-x86-64.so.2 — on a machine
+#     without that store, execve returns ENOENT and the AppImage does not start
+#     at all;
+#   * a RUNPATH containing /nix/store/...glibc... — startup loads the Nix loader
+#     (2.40), but the system libc.so.6 comes earlier on the LD_LIBRARY_PATH
+#     inherited from the shell, putting two incompatible glibcs in one process
+#     and causing SIGSEGV in the libsds.so constructors.
 #
-# Поэтому: системный загрузчик + чистый $ORIGIN-RUNPATH.
+# Hence the system loader plus a clean $ORIGIN-relative RUNPATH.
 SYSTEM_LOADER="/lib64/ld-linux-x86-64.so.2"
 if [[ ! -e "$SYSTEM_LOADER" ]]; then
   echo "ERROR: $SYSTEM_LOADER not found" >&2
@@ -346,18 +346,19 @@ fi
 echo "  INTERP before: $(patchelf --print-interpreter "$APPDIR/usr/bin/status-backend" 2>/dev/null || true)"
 echo "  RUNPATH before: $(patchelf --print-rpath "$APPDIR/usr/bin/status-backend" 2>/dev/null || true)"
 
-# status-backend: libsds.so лежит в usr/lib, бинарник — в usr/bin.
+# status-backend: libsds.so lives in usr/lib, the binary in usr/bin.
 patchelf --set-interpreter "$SYSTEM_LOADER" "$APPDIR/usr/bin/status-backend"
 patchelf --set-rpath '$ORIGIN/../lib'       "$APPDIR/usr/bin/status-backend"
 
-# libsds.so: все её NEEDED — системные, но убираем nix-овскую glibc из RUNPATH.
+# libsds.so: all its NEEDED entries are system libraries, but the Nix glibc has
+# to come out of the RUNPATH.
 patchelf --set-rpath '$ORIGIN'              "$APPDIR/usr/lib/libsds.so"
 
 echo "  INTERP after:  $(patchelf --print-interpreter "$APPDIR/usr/bin/status-backend")"
 echo "  RUNPATH after: $(patchelf --print-rpath "$APPDIR/usr/bin/status-backend")"
 echo "  libsds RUNPATH after: $(patchelf --print-rpath "$APPDIR/usr/lib/libsds.so")"
 
-# Проверяем, что nix не просочился в динамическую секцию.
+# Verify that no Nix path leaked into the dynamic section.
 for f in "$APPDIR/usr/bin/status-backend" "$APPDIR/usr/lib/libsds.so"; do
   if readelf -d "$f" | grep -q '/nix/store'; then
     echo "ERROR: /nix/store still present in dynamic section of $f" >&2
@@ -369,15 +370,15 @@ echo "  no /nix/store in dynamic section"
 
 # .desktop
 #
-# Имя файла — обратный DNS, равный Tauri `identifier`. Это не вкусовщина:
-# `appimagetool` ищет метаданные AppStream по имени desktop-файла
-# (`<имя>.appdata.xml`), а `appstreamcli validate-tree` требует, чтобы
-# `<launchable>` ссылался на существующий desktop-id. Пока имя было
-# `stauri-app.desktop`, а `<id>` — `com.magnus.stauri-app`, проверки
-# падали с `metainfo-filename-cid-mismatch` и `desktop-file-not-found`,
-# и linuxdeploy отказывался собирать образ.
+# The file name is the reverse-DNS Tauri `identifier`, and that is not cosmetic:
+# `appimagetool` looks for AppStream metadata under the desktop file name
+# (`<name>.appdata.xml`), and `appstreamcli validate-tree` requires
+# `<launchable>` to reference an existing desktop id. Any other name fails
+# validation with `metainfo-filename-cid-mismatch` and `desktop-file-not-found`,
+# and linuxdeploy refuses to build the image.
 #
-# Иконка ставится по имени `stauri-app`, без пути: так её ищет менеджер окон.
+# The icon is referenced by the bare name `stauri-app`, without a path, which is
+# how the window manager looks it up.
 DESKTOP_ID="com.magnus.stauri-app"
 cat > "$APPDIR/usr/share/applications/$DESKTOP_ID.desktop" << 'EOF'
 [Desktop Entry]
@@ -404,22 +405,22 @@ else
   echo "  WARNING: desktop-file-validate отсутствует — проверка .desktop пропущена" >&2
 fi
 
-# AppStream: кладём в usr/share/metainfo/ под именем, равным <id>.
+# AppStream: installed under usr/share/metainfo/ with the name equal to <id>.
 #
-# Суффикс обязан быть `.appdata.xml`, а имя — совпадать с component id.
-# `linuxdeploy-plugin-appimage` вызывает `appstreamcli validate-tree`, и при
-# суффиксе `.metainfo.xml` тот не находит файл вовсе (`dir-no-metadata-found`),
-# а при несовпадении имени и id падает с `metainfo-filename-cid-mismatch`,
-# из-за чего плагин прерывает сборку образа.
+# The suffix must be `.appdata.xml` and the name must match the component id.
+# `linuxdeploy-plugin-appimage` runs `appstreamcli validate-tree`, which with a
+# `.metainfo.xml` suffix does not find the file at all
+# (`dir-no-metadata-found`), and with a name/id mismatch fails with
+# `metainfo-filename-cid-mismatch`; either way the plugin aborts the build.
 if [[ -f "$METAINFO" ]]; then
   mkdir -p "$APPDIR/usr/share/metainfo"
   cp "$METAINFO" "$APPDIR/usr/share/metainfo/$(basename "$METAINFO")"
   echo "  metainfo: installed as $(basename "$METAINFO")"
 fi
 
-# Лицензия: каталоги (Flathub, AppImageHub) и GPL-линтеры требуют, чтобы текст
-# шёл в комплекте. `<project_license>MPL-2.0</project_license>` в metainfo —
-# это лишь идентификатор, а не текст.
+# License: catalogs (Flathub, AppImageHub) and GPL linters require the full text
+# in the package. `<project_license>MPL-2.0</project_license>` in the metainfo is
+# only an identifier, not the text.
 LICENSE_FILE="$ROOT/LICENSE.md"
 if [[ -f "$LICENSE_FILE" ]]; then
   mkdir -p "$APPDIR/usr/share/licenses/stauri-app"
@@ -429,8 +430,8 @@ else
   echo "  WARNING: LICENSE.md отсутствует — текст лицензии не попадёт в пакет" >&2
 fi
 
-# Иконки: раскладываем по размерам в hicolor, а не только 128x128 — иначе
-# в трее и в меню на HiDPI используется растянутый мелкий файл.
+# Icons: one file per size in hicolor, not just 128x128 — otherwise the tray and
+# menu stretch a small image on HiDPI displays.
 for size in 32 128 256 512; do
   case "$size" in
     32)  src="$ROOT/src-tauri/icons/32x32.png" ;;
@@ -444,18 +445,17 @@ for size in 32 128 256 512; do
   fi
 done
 
-# Корневая иконка нужна linuxdeploy: по ней он определяет, что AppDir
-# упакован правильно.
+# Root icon: linuxdeploy uses it to tell that the AppDir is packaged correctly.
 ICON="$ROOT/src-tauri/icons/128x128.png"
 if [[ -f "$ICON" ]]; then
   cp "$ICON" "$APPDIR/stauri-app.png"
 fi
 
-# AppRun: LD_LIBRARY_PATH на usr/lib (где libsds.so) и запуск tauri-app.
+# AppRun: LD_LIBRARY_PATH to usr/lib (where libsds.so lives) and start tauri-app.
 #
-# LD_LIBRARY_PATH сбрасывается, а не дополняется: унаследованное значение может
-# содержать /usr/lib/x86_64-linux-gnu и тогда системная libc перекрывает ту,
-# с которой согласованы бинарники.
+# LD_LIBRARY_PATH is reset rather than extended: an inherited value may contain
+# /usr/lib/x86_64-linux-gnu, and the system libc then overrides the one the
+# binaries were built against.
 cat > "$APPDIR/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
@@ -471,13 +471,13 @@ echo "  AppDir: $APPDIR"
 echo
 echo "[6/8] Running linuxdeploy"
 
-# Обход segfault ldd на status-backend больше не нужен: после патча интерпретатора
-# бинарник линкуется системным загрузчиком и ldd отрабатывает штатно.
+# No ldd workaround for status-backend: once the interpreter is patched, the
+# binary is linked by the system loader and ldd runs normally.
 mkdir -p /tmp/bin
 rm -f /tmp/bin/ldd
 
-# Скачиваем linuxdeploy и плагин appimage, сверяя sha256.
-# Повторная загрузка не выполняется, но проверка — всегда.
+# Download linuxdeploy and the AppImage plugin, verifying sha256. A cached file
+# is not downloaded again, but always verified.
 fetch_verified "$LINUXDEPLOY_URL" /tmp/linuxdeploy-x86_64.AppImage "$LINUXDEPLOY_SHA256"
 fetch_verified "$PLUGIN_URL" /tmp/linuxdeploy-plugin-appimage-x86_64.AppImage "$PLUGIN_SHA256"
 chmod +x /tmp/linuxdeploy-x86_64.AppImage /tmp/linuxdeploy-plugin-appimage-x86_64.AppImage
@@ -494,12 +494,12 @@ APPIMAGE_EXTRACT_AND_RUN=1 \
   --appdir "$(basename "$APPDIR")" \
   --output appimage
 
-# ---------- 7. Проверка ----------
+# ---------- 7. Verification ----------
 echo
 echo "[7/8] Verifying AppImage"
 
-# Берём самый свежий файл, а не первый попавшийся: linuxdeploy при некоторых
-# настройках плагина кладёт рядом и версионированный AppImage, и ссылку на него.
+# Take the newest file rather than the first match: under some plugin settings
+# linuxdeploy writes both a versioned AppImage and a symlink to it.
 APPIMAGE_PATH=$(
   find "$(dirname "$APPDIR")" -maxdepth 1 -name "*.AppImage" -printf '%T@ %p\n' \
     | sort -rn | head -1 | cut -d' ' -f2- || true
@@ -535,8 +535,8 @@ trap 'rm -rf "$TMP"' EXIT
     exit 1
   fi
 
-  # Запуск под «грязным» окружением — воспроизводит условия машины с
-  # унаследованным LD_LIBRARY_PATH из шелла.
+  # Start under a "dirty" environment, reproducing a machine with an inherited
+  # LD_LIBRARY_PATH from the shell.
   if LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu \
      squashfs-root/usr/bin/status-backend --help >/dev/null 2>&1; then
     echo "  ✓ status-backend starts under inherited LD_LIBRARY_PATH"
@@ -550,7 +550,7 @@ echo
 echo "=== Done ==="
 echo "AppImage: $APPIMAGE_PATH"
 
-# ---------- 7a. APK (Android) — см. scripts/lib/android-apk.sh ----------
+# ---------- 7a. APK (Android) — see scripts/lib/android-apk.sh ----------
 echo
 if [[ "${RELEASE_SKIP_ANDROID:-0}" == "1" ]]; then
   echo "[7a] Android APK: пропущен (RELEASE_SKIP_ANDROID=1, собирает release-android.sh)"
@@ -559,12 +559,12 @@ else
   source "$ROOT/scripts/lib/android-apk.sh"
 fi
 
-# ---------- 8. Контрольные суммы, подпись, манифест обновления, тег ----------
+# ---------- 8. Checksums, signature, update manifest, git tag ----------
 echo
 echo "[8/8] Checksums, signature, update manifest, git tag"
 
-# Рядом с AppImage кладём <имя>.sha256 в формате `sha256sum -c`: его можно
-# проверить одной командой и он не зависит от нашего скрипта.
+# Write <name>.sha256 next to the AppImage in `sha256sum -c` format: it can be
+# checked with a single command and does not depend on this script.
 CHECKSUM_FILE="${APPIMAGE_PATH}.sha256"
 if command -v sha256sum >/dev/null 2>&1; then
   (
@@ -577,13 +577,13 @@ else
   echo "  WARNING: sha256sum отсутствует — контрольная сумма не создана" >&2
 fi
 
-# Подпись minisign-совместимым ключом Tauri. Это же подпись, которую
-# проверяет встроенный updater, поэтому она полезна и без автообновления:
-# пользователь может убедиться, что файл собран нами.
+# Sign with a minisign-compatible key in Tauri's format. This is the signature
+# the built-in updater verifies, so it is useful beyond auto-update: a user can
+# confirm that the file was built by this project.
 #
-# --app-version привязывает подпись к версии: она попадает в подписанный
-# trusted comment, и updater с requireSignedVersion отвергнет манифест,
-# в котором номер версии подменён на другой.
+# --app-version binds the signature to the version: it goes into the signed
+# trusted comment, so an updater with requireSignedVersion rejects a manifest
+# whose version number has been swapped.
 if [[ -n "$SIGN_KEY" ]]; then
   SIGNATURE_FILE="${APPIMAGE_PATH}.sig"
   if [[ "$SIGN_KEY" == "<TAURI_SIGNING_PRIVATE_KEY>" ]]; then
@@ -601,27 +601,27 @@ else
   echo "  WARNING: подпись пропущена (ключ не задан)" >&2
 fi
 
-# Манифест обновления latest.json — ровно то, что скачивает встроенный
-# updater по адресу из plugins.updater.endpoints в tauri.conf.json.
+# The latest.json update manifest is exactly what the built-in updater downloads
+# from the address in plugins.updater.endpoints in tauri.conf.json.
 #
-# Формат «static»: один файл описывает платформы, и updater выбирает запись
-# по ключу linux-x86_64. Имя ключа — это формат из tauri-plugin-updater
-# (updater_os + "-" + updater_arch), менять его нельзя.
+# Static format: one file describes all platforms, and the updater picks the
+# entry by key. The key `linux-x86_64` is the tauri-plugin-updater format
+# (updater_os + "-" + updater_arch) and must not be changed.
 #
-# url — GitHub releases: тег загружается отдельно, но имя файла должно
-# совпадать с тем, что реально положено в релиз. signature — содержимое
-# .sig одной строкой, как его ждёт плагин.
+# url points at GitHub releases: the tag is uploaded separately, but the file
+# name must match what is actually attached to the release. signature is the
+# contents of the .sig file on a single line, as the plugin expects.
 MANIFEST_FILE="$(dirname "$APPIMAGE_PATH")/latest.json"
 
-# Сверка ключа в собранном бинарнике.
+# Cross-check the key inside the built binary.
 #
-# Это ровно тот промах, который случился на релизе 0.2.0: подпись и
-# latest.json создались, но в tauri.conf.json на момент сборки pubkey был
-# пуст. Внешне релиз выглядел готовым, а обновления в нём не работали бы
-# вовсе — `check_for_update` вернул бы None навсегда.
+# The key is inlined as a string, so finding it in the binary is enough. This
+# catches the case where the signature and latest.json were produced but
+# tauri.conf.json had an empty pubkey at build time: the release looks complete
+# while `check_for_update` would return None forever.
 #
-# Ключ инлайнится в бинарник как строка, поэтому его достаточно найти в нём.
-# Проверяем только когда ключ задан: иначе такого требования нет.
+# Checked only when a key is configured: without one there is no such
+# requirement.
 CONFIG_PUBKEY="$(python3 -c "
 import json
 print(json.load(open('$ROOT/src-tauri/tauri.conf.json'))['plugins']['updater']['pubkey'].strip())
@@ -670,10 +670,10 @@ else
   MANIFEST_FILE=""
 fi
 
-# Тег ставится последним и только при успехе: он должен указывать на код,
-# из которого действительно собран этот AppImage. Push не делаем — отправка
-# в remote остаётся решением человека. `git tag -a` создаёт аннотированный
-# тег, у него есть дата и автор, в отличие от лёгкого.
+# The tag is created last, and only on success: it must point at the very code
+# this AppImage was built from. Nothing is pushed — publishing to the remote is
+# a human decision. `git tag -a` makes an annotated tag, which carries a date and
+# an author, unlike a lightweight one.
 if [[ "${RELEASE_NO_TAG:-0}" == "1" ]]; then
   echo "  tag: пропущен (RELEASE_NO_TAG=1, тег ставит release-create.sh)"
 elif git rev-parse --git-dir >/dev/null 2>&1; then

@@ -1,9 +1,10 @@
 <script lang="ts">
   /**
-   * Иконки раздела «Чат» в титульной строке мобильного режима.
+   * Chat section icons for the mobile title bar.
    *
-   * Те же четыре действия, что и в левой панели десктопа: приглашение, вступление
-   * по приглашению, новый канал и лупа (поиск контактов и каналов).
+   * The same four actions as the desktop left panel: invite a contact, join by
+   * invite, create a channel, and the magnifier that opens contact and channel
+   * search.
    */
   import { i18n } from '$lib/i18n';
   import { setRightPanel } from '$lib/stores/chatsStore.svelte';

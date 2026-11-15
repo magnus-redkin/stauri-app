@@ -7,13 +7,11 @@
 </script>
 
 <div class="flex flex-col h-full border-r border-border bg-card">
-  <!-- Заголовок -->
   <div class="p-4 border-b border-border flex justify-between items-center">
     <span class="font-bold text-lg text-primary">{i18n.t('Wallet')}</span>
   </div>
 
   <ScrollArea class="flex-1 min-h-0">
-    <!-- Инфо об аккаунте -->
     <div class="p-4 border-b border-border bg-secondary/30">
       <div class="flex items-center justify-between">
         <div>
@@ -35,12 +33,9 @@
       {/if}
 
       <!--
-        «Управление аккаунтами» открывает вкладку аккаунтов кошелька.
-
-        Раньше кнопка вела в раздел профиля Stauri (`onNavigate('profile')`):
-        там меняются имя и аватар, а кошельков нет вовсе. Ссылка вела туда
-        только потому, что экрана аккаунтов не существовало — поле
-        `walletState.accounts` никто не заполнял.
+        "Manage accounts" switches to the accounts tab of the wallet rather than navigating
+        to the profile section: the profile holds the name and avatar, not the wallet
+        accounts the label refers to.
       -->
       <button
         onclick={() => selectWalletTab('accounts')}

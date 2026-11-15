@@ -2,12 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { classifySendError } from './sendStore.svelte';
 
 /**
- * Классификация отказов отправки.
+ * Classification of send failures.
  *
- * Тексты взяты из настоящих ответов status-go и из того, что пользователь
- * видел при первой отправке. Каждый случай должен давать свой код: от этого
- * зависит, какую подсказку он увидит — «введите пароль заново» или
- * «проверьте соединение».
+ * The error texts are taken from real status-go responses. Each case must yield
+ * its own code, because the code selects the hint the user sees: "enter the
+ * password again" or "check the connection".
  */
 describe('classifySendError', () => {
   it('узнаёт неверный пароль', () => {
@@ -21,7 +20,7 @@ describe('classifySendError', () => {
   });
 
   it('узнаёт недоступный RPC — случай, который был вживую', () => {
-    // Ровно этот текст пришёл, когда системный прокси рвал соединения.
+    // The exact text returned when a system proxy was tearing connections down.
     expect(
       classifySendError('rpc proxy: error sending request for url (https://ethereum-sepolia-rpc.publicnode.com/)')
     ).toBe('send-rpc-unavailable');
@@ -40,7 +39,7 @@ describe('classifySendError', () => {
   });
 
   it('неверный пароль не путается с нехваткой средств', () => {
-    // Оба приходят во время отправки, и подсказки для них разные.
+    // Both arrive during a send, and the hints for them differ.
     expect(classifySendError('[keystore] incorrect password provided')).not.toBe(
       'send-insufficient-funds'
     );

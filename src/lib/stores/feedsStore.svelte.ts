@@ -1,34 +1,20 @@
 /**
- * Внешние источники (ленты), которые пользователь добавил сам.
+ * External sources (feeds) the user added.
  *
- * ## Почему отдельный стор, а не `dappsState.feeds`
+ * Separate from `dappsState.feeds`, which is "what I am viewing in the dApp section": this store
+ * is "what I am subscribed to". A subscription survives restarts and shows up in the chat list,
+ * unlike a feed opened in the panel.
  *
- * `dappsState.feeds` — это «что я сейчас смотрю в разделе dApp». Здесь —
- * «на что я подписан». Разница видна сразу: подписка живёт между
- * перезапусками и показывается в списке чатов, а открытая в панели лента —
- * нет.
+ * @remarks
+ * The backend has no table for external sources: status-go stores only Status chats, and a foreign
+ * RSS row there would misrepresent the data model. Application settings (theme, language) already
+ * live in `localStorage`, and this is the same class of state. The limit is known: `localStorage`
+ * is bound to the webview, so subscriptions do not survive a profile switch. They will move to the
+ * app's own settings storage once it exists.
  *
- * Раньше добавление ленты никуда не сохранялось: пользователь вставлял
- * адрес, видел элементы в панели dApp, перезапускал Stauri — и всё
- * пропадало. Теперь добавление создаёт запись в списке чатов с пометкой
- * «внешний», как и договорено в docs/ru/providers_and_dapps.md §9.
- *
- * ## Почему localStorage
- *
- * У бэкенда нет таблицы для внешних источников: status-go хранит только
- * чаты Status, и заводить там запись для чужого RSS значило бы соврать
- * модели данных. Настройки приложения (тема, язык) уже живут в
- * `localStorage`, и это тот же класс состояния.
- *
- * Ограничение известно: `localStorage` привязан к webview, то есть подписки
- * не переживут смену профиля. Когда появится своё хранилище настроек
- * (после перехода на Logos), переедет туда.
- *
- * ## Инварианты из документа
- *
- * * происхождение элемента показывается всегда (§9.2);
- * * один сломанный источник не ломает остальные (§13);
- * * порядок задаём мы, а не источник (§9.3).
+ * Invariants from docs/ru/providers_and_dapps.md: an item always shows its origin (§9.2), one
+ * broken source does not break the others (§13), and we set the order rather than the source
+ * (§9.3).
  */
 
 import { SvelteMap } from 'svelte/reactivity';
@@ -36,115 +22,90 @@ import { invoke } from '@tauri-apps/api/core';
 import { debug, info, warn } from '$lib/utils/log';
 import { formatError } from '$lib/utils/errors';
 
-/** Элемент ленты — то же, что отдаёт `fetch_feed` в Rust. */
+/** A feed item, shaped like what `fetch_feed` returns in Rust. */
 export interface FeedItem {
   url: string;
   title: string;
   summary: string;
-  /** Время публикации в миллисекундах, если удалось разобрать. */
+  /** Publication time in milliseconds, when it could be parsed. */
   published_at: number | null;
 }
 
-/** Ответ `fetch_feed`. */
+/** Response of `fetch_feed`. */
 export interface FeedResponse {
   title: string;
   items: FeedItem[];
-  /** Чей это элемент: `t.me/<name>` или хост. Показывается всегда. */
+  /** Whose item this is: `t.me/<name>` or the host. Always shown. */
   source: string;
 }
 
-/** Подписка: адрес и последнее удачно загруженное содержимое. */
+/** A subscription: address and the last successfully fetched content. */
 export interface FeedSubscription {
-  /** Адрес, по которому загружается лента. Ключ и id чата. */
+  /** Address the feed is fetched from. Key and chat id. */
   url: string;
-  /** Название канала из самого фида, иначе хост. */
+  /** Channel title from the feed itself, else the host. */
   title: string;
-  /** Происхождение: `t.me/<name>` или хост. Показывается в списке. */
+  /** Origin: `t.me/<name>` or the host. Shown in the list. */
   source: string;
   items: FeedItem[];
-  /** Когда обновляли последний раз (мс). */
+  /** When it was last refreshed (ms). */
   fetchedAt: number;
-  /** Ошибка последнего обновления; пустая — всё в порядке. */
+  /** Error from the last refresh; empty means all is well. */
   error: string;
 }
 
 const STORAGE_KEY = 'stauri:feeds';
 
 /**
- * Версия формата сохранённых подписок.
+ * Version of the stored subscription format.
  *
- * ## Зачем
- *
- * В данных на диске лежат отрывки, которые были обрезаны СТАРОЙ версией
- * разбора: Rust дописывал «…» в саму строку, и такой отрывок нельзя было
- * раскрыть по клику — текста дальше просто не оставалось. Правка разбора не
- * исправляет уже сохранённые записи, поэтому при чтении хранилища старой
- * версии подписки перезагружаются с сервера.
- *
- * Версия 1 — отрывок до 400 символов с «…» внутри строки.
- * Версия 2 — отрывок до 4000 символов, сокращение только вёрсткой.
- *
- * Версию поднимать при любом изменении формы `FeedItem`, которое нельзя
- * исправить на лету: иначе пользователь видит старые данные и думает, что
- * код не работает.
+ * @remarks
+ * The disk may hold snippets truncated by the old parser, which appended "…" inside the string;
+ * such a snippet cannot expand on click because the rest of the text is gone. Fixing the parser
+ * does not repair stored records, so subscriptions read from an older version are refetched.
+ * Version 2 stores snippets up to 4000 characters and lets layout do the shortening. Bump the
+ * version on any `FeedItem` shape change that cannot be fixed on the fly.
  */
 const STORAGE_VERSION = 2;
 
-/** Что записывается на диск: версия и сами подписки. */
+/** What goes to disk: the version and the subscriptions themselves. */
 interface StoredFeeds {
   version: number;
   feeds: FeedSubscription[];
 }
 
-/** Сколько элементов храним на источник. Совпадает с лимитом в Rust. */
+/** How many items are kept per source. Matches the limit in Rust. */
 const MAX_STORED_ITEMS = 50;
 
 /**
- * Хост RSSHub, на который переписываются адреса `rsshub.app`.
+ * RSSHub host that `rsshub.app` addresses are rewritten to.
  *
- * ## Почему не `rsshub.app` напрямую
+ * @remarks
+ * Public `rsshub.app` blocks programmatic access: a plain request gets `403` ("restrict access …
+ * for some feed readers … intended for testing purposes only"), and a browser User-Agent gets a
+ * Cloudflare "Just a moment…" page. The links in the instructions (`rsshub.app/telegram/channel/…`,
+ * `/discord/channel/…`, `/twitter/user/…`) are correct, only the host changes. The mirror is
+ * hardcoded on purpose: it may die the way the original domain did, and then the constant changes
+ * here, in one place.
  *
- * Публичный `rsshub.app` закрыл программный доступ: на обычный запрос он
- * отвечает `403` с текстом «restrict access ... for some feed readers ...
- * intended for testing purposes only», а с браузерным User-Agent — страницей
- * Cloudflare «Just a moment…». Проверено вживую. Ссылки в инструкциях
- * (`rsshub.app/telegram/channel/…`, `/discord/channel/…`, `/twitter/user/…`)
- * при этом правильные — меняется только хост.
- *
- * Поэтому адрес с этим хостом переписывается на публичное зеркало, которое
- * маршруты отдаёт. Зашито временно: зеркало может умереть так же, как
- * исходный домен, и тогда константа меняется здесь, в одном месте.
- *
- * ## Ограничение, о котором лучше знать
- *
- * Работают не все маршруты: `telegram/channel/<name>` отдаёт ленту,
- * а `twitter/user/<name>` и `discord/channel/<id>` отвечают `503` — им нужны
- * ключи соответствующей сети, и зеркало их не подставляет. Это не наша
- * ошибка, и обход не наша задача; пользователь увидит сообщение о сбое.
+ * Not every route works on the mirror: `telegram/channel/<name>` serves a feed, while
+ * `twitter/user/<name>` and `discord/channel/<id>` answer `503` because they need that network's
+ * keys, which the mirror does not supply. Those failures are surfaced to the user, not worked
+ * around.
  */
 export const RSSHUB_MIRROR = 'rsshub.rssforever.com';
 
-/** Домены RSSHub, которые переписываются на зеркало. */
+/** RSSHub hosts that are rewritten to the mirror. */
 const RSSHUB_HOSTS = ['rsshub.app', 'www.rsshub.app'];
 
 /**
- * Рабочие ленты для подсказки внизу панели.
+ * Working feeds offered as hints below the panel, to give the empty field a starting point.
  *
- * ## Зачем список, а не просто текст
- *
- * Пользователь не знает, какой адрес вставить первым, и на пустом поле
- * пробовать нечего. Проверенные примеры дают точку входа: нажал — адрес
- * оказался в поле, нажал Enter — лента в списке чатов.
- *
- * ## Почему именно эти
- *
- * Все проверены запросом 2026-11-06: отдают `200` и валидный RSS/Atom.
- * Разные по типу намеренно — блог с редкими постами, научный журнал, новости,
- * агрегатор ссылок, — чтобы было видно, что формат подходит не только для
- * одного вида сайтов.
- *
- * `blog.ethereum.org/feed.xml` отвечает `301` на `/en/feed.xml`; HTTP-клиент
- * проходит редирект сам, поэтому адрес оставлен в привычном виде.
+ * @remarks
+ * All were checked with a request and answer `200` with valid RSS/Atom. The types differ
+ * deliberately (a blog, a journal, news, a link aggregator) to show the format fits more than one
+ * kind of site. `blog.ethereum.org/feed.xml` redirects `301` to `/en/feed.xml`; the HTTP client
+ * follows it, so the habitual address is kept.
  */
 export const FEED_EXAMPLES = [
   'https://blog.rust-lang.org/feed.xml',
@@ -159,33 +120,28 @@ export const FEED_EXAMPLES = [
 
 export const feedsState = $state({
   /**
-   * Подписки по URL.
+   * Subscriptions by URL.
    *
-   * `SvelteMap`, а не объект: список читается в шаблоне списка чатов, и
-   * обычный объект не отслеживался бы реактивностью.
+   * `SvelteMap` rather than a plain object: the chat list template reads this map, and a plain
+   * object would not be tracked reactively.
    */
   subscriptions: new SvelteMap<string, FeedSubscription>(),
-  /** Идёт проверка и загрузка нового адреса. */
+  /** A new address is being checked and fetched. */
   isAdding: false,
-  /** Ошибка последнего добавления — для формы. */
+  /** Error from the last add, for the form. */
   error: '',
   loaded: false,
 });
 
 /**
- * Читает подписки с диска.
+ * Reads subscriptions from disk.
  *
- * Ошибку чтения не пробрасываем: испорченное хранилище не должно мешать
- * приложению запуститься. Стираем и начинаем с пустого списка — потерять
- * подписки неприятно, но тихо падающий раздел хуже.
- *
- * ## Почему старая версия перечитывается с сервера
- *
- * В версии 1 отрывок обрезался на 400 символах с «…» внутри строки, и
- * раскрыть его по клику было нельзя — текста дальше не оставалось. Правка
- * разбора не чинит уже сохранённые записи, поэтому подписки старой версии
- * попадают в `stale` и перезагружаются сразу после чтения. Пользователь
- * видит правильный текст без ручных действий.
+ * @remarks
+ * A read error is not propagated: a corrupt store must not stop the app from starting. The store
+ * is cleared and starts empty, because a silently broken section is worse than losing
+ * subscriptions. Subscriptions from an older format version are refetched right after reading:
+ * version 1 truncated snippets at 400 characters with "…" inside the string, which made them
+ * unexpandable, and fixing the parser does not repair stored records.
  */
 export function loadFeeds(): void {
   if (feedsState.loaded) return;
@@ -197,16 +153,15 @@ export function loadFeeds(): void {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
 
-    // Формат 1 — голый массив, формат 2 — объект с версией. Понимаем оба:
-    // у существующих пользователей на диске лежит массив, и терять их
-    // подписки при обновлении нельзя.
+    // Format 1 is a bare array, format 2 an object with a version. Both are understood: existing
+    // users have the array on disk, and their subscriptions must survive the upgrade.
     const parsed = JSON.parse(raw) as StoredFeeds | FeedSubscription[];
     const version = Array.isArray(parsed) ? 1 : parsed?.version ?? 1;
     const feeds = Array.isArray(parsed) ? parsed : parsed?.feeds ?? [];
 
     for (const feed of feeds) {
-      // Проверяем форму записи: файл на диске могли править руками, а
-      // шаблон списка читает `items` и `title` без проверок.
+      // Validate the shape: the file on disk may have been edited by hand, and the list template
+      // reads `items` and `title` without checks.
       if (!feed || typeof feed.url !== 'string' || !Array.isArray(feed.items)) continue;
       feedsState.subscriptions.set(feed.url, {
         url: feed.url,
@@ -222,8 +177,8 @@ export function loadFeeds(): void {
 
     if (version < STORAGE_VERSION) {
       info('[feeds] storage is outdated, refetching subscriptions');
-      // Не ждём: список чатов должен появиться сразу, с уже сохранёнными
-      // заголовками. Обновление подменит отрывки под ним.
+      // Do not await: the chat list must appear at once with the stored titles. The refresh
+      // replaces the snippets underneath it.
       void refreshFeeds();
     }
   } catch (e) {
@@ -240,26 +195,24 @@ function persist(): void {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch (e) {
-    // Переполнение квоты или запрет записи: подписки продолжат работать до
-    // перезапуска, но не сохранятся. Сообщаем в лог, а не молчим.
+    // Quota overflow or a write ban: subscriptions keep working until restart but are not saved.
+    // Report it to the log rather than staying silent.
     warn('[feeds] failed to persist subscriptions:', e);
   }
 }
 
 /**
- * Добавляет подписку: проверяет адрес и сохраняет его.
+ * Adds a subscription: validates the address and stores it.
  *
- * ## Что значит «корректный RSS»
- *
- * Проверка целиком в Rust (`fetch_feed`): там фильтр адреса и разбор
- * XML. Ошибка здесь — это и есть ответ на «это не лента»: страница HTML,
- * 404, Cloudflare-заглушка или пустой фид без записей. Фронтенд не решает,
- * можно ли ходить по адресу, и не пытается разобрать ответ сам.
- *
- * ## Почему адрес нормализуется до проверки
- *
- * Пользователь копирует ссылку из каталога или вставляет `@name`. Проверять
- * сырой ввод значило бы отклонять то, что человек считает рабочим адресом.
+ * @param raw - Address as typed or pasted; normalised before checking.
+ * @returns `ok` when stored, `failed` with the reason otherwise.
+ * @remarks
+ * Validation lives entirely in Rust (`fetch_feed`), which filters the address and parses the XML.
+ * An error here is the answer to "this is not a feed": an HTML page, a 404, a Cloudflare
+ * interstitial or an empty feed. The frontend neither decides whether the address may be fetched
+ * nor parses the response itself. The address is normalised first, because users paste links from
+ * catalogs or `@name` handles, and checking the raw input would reject what they consider a valid
+ * address.
  */
 export async function addFeed(raw: string): Promise<{ ok: boolean; error?: string }> {
   const url = normalizeFeedUrl(raw);
@@ -273,9 +226,8 @@ export async function addFeed(raw: string): Promise<{ ok: boolean; error?: strin
   try {
     const res = await invoke<FeedResponse>('fetch_feed', { url });
 
-    // Пустой фид — не повод добавлять запись: в списке чатов она выглядела
-    // бы как канал, в котором ничего нет, и пользователь не понял бы, что
-    // сломалось.
+    // An empty feed is no reason to add a record: in the chat list it would look like a channel
+    // with nothing in it, and the user would not know what broke.
     if (!res.items.length) {
       throw new Error('The feed is empty: no items found');
     }
@@ -304,10 +256,11 @@ export async function addFeed(raw: string): Promise<{ ok: boolean; error?: strin
 }
 
 /**
- * Перечитывает все подписки.
+ * Refetches every subscription.
  *
- * Ошибка одного источника не должна ломать остальные (§13): результат
- * записывается в запись этой подписки, остальные остаются как были.
+ * @remarks
+ * One source failing must not break the others (§13): the error is written into that subscription
+ * and the rest stay as they were.
  */
 export async function refreshFeeds(): Promise<void> {
   for (const [url, current] of [...feedsState.subscriptions.entries()]) {
@@ -330,36 +283,33 @@ export async function refreshFeeds(): Promise<void> {
   persist();
 }
 
-/** Убирает подписку. Сообщения в ней и так не наши — удалять нечего. */
+/** Removes a subscription. Its messages were never ours, so there is nothing else to delete. */
 export function removeFeed(url: string): void {
   if (!feedsState.subscriptions.delete(url)) return;
   persist();
   info(`[feeds] removed ${url}`);
 }
 
-/** id чата для подписки: `feed:` + адрес. */
+/** Chat id for a subscription: `feed:` + the address. */
 export function feedChatId(url: string): string {
   return `feed:${url}`;
 }
 
-/** Адрес подписки по id чата (или `null`, если это не подписка). */
+/** Subscription address for a chat id, or `null` when the id is not a subscription. */
 export function feedUrlFromChatId(chatId: string): string | null {
   return chatId.startsWith('feed:') ? chatId.slice('feed:'.length) : null;
 }
 
 /**
- * Подписка в виде строки списка чатов.
+ * A subscription rendered as a chat-list row.
  *
- * ## Почему здесь, а не в `ChatLeft`
- *
- * Строку нужно строить в двух местах: список чатов и `selectChat`, который
- * открывает чат по id из другого раздела. Если бы форма жила только в
- * компоненте, открытие ленты из панели dApp не нашло бы её в `chatsState` и
- * молча ничего не выбрало.
- *
- * Форма полей совпадает с `ChatItem`; импортировать тип оттуда нельзя —
- * компонент зависит от сторов, а не наоборот, поэтому возвращаем
- * структурно совместимый объект.
+ * @param feed - Subscription to render.
+ * @returns A structurally `ChatItem`-compatible object.
+ * @remarks
+ * The row is built in two places: the chat list and `selectChat`, which opens a chat by id from
+ * another section. Keeping the shape only in the component would mean a feed opened from the dApp
+ * panel is not found in `chatsState` and nothing gets selected. The `ChatItem` type cannot be
+ * imported here, since components depend on stores and not the other way round.
  */
 export function feedChatItem(feed: FeedSubscription) {
   return {
@@ -374,7 +324,7 @@ export function feedChatItem(feed: FeedSubscription) {
   };
 }
 
-/** Все подписки как строки списка, свежие сверху. */
+/** All subscriptions as list rows, freshest first. */
 export function feedChatItems() {
   return [...feedsState.subscriptions.values()]
     .sort((a, b) => b.fetchedAt - a.fetchedAt)
@@ -382,32 +332,28 @@ export function feedChatItems() {
 }
 
 /**
- * Приводит ввод к URL.
+ * Turns user input into a URL.
  *
- * Принимаем то, что пользователь реально вставляет:
- *   * полный `http(s)`-адрес — как есть (это основной путь: RSSHub,
- *     собственный RSS, лента сайта);
- *   * ссылку на Telegram-канал (`t.me/name`, `t.me/s/name`, `@name`) —
- *     превращаем не в `t.me/s/…`, а в маршрут зеркала RSSHub
- *     (`…/telegram/channel/name`). Причина в том, что готовая HTML-страница
- *     `t.me/s/` разбирается хрупко и может отдаваться только браузеру, а
- *     маршрут RSSHub отдаёт настоящий RSS и работает одинаково для любого
- *     канала. Для Telegram это единственное исключение из «вставляйте
- *     адрес ленты»;
- *   * остальное — ошибка ввода, а не молчаливая попытка.
+ * Accepts what users actually paste: a full `http(s)` address as-is (the main path: RSSHub, the
+ * user's own RSS, a site feed); a Telegram channel reference (`t.me/name`, `t.me/s/name`, `@name`),
+ * which becomes an RSSHub mirror route rather than `t.me/s/…`, because the ready HTML page is
+ * fragile to parse and may only be served to browsers, while the RSSHub route returns real RSS for
+ * any channel; anything else is an input error rather than a silent attempt.
  *
- * Адрес на `rsshub.app` переписывается на зеркало (см. [`RSSHUB_MIRROR`]):
- * публичный домен больше не отдаёт ленты программам, а маршруты в
- * инструкциях указаны именно с ним, поэтому отклонять такой ввод было бы
- * неверно — человек скопировал рабочий пример.
+ * @param raw - Raw user input.
+ * @returns A URL, or `null` when the input cannot be turned into one.
+ * @remarks
+ * An `rsshub.app` address is rewritten to the mirror (see [`RSSHUB_MIRROR`]): the public domain no
+ * longer serves feeds to programs, while the routes in the instructions name it, so rejecting such
+ * input would be wrong.
  */
 export function normalizeFeedUrl(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
 
   if (/^https?:\/\//i.test(value)) {
-    // Ссылка на канал Telegram, вставленная целиком: `https://t.me/name`
-    // или `https://t.me/s/name`. Переводим на маршрут зеркала.
+    // A full Telegram channel link, `https://t.me/name` or `https://t.me/s/name`. Route it to the
+    // mirror.
     const tgUrl = value.match(
       /^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me)\/(?:s\/)?([A-Za-z0-9_]+)\/?$/i
     );
@@ -426,26 +372,27 @@ export function normalizeFeedUrl(raw: string): string | null {
   return null;
 }
 
-/** Маршрут RSSHub для публичного Telegram-канала, уже на зеркале. */
+/** RSSHub route for a public Telegram channel, already on the mirror. */
 export function telegramFeedUrl(channel: string): string {
   return `https://${RSSHUB_MIRROR}/telegram/channel/${channel}`;
 }
 
 /**
- * Меняет хост `rsshub.app` на зеркало, сохраняя путь и запрос.
+ * Replaces the `rsshub.app` host with the mirror, keeping path and query.
  *
- * Возвращает исходную строку, если хост другой или разбор не удался:
- * отказ нормализации здесь означал бы «адрес неверный», хотя он верный —
- * просто не RSSHub.
+ * @param url - Address to rewrite.
+ * @returns The rewritten address, or the input when the host differs or parsing fails.
+ * @remarks
+ * Failing to normalise must not read as "wrong address": a non-RSSHub address is still valid, it
+ * just is not RSSHub.
  */
 export function rewriteRsshub(url: string): string {
   try {
     const parsed = new URL(url);
     if (!RSSHUB_HOSTS.includes(parsed.hostname.toLowerCase())) return url;
     parsed.hostname = RSSHUB_MIRROR;
-    // Схема остаётся прежней: зеркало работает по https, но если
-    // пользователь вставил http — не превращаем его ввод в другой адрес
-    // молча, кроме хоста.
+    // The scheme stays as it was: the mirror serves https, but an http input is not silently
+    // turned into a different address apart from the host.
     return parsed.toString();
   } catch {
     return url;
@@ -461,8 +408,8 @@ function hostOf(url: string): string {
 }
 
 export function resetFeeds(): void {
-  // Подписки НЕ чистим: они принадлежат пользователю и переживают выход из
-  // аккаунта. Сброс — только рабочее состояние формы.
+  // Subscriptions are NOT cleared: they belong to the user and survive signing out. Only the form
+  // state is reset.
   feedsState.isAdding = false;
   feedsState.error = '';
 }

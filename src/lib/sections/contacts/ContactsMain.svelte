@@ -7,7 +7,7 @@
   import { formatError } from '$lib/utils/errors';
   import { isIncomingRequest } from '$lib/status/contactState';
 
-  // Для перехода в чат
+  // Optional handler for opening a chat with a contact.
   let { onOpenChat }: { onOpenChat?: (chatId: string) => void } = $props();
 
   let publicKey = $state('');
@@ -44,7 +44,6 @@
 
 <div class="p-6 max-w-md mx-auto w-full h-full overflow-y-auto">
   {#if contactsState.selected}
-    <!-- ДЕТАЛИ КОНТАКТА -->
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-2xl font-bold text-primary">{getDisplayName(contactsState.selected)}</h2>
       <button onclick={() => selectContact(null)} class="text-muted-foreground hover:text-foreground">✕</button>
@@ -62,7 +61,6 @@
         <p class="text-sm text-orange-600">⚠️ {i18n.t('Contact request pending')}</p>
       {/if}
 
-      <!-- Кнопка "Чат" -->
       {#if contactsState.selected.mutual || isIncomingRequest(contactsState.selected)}
         <button
           onclick={() => onOpenChat?.(contactsState.selected.id)}
@@ -82,7 +80,6 @@
       </div>
     </div>
   {:else}
-    <!-- ФОРМА ADD CONTACT -->
     <h2 class="text-2xl font-bold text-primary mb-6">{i18n.t('Add Contact')}</h2>
     <p class="text-sm text-muted-foreground mb-4">{i18n.t('Enter a public key to send a contact request.')}</p>
 

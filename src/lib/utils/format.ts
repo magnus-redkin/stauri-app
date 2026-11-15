@@ -1,12 +1,15 @@
 /**
- * Форматирует строку с wei (или другими минимальными единицами)
- * в читаемый вид, учитывая decimals.
+ * Formats a minimal-unit amount such as wei into a display string.
  *
- * @param weiStr - Строка с числом в минимальных единицах (например, "1000000000000000000")
- * @param decimals - Количество знаков после запятой (по умолчанию 18 для ETH)
- * @param maxFractionDigits - Максимум знаков после запятой в выводе (по умолчанию 6)
- * @returns Отформатированная строка (например, "1.0" или "0.5")
- * @throws Error если входное значение не может быть преобразовано в BigInt
+ * @param weiStr - The amount as a decimal string in the smallest unit, e.g.
+ * `"1000000000000000000"`.
+ * @param decimals - Decimal places of the token; defaults to 18 for ETH.
+ * @param maxFractionDigits - Maximum fractional digits in the output, 6 by
+ * default. The rest is truncated, not rounded.
+ * @returns The formatted amount, e.g. `"1"` or `"1.5"`.
+ * @remarks Invalid `decimals` falls back to 18. A value that `BigInt` cannot
+ * read throws instead of being swallowed, so the caller decides what to show.
+ * @throws An `Error` when `weiStr` is not an integer string.
  */
 export function formatBalance(
   weiStr: string | undefined | null,
@@ -15,14 +18,14 @@ export function formatBalance(
 ): string {
   if (!weiStr || weiStr === '0') return '0';
 
-  // Если decimals некорректны, используем 18 (ETH по умолчанию)
+  // Fall back to 18 (ETH) when decimals is not a valid count.
   const safeDecimals = Number.isInteger(decimals) && decimals >= 0 ? decimals : 18;
 
   let wei: bigint;
   try {
     wei = BigInt(weiStr);
   } catch (e) {
-    // Не глотаем ошибку — пусть вызывающий код решает, что делать
+    // Not swallowed — the caller decides what to do with a broken value.
     throw new Error(`Invalid balance value: "${weiStr}"`, { cause: e });
   }
 
@@ -30,20 +33,20 @@ export function formatBalance(
   const integerPart = wei / divisor;
   const fractionalPart = wei % divisor;
 
-  // Если дробная часть равна 0, возвращаем только целое
+  // A zero fractional part means an integer value.
   if (fractionalPart === 0n) {
     return integerPart.toString();
   }
 
-  // Формируем дробную часть с ведущими нулями
+  // Pad the fractional part with leading zeros.
   let fracStr = fractionalPart.toString().padStart(safeDecimals, '0');
 
-  // Ограничиваем количество знаков после запятой
+  // Truncate to the display limit.
   if (fracStr.length > maxFractionDigits) {
     fracStr = fracStr.substring(0, maxFractionDigits);
   }
 
-  // Убираем лишние нули в конце
+  // Drop trailing zeros.
   fracStr = fracStr.replace(/0+$/, '');
 
   if (!fracStr) {

@@ -16,8 +16,8 @@ describe('PasswordInput Component', () => {
   });
 
   it('должен обновлять значение при вводе (bind:value)', async () => {
-    // Компонент объявляет `value` через $bindable(), отдельного onchange нет:
-    // двусторонняя привязка идёт через bind:value, а ввод проверяем по DOM.
+    // The component declares `value` through $bindable() and has no separate onchange:
+    // two-way binding goes through bind:value, and the input is checked through the DOM.
     render(PasswordInput, { props: { value: '' } });
 
     const input = screen.getByPlaceholderText('Password');

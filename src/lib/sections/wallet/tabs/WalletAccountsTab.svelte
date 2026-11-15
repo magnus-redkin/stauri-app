@@ -1,22 +1,12 @@
 <script lang="ts">
   /**
-   * Аккаунты кошелька.
+   * Wallet accounts of the current profile.
    *
-   * ## Почему этот экран появился
-   *
-   * В левой панели кошелька была ссылка «Управление аккаунтами», которая
-   * открывала раздел профиля Stauri (`EditProfile`) — там меняются имя и
-   * аватар, но нет ни одного кошелька. Ссылка вела туда только потому, что
-   * отдельного экрана не существовало, а поле `walletState.accounts` никто
-   * не заполнял.
-   *
-   * ## Что здесь можно и чего нельзя
-   *
-   * Показываем то, что реально знает бэкенд: адрес, путь деривации и имя.
-   * Добавление и удаление аккаунтов — отдельная работа: в status-go это
-   * `accounts_addAccount`/`accounts_deleteAccount`, и они требуют пароль
-   * и решения, что делать с балансом. Здесь этого нет осознанно — экран
-   * честно показывает существующее вместо кнопок, которые ничего не делают.
+   * Shows only what the backend actually knows: address, derivation path and name. Adding
+   * and removing accounts is a separate piece of work — `accounts_addAccount` and
+   * `accounts_deleteAccount` in status-go require a password and a decision about what
+   * happens to the balance — so this screen honestly lists existing accounts instead of
+   * offering buttons that do nothing.
    */
   import { i18n } from '$lib/i18n';
   import { walletState } from '$lib/stores/walletStore.svelte';
@@ -33,7 +23,7 @@
     }
   }
 
-  /** Короткий вид адреса для заголовка: начало и конец. */
+  /** Shortens an address for a heading, keeping only its start and end. */
   function short(addr: string): string {
     if (addr.length <= 14) return addr;
     return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
@@ -78,8 +68,8 @@
   {/if}
 
   <!--
-    Честная граница: добавление аккаунтов ещё не сделано. Пользователь
-    должен узнать это из интерфейса, а не из неработающей кнопки.
+    An honest boundary: adding accounts is not implemented. The user learns it from the
+    screen rather than from a button that does nothing.
   -->
   <p class="text-xs text-muted-foreground mt-4 max-w-xl">
     {i18n.t('Adding and removing accounts will be available later.')}

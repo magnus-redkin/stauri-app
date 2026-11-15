@@ -12,21 +12,19 @@
   } from "$lib/stores/uiStore.svelte";
 
   /**
-   * Тема и размер шрифта живут в `uiStore`, а не здесь.
+   * Theme and font size live in `uiStore`.
    *
-   * Раньше они читались и применялись только этим экраном: до первого
-   * открытия Настроек интерфейс выглядел по умолчанию, хотя значение в
-   * `localStorage` уже было другим. Теперь применяет стор при старте, а
-   * экран только показывает и меняет текущее значение.
+   * The store applies them at startup; this screen only displays and changes the current
+   * values, so the interface looks right before Settings has ever been opened.
    */
   const theme = $derived(uiState.theme);
   const fontSize = $derived(uiState.fontSize);
 
   /**
-   * Состояние проверки обновлений.
+   * Update check state.
    *
-   * `idle` — ещё не проверяли: при открытии настроек сеть не дёргаем, чтобы
-   * не тратить запросы и не задерживать появление экрана.
+   * `idle` means nothing has been checked yet: opening Settings does not hit the network, so
+   * no requests are spent and the screen appears without delay.
    */
   const updateState = $state<{
     status: 'idle' | 'checking' | 'available' | 'uptodate' | 'installing' | 'installed' | 'error';
@@ -43,12 +41,11 @@
   });
 
   onMount(() => {
-    // Тему и размер шрифта уже применил `loadUiPreferences` при старте, здесь
-    // их применять заново не нужно — только версия.
+    // Theme and font size were applied by `loadUiPreferences` at startup, so only the
+    // version is fetched here.
 
-    // Версию берём из манифеста приложения, а не из package.json: в бандл
-    // попадает значение из tauri.conf.json, и именно оно управляет тем,
-    // какое обновление сервер сочтёт новее.
+    // The version comes from the app manifest rather than package.json: the bundle carries
+    // the value from tauri.conf.json, and that is the one the update server compares against.
     getVersion()
       .then((v) => { updateState.currentVersion = v; })
       .catch(() => { updateState.currentVersion = 'unknown'; });
@@ -80,8 +77,8 @@
     updateState.error = null;
     try {
       await installUpdate();
-      // На Linux файл подменяется на месте: текущий процесс продолжает
-      // работать со старым кодом, поэтому честно просим перезапуск.
+      // The binary is replaced in place on Linux: the running process keeps executing the
+      // old code, so a restart is requested explicitly.
       updateState.status = 'installed';
     } catch (e) {
       updateState.status = 'error';
@@ -90,9 +87,9 @@
   }
 
   async function handleRestart() {
-    // Управление не возвращается: процесс завершается и стартует заново.
-    // Вызываем через Rust, а не location.reload(): перезагрузка страницы
-    // не подменила бы образ, а обработчик выхода в Rust не отработал бы.
+    // Control does not return: the process exits and starts again. The restart goes
+    // through Rust rather than `location.reload()`, which would not swap the binary and
+    // would skip the exit handler that shuts the backend down.
     try {
       await restartApp();
     } catch (e) {
@@ -109,10 +106,8 @@
 
 <div class="h-full overflow-y-auto p-8 bg-background">
   <div class="max-w-2xl mx-auto space-y-8">
-    <!-- Заголовок -->
     <h1 class="text-3xl font-bold text-primary">{i18n.t('Settings')}</h1>
 
-    <!-- Язык -->
     <div class="space-y-2">
       <label class="font-medium text-foreground">{i18n.t('Language')}</label>
       <div class="flex gap-2">
@@ -143,7 +138,6 @@
       </div>
     </div>
 
-    <!-- Тема -->
     <div class="space-y-2">
       <label class="font-medium text-foreground">{i18n.t('Theme')}</label>
       <div class="flex gap-2">
@@ -168,7 +162,6 @@
       </div>
     </div>
 
-    <!-- Шрифт -->
     <div class="space-y-2">
       <label class="font-medium text-foreground">{i18n.t('Font Size')}</label>
       <div class="flex items-center gap-4">
@@ -184,7 +177,6 @@
       </div>
     </div>
 
-    <!-- Обновления -->
     <div class="space-y-2">
       <label class="font-medium text-foreground" for="app-version">{i18n.t('Version')}</label>
       <div class="flex items-center gap-4 flex-wrap">

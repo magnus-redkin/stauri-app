@@ -4,19 +4,18 @@
   let { children } = $props();
 
   /**
-   * Браузерное меню правой кнопки (Back/Reload/Inspect) отключаем глобально.
+   * Suppresses the webview's built-in context menu (Back, Reload, Inspect).
    *
-   * Reload из него перезагружал webview и сбрасывал состояние входа: после
-   * перезагрузки пароль уже не принимался («Login timeout: no response from
-   * backend»), и вход возможен был только после перезапуска приложения.
+   * Reloading the webview loses the login session: afterwards the password is no
+   * longer accepted ("Login timeout: no response from backend") and signing in
+   * only works after restarting the app.
    *
-   * Перехват в фазе capture, чтобы сработать раньше обработчиков компонентов.
-   * Своего контекстного меню в приложении нет; когда появится, оно должно
-   * открываться по событию, а не через браузерное меню.
-   *
-   * Исключение — поля ввода: на Android долгое нажатие в поле открывает меню
-   * «Вставить», и без него туда нельзя вставить текст (ключ приглашения,
-   * адрес). Блокируем только вне полей и областей редактирования.
+   * @remarks
+   * The listener runs in the capture phase so it fires before component handlers.
+   * Input fields and editable regions are exempt: on Android a long press there
+   * opens the "Paste" menu, without which no text (invite key, address) can be
+   * pasted. The listener itself only handles the event, it does not provide a
+   * context menu of its own.
    */
   onMount(() => {
     const block = (e: Event) => {

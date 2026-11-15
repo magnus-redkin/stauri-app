@@ -2,7 +2,7 @@
   import { i18n } from '$lib/i18n';
   import { createAndOpenChannel } from '$lib/stores/chatsStore.svelte';
 
-  /** Закрыть форму после успешного создания. */
+  /** Called to close the form after a successful creation. */
   let { onDone, panel = false }: { onDone?: () => void; panel?: boolean } = $props();
 
   let name = $state('');

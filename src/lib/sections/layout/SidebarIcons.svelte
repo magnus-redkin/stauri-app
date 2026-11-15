@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Home, User, MessageCircle, Wallet, Store, Settings, Blocks } from "lucide-svelte";
   import { i18n } from '$lib/i18n';
-  import { statusState } from '$lib/stores/statusStore.svelte'; // <-- Импорт стора
+  import { statusState } from '$lib/stores/statusStore.svelte';
 
   let {
     activeSection = $bindable(),
@@ -9,11 +9,11 @@
   }: {
     activeSection: string;
     /**
-     * Вызывается при любом клике, включая повторный по уже активной вкладке.
+     * Called on every click, including a repeated click on the already active tab.
      *
-     * Без этого «нажал на свою же иконку» не делает ничего: `activeSection`
-     * не меняется, и эффекты, следящие за ней, не срабатывают. Разделу dApps
-     * это нужно — повторный клик возвращает к началу компонента.
+     * Without it, tapping the current icon does nothing: `activeSection` does not change and
+     * effects that watch it never run. The dApps section relies on this — a repeated click
+     * returns to the start of the component.
      */
     onSelect?: (id: string) => void;
   } = $props();
@@ -22,13 +22,10 @@
     { id: 'home', icon: Home, label: 'Home' },
     { id: 'profile', icon: User, label: 'Profile' },
     { id: 'chat', icon: MessageCircle, label: 'Chat' },
-    // Отдельного раздела «Сообщества» больше нет.
-    //
-    // Просмотр каталога сообществ — это провайдер по нашей терминологии
-    // (docs/ru/providers_and_dapps.md): он отдаёт список адресов, а
-    // подключение выполняем мы. Такие вещи живут в разделе dApp, чтобы не
-    // занимать место в основной навигации рядом с тем, что у пользователя
-    // уже есть.
+    // The community directory is a provider rather than a section of its own
+    // (docs/ru/providers_and_dapps.md): it returns a list of addresses and the app performs
+    // the join request. It lives in the dApps section instead of taking a place in the main
+    // navigation next to what the user already has.
     { id: 'dapps', icon: Blocks, label: 'dApps' },
     { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'market', icon: Store, label: 'Market' },
@@ -44,7 +41,6 @@
       >
         <item.icon size={22} />
 
-        <!-- Красный бейдж для Chat -->
         {#if item.id === 'chat' && statusState.pendingRequestsCount > 0}
           <span class="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[0.625rem] font-bold text-white">
             {statusState.pendingRequestsCount}
@@ -52,7 +48,6 @@
         {/if}
       </button>
 
-      <!-- Tooltip -->
       <div class="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-3 py-1.5 bg-popover text-popover-foreground text-sm font-medium rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 whitespace-nowrap">
         {item.label}
       </div>
@@ -61,7 +56,6 @@
 
   <div class="flex-1"></div>
 
-  <!-- Settings -->
   <div class="relative group">
     <button
       class="p-3 rounded-lg transition-colors {activeSection === 'settings' ? 'bg-primary text-primary-foreground shadow-md' : 'hover:bg-black/5 text-muted-foreground'}"

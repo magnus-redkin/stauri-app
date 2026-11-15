@@ -1,24 +1,19 @@
 /**
- * Граница status-go для мессенджинга (шаг 15 плана, вариант A).
+ * status-go boundary for messaging.
  *
- * ## Зачем отдельный модуль
+ * Stauri takes only networking and the wallet from status-go and moves the rest
+ * out. Messaging still runs on status-go, but the boundary is fixed: every
+ * `wakuext_*` method related to chats and communities lives here and nowhere
+ * else. When status-go goes away, this file and its callers change, not the whole
+ * frontend.
  *
- * Общая цель Stauri — брать из status-go только сеть и кошелёк, а всё
- * остальное выносить. Мессенджинг пока остаётся на статусе, но мы зафиксировали
- * границу: все методы `wakuext_*`, связанные с чатами и сообществами, живут
- * здесь и нигде больше.
+ * All methods go through `statusFetch` and return the `result` of the JSON-RPC
+ * envelope. Response shapes are described in `types.ts`: `Chat` uses `chatType`,
+ * `communityId` and `categoryId`; `Community` nests `chats` and `categories`.
  *
- * Когда status-go уйдёт (см. docs/ru/providers_and_dapps.md и план перехода на
- * Logos), менять придётся этот файл и его вызовы, а не весь фронтенд.
- *
- * ## Формы ответов
- *
- * Все методы ходят через `statusFetch` и возвращают `result` из JSON-RPC.
- * Поля описаны в `types.ts`: `Chat` использует `chatType`, `communityId`,
- * `categoryId`; `Community` вложенными `chats` и `categories`.
- *
- * `chatType` — число (см. `ChatType` ниже), а не строка. Это важно: фильтрация
- * по строке молча не находит ничего.
+ * @remarks
+ * `chatType` is a number (see `ChatType` below), not a string. Filtering by
+ * string silently finds nothing.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -35,10 +30,10 @@ import type {
 } from './types';
 
 /**
- * Типы чатов status-go (internal/protocol/chat.go).
+ * status-go chat types (internal/protocol/chat.go).
  *
- * Значения фиксированы и меняются только вместе со status-go: `iota + 1`,
- * поэтому нельзя переставлять.
+ * Values are fixed and change only together with status-go: they are
+ * `iota + 1`, so their order must not be rearranged.
  */
 export const ChatType = {
   OneToOne: 1,
@@ -51,41 +46,37 @@ export const ChatType = {
 
 export type ChatTypeValue = (typeof ChatType)[keyof typeof ChatType];
 
-/** Является ли чат каналом (публичный чат-канал). */
+/** Whether the chat is a public channel. */
 export function isChannel(chat: Chat): boolean {
   return chat.chatType === ChatType.Public;
 }
 
-/** Является ли чат частью сообщества. */
+/** Whether the chat belongs to a community. */
 export function isCommunityChat(chat: Chat): boolean {
   return chat.chatType === ChatType.Community || !!chat.communityId;
 }
 
-/** Личная переписка. */
+/** Whether the chat is a one-to-one conversation. */
 export function isDirectMessage(chat: Chat): boolean {
   return chat.chatType === ChatType.OneToOne;
 }
 
 // ===========================================================================
-// ЧТЕНИЕ
+// READING
 // ===========================================================================
 
 /**
- * Список чатов.
+ * All chats of the profile.
  *
- * ## Почему `chats`, а не `chatsPreview`
- *
- * `chatsPreview` в этой ветке status-go фильтрует **наоборот**: берёт только
- * чаты с `chat.Active || chat.Muted`
- * (internal/protocol/messenger_chats.go, `ChatsPreview`). То есть нормально
- * вступлённый канал (`Active = true`, не замьючен) в его выдачу не попадает
- * никогда — именно поэтому канал «не появлялся» после вступления.
- *
- * `Chats()` возвращает все чаты без этого фильтра и включает поле `Active`,
- * по которому мы сами решаем, что показывать.
- *
- * Цена — полные записи вместо облегчённых (с участниками и т. п.). Для списка
- * это лишние килобайты, но корректность важнее.
+ * @param port - Auth proxy port.
+ * @returns Every chat, including deactivated ones.
+ * @remarks
+ * This uses `wakuext_chats`, not `chatsPreview`: `ChatsPreview` in this branch of
+ * status-go filters the wrong way round and selects only chats with
+ * `chat.Active || chat.Muted` (internal/protocol/messenger_chats.go). A normally
+ * joined channel (`Active = true`, not muted) therefore never appears in its
+ * output. `Chats()` applies no such filter and includes the `Active` field, so
+ * the client decides what to show. The cost is full records instead of previews.
  */
 export async function getChats(port: number): Promise<Chat[]> {
   const res = await statusFetch<{ result?: Chat[] }>(port, 'CallRPC', {
@@ -98,10 +89,14 @@ export async function getChats(port: number): Promise<Chat[]> {
 }
 
 /**
- * Облегчённые превью чатов.
+ * Lightweight chat previews.
  *
- * Оставлено для случаев, где нужен только список без участников. Для списка
- * чатов не использовать: см. `getChats`.
+ * @param port - Auth proxy port.
+ * @param filter - `community` or `nonCommunity`, or omitted for both.
+ * @returns Preview records from status-go.
+ * @remarks
+ * For a chat list use `getChats` instead: this method filters out normally joined
+ * channels in this status-go branch.
  */
 export async function getChatPreviews(
   port: number,
@@ -120,7 +115,7 @@ export async function getChatPreviews(
   return res.result || [];
 }
 
-/** Полная запись чата по id. Нужна, когда списка недостаточно. */
+/** Full chat record by id, for when the list is not enough. */
 export async function getChat(port: number, chatId: string): Promise<Chat | null> {
   const res = await statusFetch<{ result?: Chat | null }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -132,10 +127,13 @@ export async function getChat(port: number, chatId: string): Promise<Chat | null
 }
 
 /**
- * Сообщения чата.
+ * Messages of a chat.
  *
- * `cursor` — для постраничной загрузки; пустая строка означает «с последних».
- * Возвращаемое значение содержит `messages` и `cursor` для следующей страницы.
+ * @param port - Auth proxy port.
+ * @param chatId - Chat id.
+ * @param limit - Maximum number of messages in a page.
+ * @param cursor - Paging cursor; an empty string means "from the newest".
+ * @returns The page of messages and the cursor for the next page, if any.
  */
 export async function getChatMessages(
   port: number,
@@ -157,14 +155,15 @@ export async function getChatMessages(
 }
 
 // ===========================================================================
-// СООБЩЕСТВА
+// COMMUNITIES
 // ===========================================================================
 
 /**
- * Сообщества, в которых состоит пользователь.
+ * Communities the user has joined.
  *
- * Внутри каждого — `chats` (id канала -> запись канала) и `categories`
- * (id категории -> категория) со всеми подписями.
+ * @param port - Auth proxy port.
+ * @returns Joined communities, each with `chats` (channel id to channel) and
+ * `categories` (category id to category).
  */
 export async function getJoinedCommunities(port: number): Promise<Community[]> {
   const res = await statusFetch<{ result?: Community[] }>(port, 'CallRPC', {
@@ -176,7 +175,7 @@ export async function getJoinedCommunities(port: number): Promise<Community[]> {
   return res.result || [];
 }
 
-/** Все известные сообщества, включая невступлённые. */
+/** Every known community, including ones the user has not joined. */
 export async function getCommunities(port: number): Promise<Community[]> {
   const res = await statusFetch<{ result?: Community[] }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -188,18 +187,18 @@ export async function getCommunities(port: number): Promise<Community[]> {
 }
 
 /**
- * Просматриваемые сообщества (spectate).
+ * Communities the user is spectating.
  *
- * ## Зачем отдельный метод
- *
- * `wakuext_joinedCommunities` — это буквально `WHERE c.joined`
- * (internal/protocol/communities/persistence.go, `JoinedCommunities`).
- * Просматриваемые сообщества туда не попадают, хотя их каналы лежат в
- * `wakuext_chats` и читаются.
- *
- * Отдельного RPC «joined or spectated» нет: `JoinedOrSpectatedCommunities`
- * существует в `Persistence`, но не выставлен в `PublicAPI`. Поэтому
- * берём `wakuext_communities` (`All()`) и фильтруем на клиенте.
+ * @param port - Auth proxy port.
+ * @returns Communities with `spectated === true`.
+ * @remarks
+ * `wakuext_joinedCommunities` is literally `WHERE c.joined`
+ * (internal/protocol/communities/persistence.go, `JoinedCommunities`), so
+ * spectated communities never appear there even though their channels are in
+ * `wakuext_chats` and are readable. There is no "joined or spectated" RPC:
+ * `JoinedOrSpectatedCommunities` exists in `Persistence` but is not exposed in
+ * `PublicAPI`. This therefore reads `wakuext_communities` (`All()`) and filters
+ * on the client.
  */
 export async function getSpectatedCommunities(port: number): Promise<Community[]> {
   const all = await getCommunities(port);
@@ -207,19 +206,19 @@ export async function getSpectatedCommunities(port: number): Promise<Community[]
 }
 
 /**
- * Каталог сообществ из смарт-контракта Directory.
+ * Community catalogue from the Directory smart contract.
  *
- * Это источник раздела Discover в SIM (`messenger_curated_communities.go`,
- * `getCuratedCommunitiesFromContract`): Optimism mainnet, или Optimism
- * Sepolia при включённом тестовом режиме.
- *
- * Ответ устроен не как «список готовых сообществ»:
- *   * `communities` — карта id -> описание, но ТОЛЬКО для тех, чьё описание
- *     уже лежит в базе;
- *   * `unknownCommunities` — id из контракта, описания которых ещё нет;
- *     status-go догружает их фоном и присылает сигнал.
- *
- * Поэтому на первом вызове карта может быть пустой — это не ошибка.
+ * @param port - Auth proxy port.
+ * @returns Contract community ids, the featured subset, known descriptions and
+ * ids whose descriptions are still missing.
+ * @remarks
+ * This backs the Discover section in SIM (`messenger_curated_communities.go`,
+ * `getCuratedCommunitiesFromContract`): Optimism mainnet, or Optimism Sepolia
+ * when test mode is on. The response is not a list of ready communities:
+ * `communities` is an id-to-description map but only for communities already in
+ * the database, and `unknownCommunities` holds contract ids that are not. The map
+ * can therefore be empty on the first call while status-go fetches descriptions
+ * in the background; that is not an error.
  */
 export async function getCuratedCommunities(
   port: number
@@ -253,14 +252,14 @@ export async function getCuratedCommunities(
 }
 
 // ===========================================================================
-// ДОСТУП И ВСТУПЛЕНИЕ
+// ACCESS AND JOINING
 // ===========================================================================
 
-/** Значения `CommunityPermissions_Access` (protobuf/communities.pb.go). */
+/** `CommunityPermissions_Access` values (protobuf/communities.pb.go). */
 export const CommunityAccessValue = {
   Unknown: 0,
   AutoAccept: 1,
-  /** @deprecated в самом .proto; не используется с 2022 года. */
+  /** @deprecated in the .proto itself; unused since 2022. */
   InvitationOnly: 2,
   ManualAccept: 3,
 } as const;
@@ -277,29 +276,23 @@ export const TokenPermissionType = {
 } as const;
 
 /**
- * Как сообщество пускает внутрь — одним значением.
+ * How a community lets people in, as a single value.
  *
- * ## Почему не по `canRequestAccess`
+ * @param community - Community record from status-go.
+ * @returns `token` when a BECOME_MEMBER permission exists, otherwise `open`,
+ * `request` or `unknown` from `permissions.access`.
+ * @remarks
+ * `canRequestAccess` cannot be used for this: it returns `false` both for an open
+ * community and for one the user already belongs to, so the two are
+ * indistinguishable. The distinction matters on the preview screen, where the
+ * user is not a member yet.
  *
- * `CanRequestAccess` в status-go возвращает `false` и когда сообщество
- * открытое, и когда мы уже участники:
+ * The token gate is checked first because `Encrypted()` in status-go means "has a
+ * BECOME_MEMBER right", independent of `access`. A community can be MANUAL_ACCEPT
+ * and token-gated at once, and then the token is the more useful fact.
  *
- * ```go
- * func (o *Community) CanRequestAccess(pk *ecdsa.PublicKey) bool {
- *     if o.hasMember(pk) { return false }
- *     return o.config.CommunityDescription.Permissions.Access == MANUAL_ACCEPT
- * }
- * ```
- *
- * Отличить «открытое» от «уже внутри» по нему невозможно, а нам нужно
- * различие именно для экрана превью, где пользователь ещё не участник.
- *
- * ## Почему токен-гейт первым
- *
- * `Encrypted()` в status-go определяется как «есть право BECOME_MEMBER»,
- * независимо от `access`. Сообщество может одновременно быть MANUAL_ACCEPT
- * и требовать токен — тогда вступление это «заявка + проверка токена», и
- * пользователю важнее знать про токен.
+ * An absent or UNKNOWN_ACCESS value is treated as `request` rather than `open`:
+ * status-go's default is that access must always be requested.
  */
 export function communityAccess(community: {
   permissions?: CommunityPermissions;
@@ -316,33 +309,38 @@ export function communityAccess(community: {
     case CommunityAccessValue.ManualAccept:
       return 'request';
     default:
-      // UNKNOWN_ACCESS или поле не пришло. В status-go «всегда нужно
-      // просить доступ» — поведение по умолчанию (validateRequestToJoin…),
-      // поэтому осторожная трактовка — `request`, а не `open`.
+      // UNKNOWN_ACCESS or the field is absent. status-go's default is that
+      // access must always be requested, so the cautious reading is `request`.
       return 'unknown';
   }
 }
 
 /**
- * Полный id канала внутри сообщества.
+ * Full id of a channel inside a community.
  *
- * id канала в `Community.chats` — голое имя (`intros`), а `Chat.id` —
- * склейка `communityID + channelID` (internal/protocol/communities,
- * `ChatID`). Для `sendChatMessage` нужен именно склеенный: иначе сообщение
- * уйдёт в несуществующий чат.
+ * @param communityId - Community id.
+ * @param channelId - Bare channel name as it appears in `Community.chats`.
+ * @returns The concatenated chat id.
+ * @remarks
+ * A key in `Community.chats` is a bare name (`intros`), while `Chat.id` is the
+ * concatenation `communityID + channelID` (internal/protocol/communities,
+ * `ChatID`). `sendChatMessage` needs the concatenated form; the bare name sends
+ * the message to a chat that does not exist.
  */
 export function communityChatId(communityId: string, channelId: string): string {
   return `${communityId}${channelId}`;
 }
 
 /**
- * Проверка, какие наши адреса проходят по токен-условиям сообщества.
+ * Checks which of the user's addresses satisfy the community's token criteria.
  *
- * `satisfied` — ответ на «You are eligible to join as member».
- * `validCombinations` — какие адреса подошли (и для каких сетей), то есть
- * содержимое экрана «Select address to share».
- *
- * Вызов без `addresses` проверяет все активные кошельковые адреса.
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @param addresses - Addresses to check; an empty array checks every active
+ * wallet address.
+ * @returns `satisfied` answers "you are eligible to join as member";
+ * `validCombinations` lists the addresses that passed, per chain, as shown on
+ * the "Select address to share" screen.
  */
 export async function checkPermissionsToJoinCommunity(
   port: number,
@@ -381,13 +379,25 @@ export async function checkPermissionsToJoinCommunity(
 }
 
 /**
- * Получает данные, которые нужно подписать, чтобы раскрыть адреса.
+ * Builds the payloads that must be signed to reveal addresses to a community.
  *
- * Возвращает по одному `SignParams` на адрес; порядок соответствует
- * порядку `addressesToReveal`. Подписывается
- * `keccak256(publicKeyCompressed, communityID, requestID)` — то есть подпись
- * привязана и к сообществу, и к конкретной заявке, и переиспользовать её
- * для другого сообщества нельзя.
+ * @param port - Auth proxy port.
+ * @param memberPublicKey - Public key of the community member.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @param addressesToReveal - Addresses the user agreed to share.
+ * @returns One `SignParams` per signable address, in the same order as the
+ * addresses were given.
+ * @remarks
+ * `personal.SignParams` skips chat accounts and watch-only accounts, so the
+ * result can be shorter than `addressesToReveal`; callers must drop the
+ * addresses that came back without `data` rather than assume a one-to-one
+ * mapping, while keeping the returned order, because the request to join
+ * requires signatures in address order. An address that cannot be signed cannot
+ * be revealed.
+ *
+ * Each payload covers `keccak256(publicKeyCompressed, communityID, requestID)`,
+ * so a signature is bound to one community and one request and cannot be reused
+ * elsewhere.
  */
 export async function generateJoiningRequestsForSigning(
   port: number,
@@ -407,23 +417,22 @@ export async function generateJoiningRequestsForSigning(
 }
 
 /**
- * Подписывает подготовленные хеши.
+ * Signs the prepared payloads with the profile password.
  *
- * ## Почему это отдельный и неизбежный шаг
+ * @param port - Auth proxy port.
+ * @param params - Payloads returned by `generateJoiningRequestsForSigning`.
+ * @param password - Profile password, the same for every address.
+ * @returns Signatures in the same order as `params`.
+ * @remarks
+ * Inside `Messenger.SignData` status-go calls
+ * `m.accountsManager.GetVerifiedWalletAccount(address, param.Password)`, so it
+ * verifies the password against every address; without it there are no
+ * signatures, and `RequestToJoinCommunity` without signatures is discarded by
+ * the control node as unverified. The password is entered in the interface
+ * because there is no keystore here that could sign silently.
  *
- * Внутри `Messenger.SignData` вызывается
- * `m.accountsManager.GetVerifiedWalletAccount(address, param.Password)` —
- * то есть status-go проверяет пароль пользователя на каждом адресе. Без
- * пароля подписи не будет, а без подписей `RequestToJoinCommunity` откажет
- * (в заявке допускается пустой `signatures`, но control node отбрасывает
- * такие заявки как неподтверждённые).
- *
- * Отдельный `signData` выносит ввод пароля в интерфейс: у нас нет
- * keystore, который мог бы подписать молча.
- *
- * `password` один на все адреса: ключи одного профиля открываются одним
- * паролем. Если понадобится раздельное подписание — это отдельный вызов
- * на каждый адрес.
+ * One password covers all addresses, since one profile's keys share it. Signing
+ * per address would need a separate call for each.
  */
 export async function signJoinRequestData(
   port: number,
@@ -440,17 +449,25 @@ export async function signJoinRequestData(
 }
 
 /**
- * Отправляет заявку на вступление.
+ * Sends a request to join a community.
  *
- * Требования status-go, которые проверяются до отправки
- * (requests/request_to_join_community.go, `Validate`):
- *   * `addressesToReveal` не пуст;
- *   * `airdropAddress` задан и входит в `addressesToReveal`;
- *   * длина каждой подписи ровно `crypto.SignatureLength` (65).
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @param addressesToReveal - Addresses to reveal; must not be empty.
+ * @param signatures - One signature per revealed address, in the same order.
+ * @param airdropAddress - Address that receives airdrops; must be one of
+ * `addressesToReveal`.
+ * @param shareFutureAddresses - Whether to sign with addresses added to the wallet
+ * later.
+ * @returns The backend's response.
+ * @remarks
+ * status-go validates the following before accepting the request
+ * (requests/request_to_join_community.go, `Validate`): `addressesToReveal` is
+ * not empty, `airdropAddress` is set and included in it, and every signature is
+ * exactly `crypto.SignatureLength` (65) bytes.
  *
- * `shareFutureAddresses` — подписываться ли новыми адресами, добавленными
- * в кошелёк позже. По умолчанию `false`: молча получив новый адрес, мы не
- * хотим автоматически раскрывать его сообществу.
+ * `shareFutureAddresses` defaults to `false`: an address the user did not
+ * deliberately share should not be revealed to the community automatically.
  */
 export async function requestToJoinCommunity(
   port: number,
@@ -478,18 +495,22 @@ export async function requestToJoinCommunity(
 }
 
 /**
- * Просмотр сообщества без вступления.
+ * Views a community without joining it.
  *
- * Ставит `Spectated = true`, инициализирует фильтры (подписка на pubsub-топик
- * сообщества) и создаёт записи `Chat` для всех каналов. После этого каналы
- * читаются, но `CanView` для нас `false` — писать нельзя, интерфейс прячет
- * ввод.
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @returns The backend's response.
+ * @remarks
+ * Sets `Spectated = true`, initialises the filters (subscription to the
+ * community's pubsub topic) and creates `Chat` records for every channel. The
+ * channels then read, but `CanView` is `false`, so posting is impossible and the
+ * interface hides the composer.
  *
- * Работает только для НЕзашифрованных каналов: в токен-гейте содержимое
- * зашифровано ключом, который выдаётся при вступлении.
+ * Works only for UNencrypted channels: in a token-gated community the content is
+ * encrypted with a key issued on joining.
  *
- * Состояние сохраняется в базу, поэтому «просмотр» переживает перезапуск и
- * требует явного `leaveCommunity`, чтобы убрать.
+ * The state is persisted, so spectating survives a restart and needs an explicit
+ * `leaveCommunity` to undo.
  */
 export async function spectateCommunity(port: number, communityId: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -501,25 +522,21 @@ export async function spectateCommunity(port: number, communityId: string): Prom
 }
 
 /**
- * Загружает сообщество по ключу (ссылка-приглашение или `0x`-идентификатор).
+ * Loads a community by its key: an invite link or a `0x` identifier.
  *
- * `waitForResponse: false` по умолчанию — не блокируем вызов до получения
- * ответа из сети: интерфейс покажет «загрузка» и обновится по сигналу
- * `community.found`. С `true` вызов может висеть десятки секунд на медленной
- * сети, поэтому включать его нужно только там, где ждать действительно надо.
- *
- * ## Когда нужен `waitForResponse: true`
- *
- * Каталог (`wakuext_curatedCommunities`) отдаёт id из контракта и описания
- * только для тех сообществ, что уже лежат в базе. Остальные попадают в
- * `unknownCommunities`, и status-go догружает их ФОНОМ. Если фон не успел,
- * в каталоге остаются записи «Loading description…», и сигнал
- * `curated.communities.update` приходит только когда список в контракте
- * изменится — то есть обычно никогда.
- *
- * Поэтому при раскрытии такого сообщества пользователем ждём ответ явно:
- * это одно сообщество, а не весь каталог, и пользователь уже смотрит на
- * индикатор загрузки.
+ * @param port - Auth proxy port.
+ * @param communityKey - Community key or invite link.
+ * @param waitForResponse - Whether to block until the network answers.
+ * @returns The community, or `null` when it could not be loaded.
+ * @remarks
+ * `waitForResponse: false` does not block on a network reply: the interface shows
+ * a loading state and updates when `community.found` arrives. With `true` the
+ * call can hang for tens of seconds on a slow network, so use it only where
+ * waiting is genuinely required — for example when the user expands a catalogue
+ * entry whose description status-go is still fetching in the background. The
+ * catalogue returns descriptions only for communities already in the database and
+ * otherwise shows "Loading description…" until the contract list changes, so
+ * waiting for one community the user explicitly opened is the reliable path.
  */
 export async function fetchCommunity(
   port: number,
@@ -536,11 +553,15 @@ export async function fetchCommunity(
 }
 
 /**
- * Вступает в сообщество.
+ * Joins a community.
  *
- * `communityID` — `cryptotypes.HexBytes` в status-go, то есть строка с
- * префиксом `0x` (см. internal/crypto/types/hex.go: `UnmarshalJSON` ждёт
- * именно строку). Передавать id без `0x` нельзя — разбор упадёт.
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @returns The backend's response.
+ * @remarks
+ * `communityID` is a `cryptotypes.HexBytes`, a string with a `0x` prefix (see
+ * internal/crypto/types/hex.go: `UnmarshalJSON` expects a string). An id without
+ * the prefix fails to parse.
  */
 export async function joinCommunity(port: number, communityId: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -551,7 +572,13 @@ export async function joinCommunity(port: number, communityId: string): Promise<
   });
 }
 
-/** Покидает сообщество. */
+/**
+ * Leaves a community.
+ *
+ * @param port - Auth proxy port.
+ * @param communityId - Community id, with or without a `0x` prefix.
+ * @returns The backend's response.
+ */
 export async function leaveCommunity(port: number, communityId: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -562,18 +589,24 @@ export async function leaveCommunity(port: number, communityId: string): Promise
 }
 
 /**
- * Убирает чат из списка (`wakuext_deactivateChat`).
+ * Removes a chat from the list (`wakuext_deactivateChat`).
  *
- * Поле в запросе называется `id`, а не `chatID`: так объявлен
- * `requests.DeactivateChat` (internal/protocol/requests/deactivate_chat.go).
- * С `chatID` бэкенд отвечает «deactivate-chat: invalid id» — проверено.
+ * @param port - Auth proxy port.
+ * @param chatId - Chat id.
+ * @param preserveHistory - Whether to keep message history.
+ * @returns The backend's response.
+ * @remarks
+ * The request field is `id`, not `chatID`, as declared by
+ * `requests.DeactivateChat` (internal/protocol/requests/deactivate_chat.go); with
+ * `chatID` the backend answers "deactivate-chat: invalid id".
  *
- * `preserveHistory: false` — история удаляется вместе с чатом. Для публичного
- * канала это единственный способ «отписаться»: он не имеет владельца и
- * удалить его для всех нельзя, но у себя убрать можно.
+ * `preserveHistory` defaults to `false`, which deletes the history together with
+ * the chat. For a public channel this is the only way to "unsubscribe": the
+ * channel has no owner, so it cannot be removed for everyone, but it can be
+ * hidden locally.
  *
- * Для канала сообщества этот вызов скрывает канал, а не сообщество. Чтобы
- * уйти из сообщества целиком, нужен `leaveCommunity`.
+ * For a community channel this hides the channel, not the community; leaving the
+ * community needs `leaveCommunity`.
  */
 export async function deactivateChat(
   port: number,
@@ -589,11 +622,15 @@ export async function deactivateChat(
 }
 
 /**
- * Вступает в публичный канал (или создаёт его, если такого ещё нет).
+ * Joins a public channel, creating it if it does not exist yet.
  *
- * В status-go за это отвечает `CreatePublicChat`, принимающий объект
- * `{ id }` (internal/protocol/requests/create_public_chat.go), а не строку.
- * `id` — имя канала без решётки, например `status`.
+ * @param port - Auth proxy port.
+ * @param chatId - Channel name, with or without a leading `#`.
+ * @returns The backend's response.
+ * @remarks
+ * status-go backs this with `CreatePublicChat`, which takes an object `{ id }`
+ * (internal/protocol/requests/create_public_chat.go), not a string. `id` is the
+ * channel name without the hash, for example `status`.
  */
 export async function joinPublicChat(port: number, chatId: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -605,10 +642,13 @@ export async function joinPublicChat(port: number, chatId: string): Promise<any>
 }
 
 /**
- * Приводит идентификатор к виду с `0x`.
+ * Normalises an id to the `0x` form.
  *
- * status-go разбирает `HexBytes` только из строки с префиксом; без него
- * `UnmarshalJSON` вернёт ошибку разбора, и вступление не произойдёт.
+ * @param id - Id with or without a `0x` prefix.
+ * @returns The id with a single `0x` prefix, or the trimmed input when empty.
+ * @remarks
+ * status-go parses `HexBytes` only from a string with the prefix; without it
+ * `UnmarshalJSON` fails and the call never happens.
  */
 export function normalizeHex(id: string): string {
   const trimmed = id.trim();
@@ -617,14 +657,14 @@ export function normalizeHex(id: string): string {
 }
 
 /**
- * Приводит имя канала к виду, который ждёт status-go.
+ * Normalises a channel name to the form status-go expects.
  *
- * Пользователь может вставить `#status`, `t.me/status` или просто `status` —
- * принимаем все варианты и оставляем имя без решётки и без домена.
+ * @param raw - User input, possibly `#status`, `t.me/status` or `status`.
+ * @returns The channel name without a hash or a domain.
  */
 export function normalizeChatId(raw: string): string {
   let id = raw.trim();
-  // Ссылка на канал: t.me/<name> или https://t.me/<name>
+  // A channel link: t.me/<name> or https://t.me/<name>
   const link = id.match(/^(?:https?:\/\/)?(?:www\.)?t\.me\/([^/?#]+)/i);
   if (link) id = link[1];
   id = id.replace(/^#/, '');
@@ -632,32 +672,21 @@ export function normalizeChatId(raw: string): string {
 }
 
 /**
- * Достаёт UUID канала из ссылки `status.app/cc/<uuid>#<ключ>`.
+ * Extracts the channel UUID from a `status.app/cc/<uuid>#<key>` link.
  *
- * Такая ссылка — это `Chat.DeepLink()` в status-go:
+ * @param raw - Invite link text.
+ * @returns The lowercase channel UUID, or `null` when the link carries none.
+ * @remarks
+ * This is the shape of `Chat.DeepLink()` in status-go, where `communityChannelID`
+ * is a UUID matching `^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$`.
+ * The value is returned only when it really looks like a UUID, because it is used
+ * to look the channel up in `Community.chats`, where anything else finds nothing.
+ * Links of other shapes (`/c/…`, `/user/…`) carry no channel.
  *
- * ```go
- * func (c *Chat) DeepLink() string {
- *     if c.CommunityChat() {
- *         return "status-app://cc/" + communityChannelID + "#" + serializedCommunityID
- *     }
- * ```
- *
- * `communityChannelID` — UUID канала (в status-go `channelUUIDRegExp`:
- * `^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$`).
- * Возвращаем его, только если он действительно похож на UUID: по этому
- * значению мы ищем канал в `Community.chats`, и мусор там ничего не найдёт.
- *
- * Для ссылок других видов (`/c/…`, `/user/…`) не возвращаем ничего —
- * канала в них нет.
- *
- * ## Только для «голого» UUID
- *
- * Вторая форма канальной ссылки несёт brotli-сжатый protobuf вместо UUID.
- * Здесь её разобрать нельзя (в webview нет brotli), поэтому такие ссылки
- * идут через `parseInviteLink` — команду Rust (`src-tauri/src/invite.rs`).
- * Эта функция остаётся синхронной и без зависимостей: она для случая, когда
- * UUID пришёл как есть.
+ * The second form of a channel link carries a brotli-compressed protobuf instead
+ * of a UUID; it cannot be decoded in the webview and is handled by
+ * `parseChannelInvite` through the Rust command. This function stays synchronous
+ * and dependency-free for the plain-UUID case.
  */
 export function channelIdFromInvite(raw: string): string | null {
   const m = raw.trim().match(/status\.app\/cc\/([^#?&\s]+)/i);
@@ -667,7 +696,7 @@ export function channelIdFromInvite(raw: string): string | null {
   try {
     uuid = decodeURIComponent(m[1]).toLowerCase();
   } catch {
-    // Битая процентная последовательность — не повод бросать исключение.
+    // A broken percent escape must not raise.
     return null;
   }
   const re = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -675,26 +704,27 @@ export function channelIdFromInvite(raw: string): string | null {
 }
 
 /**
- * Разбирает канальную ссылку через Rust — и для сжатого пейлоада тоже.
+ * Parses a channel link in Rust, including the compressed payload form.
  *
- * ## Почему не во фронтенде
+ * @param raw - Link text.
+ * @returns The channel id and names, or `null` when the link is not a channel
+ * link or cannot be parsed.
+ * @remarks
+ * This path exists because of brotli: the second link form
+ * (`status.app/cc/<brotli>#<key>`) carries a brotli-compressed protobuf with the
+ * channel and community descriptions, and `DecompressionStream` in Chromium knows
+ * gzip and deflate but not brotli, so the decoding happens in Rust. status-go has
+ * its own parser (`sharedurls.Service`) but does not expose it as an RPC.
  *
- * Вторая форма ссылки (`status.app/cc/<brotli>#<ключ>`) содержит brotli-сжатый
- * protobuf с описанием канала и сообщества. `DecompressionStream` в Chromium
- * знает gzip и deflate, brotli в нём нет, поэтому разбор — в Rust.
- *
- * Разбор есть и в самом `status-go` (`sharedurls.Service`), но не выставлен
- * как RPC — форк для этого не нужен.
- *
- * Возвращает `null`, если ссылка не на канал. Ошибки разбора не бросает:
- * сообщество по ключу после `#` открывается в любом случае.
+ * Parsing failures do not throw: the community behind the key after `#` opens
+ * regardless, just without the channel description.
  */
 export async function parseChannelInvite(
   raw: string
 ): Promise<{ channelId: string | null; channelName: string | null; communityName: string | null } | null> {
   if (!/status\.app\/cc\//i.test(raw)) return null;
 
-  // Сначала пробуем дешёвый путь: UUID текстом, без Rust.
+  // Try the cheap path first: a plain-text UUID, without Rust.
   const bare = channelIdFromInvite(raw);
   if (bare) return { channelId: bare, channelName: null, communityName: null };
 
@@ -712,47 +742,40 @@ export async function parseChannelInvite(
       communityName: parsed.community_name,
     };
   } catch (e) {
-    // Разбор описания — вспомогательный: без него сообщество всё равно
-    // откроется, просто на первом канале.
+    // The description is auxiliary: without it the community still opens, just
+    // on its first channel.
     debug('[invite] failed to parse channel link:', e);
     return null;
   }
 }
 
 /**
- * Достаёт id сообщества из ссылки-приглашения Status.
+ * Extracts a community id from a Status invite link.
  *
- * ## Почему нельзя просто взять хвост после `/c/`
- *
- * Ссылка имеет вид:
+ * @param raw - Invite link or a bare community id.
+ * @returns `0x`-hex community id, or the input unchanged when it cannot be
+ * decoded.
+ * @remarks
+ * A link looks like
  *
  * ```
  * https://status.app/c/G0UAAGR0254s...==#zQ3shuaXi1bQ6iVowkgm6eUtt5PPToUUpifePDvereeupioks
- *                          └─ base64 ─┘  └─ base58btc, ключ сообщества ─┘
+ *                          └─ base64 ─┘  └─ base58btc, community key ─┘
  * ```
  *
- * `FetchCommunityRequest.Validate` требует hex:
+ * The part after `/c/` is base64, while `FetchCommunityRequest.Validate` requires
+ * hex. The part after `#` is multibase base58btc: a leading `z` marks base58,
+ * followed by the two-byte varint multicodec prefix `0xe7 0x01` (`secp256k1-pub`)
+ * and the 33-byte compressed public key. The community id is `0x` plus the hex of
+ * those 33 bytes.
  *
- * ```go
- * if _, err := cryptotypes.DecodeHex(r.CommunityKey); err != nil {
- *     return fmt.Errorf("invalid community key")
- * }
- * ```
- *
- * Значит base64-часть не подходит, а хвост после `#` — это multibase base58btc:
- * первый символ `z` означает base58, дальше идёт varint-префикс multicodec
- * `0xe7 0x01` (`secp256k1-pub`, два байта) и сжатый публичный ключ (33 байта).
- * Итоговый id — `0x` + hex этих 33 байт.
- *
- * ## Что делаем с ключом, если декодировать не удалось
- *
- * Возвращаем строку как есть: бэкенд ответит внятной ошибкой, а мы не
- * теряем возможность передать уже hex-идентификатор.
+ * When decoding fails the string is returned as is, so an already hex id is still
+ * passed through and the backend reports a clear error.
  */
 export function communityIdFromInvite(raw: string): string {
   const value = raw.trim();
 
-  // Ключ после `#` — основной вариант для ссылки-приглашения.
+  // The key after `#` is the main form for an invite link.
   const hashIdx = value.lastIndexOf('#');
   const candidate = hashIdx >= 0 ? value.slice(hashIdx + 1).trim() : value;
 
@@ -765,11 +788,15 @@ export function communityIdFromInvite(raw: string): string {
 }
 
 /**
- * multibase-base58btc → `0x`-hex сжатого публичного ключа.
+ * Decodes multibase base58btc into the `0x`-hex compressed public key.
  *
- * Снимает ровно два байта varint-префикса multicodec. Длина префикса
- * фиксирована для `secp256k1-pub` (0xe7 0x01), поэтому разбор не нужен:
- * после него должно остаться 33 байта.
+ * @param s - Base58btc string with the `z` prefix.
+ * @returns Hex key with the `0x` prefix, or `null` when the input is not a key.
+ * @remarks
+ * Exactly the two-byte varint multicodec prefix is removed. Its length is fixed
+ * for `secp256k1-pub` (`0xe7 0x01`), so no parsing is needed: 33 key bytes must
+ * remain. A longer prefix means the input is not what it claims to be, and bytes
+ * are not cut off at a guess.
  */
 function base58ToHex(s: string): string | null {
   const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -785,8 +812,8 @@ function base58ToHex(s: string): string | null {
   if (hex.length % 2) hex = '0' + hex;
   const bytes = hex.length / 2;
 
-  // 35 байт = 2 байта multicodec + 33 байта ключа. Если пришло больше —
-  // значит префикс длиннее, и отрезать наугад нельзя.
+  // 35 bytes is a 2-byte multicodec prefix plus a 33-byte key. Anything longer
+  // means a longer prefix, and cutting at a guess would be wrong.
   const prefixLen = bytes - 33;
   if (prefixLen < 1 || prefixLen > 2) return null;
 
@@ -794,21 +821,18 @@ function base58ToHex(s: string): string | null {
 }
 
 /**
- * Разворачивает сообщества в плоский список каналов.
+ * Flattens communities into a single list of channels.
  *
- * Нужно для списка чатов: пользователю важны каналы, а не вложенность.
- * Каждый элемент несёт `communityId` и `categoryId`, чтобы UI мог собрать
- * заголовки групп.
- *
- * ## Почему id пересобирается
- *
- * В `Community.chats` ключ и поле `id` — это ГОЛОЕ имя канала (`intros`),
- * а `Chat.id` в status-go — склейка `communityID + channelID`
- * (internal/protocol/communities/community.go, `ChatID`). Совпадать они
- * обязаны: по `id` мы ищем чат в результатах `wakuext_chats`, а в
- * `sendChatMessage` передаём его как `chatId`. Оставь мы голое имя, и
- * сообщение ушло бы в несуществующий чат, а канал продублировался бы в
- * списке отдельной строкой.
+ * @param communities - Communities with their nested `chats`.
+ * @returns Channels with `communityId` and `categoryId` set, so the interface can
+ * build group headings.
+ * @remarks
+ * A key in `Community.chats` is a bare channel name (`intros`), while `Chat.id` in
+ * status-go is `communityID + channelID` (internal/protocol/communities/community.go,
+ * `ChatID`). The ids must match: the result of this function is what gets looked
+ * up in `wakuext_chats` and passed to `sendChatMessage` as `chatId`. A bare name
+ * would send messages to a chat that does not exist and would also list the
+ * channel twice.
  */
 export function communityChannels(communities: Community[]): CommunityChat[] {
   const out: CommunityChat[] = [];
@@ -827,36 +851,38 @@ export function communityChannels(communities: Community[]): CommunityChat[] {
 }
 
 // ===========================================================================
-// ОТПРАВКА
+// SENDING
 // ===========================================================================
 
 /**
- * Отправка текстового сообщения.
+ * Sends a text message.
  *
- * `wakuext_sendChatMessage` принимает `*common.Message`, а не готовые строки.
- * Тело повторяет форму, которую разбирает `Message.UnmarshalJSON` в
- * status-go (см. internal/protocol/common/message.go): `id` и `chatId` лежат
- * на верхнем уровне (на стороне Go это встроенный `protobuf.ChatMessage`),
- * `contentType: 1` — обычный текст.
+ * @param port - Auth proxy port.
+ * @param chatId - Full chat id.
+ * @param text - Message body.
+ * @param communityId - Community id for messages in community channels; an empty
+ * string for direct chats and public channels.
+ * @param responseTo - Id of the message being answered; an empty string sends an
+ * ordinary message.
+ * @returns The backend's response.
+ * @remarks
+ * `wakuext_sendChatMessage` takes a single `*common.Message` object, not separate
+ * strings — the shape here is what `Message.UnmarshalJSON` parses
+ * (internal/protocol/common/message.go): `id` and `chatId` sit at the top level
+ * (on the Go side they come from the embedded `protobuf.ChatMessage`), and
+ * `contentType: 1` is plain text. Passing `chatId` and `text` as separate
+ * arguments is not accepted.
  *
- * Порядок аргументов `params` — один элемент-объект; отдельные `chatId` и
- * `text` метод НЕ принимает, хотя именно так выглядела прежняя версия.
+ * `responseTo` turns the message into a comment. It works without a feature flag,
+ * unlike `threadId`, which the backend silently clears when
+ * `featureFlags.Threads` is off (messenger.go, `message.ThreadId = nil`). The
+ * backend accepts only the id of a message it already holds (`MessagesExist`,
+ * `SELECT id FROM user_messages WHERE id IN (...)` with no chat filter), so the
+ * parent must be loaded before it can be answered.
  *
- * `communityId` нужен для сообщений в каналах сообществ; для личных чатов и
- * публичных каналов — пустая строка.
- *
- * `responseTo` превращает сообщение в комментарий (см. docs/ru/akk_scheme.md).
- * Пустая строка — обычное сообщение. Ограничения и следствия:
- *
- *   * поле работает без feature-флага, в отличие от `threadId`, который при
- *     выключенном `featureFlags.Threads` бэкенд молча затирает
- *     (messenger.go, `message.ThreadId = nil`);
- *   * бэкенд принимает только id сообщения, которое у него уже есть в базе
- *     (`MessagesExist`, `SELECT id FROM user_messages WHERE id IN (...)` без
- *     фильтра по чату);
- *   * ответ остаётся обычной строкой с тем же `local_chat_id`, поэтому
- *     приходит в общем списке канала — разделять записи и комментарии
- *     обязан клиент, см. `isReply`.
+ * A reply stays an ordinary row with the same `local_chat_id`, so it arrives in
+ * the channel's general list: separating entries from comments is the client's
+ * job, see `isReply`.
  */
 export async function sendChatMessage(
   port: number,
@@ -883,29 +909,29 @@ export async function sendChatMessage(
 }
 
 /**
- * Является ли сообщение комментарием.
+ * Whether a message is a comment.
  *
- * status-go не различает записи и ответы на уровне канала: комментарий лежит
- * в той же таблице `user_messages` с тем же `local_chat_id`, а
- * `MessageByChatID` фильтрует `response_to` только через `thread_id`, и тот
- * фильтр отключён при выключенных threads:
- *
- * > If threads are disabled, then we are backwards compatible and messages in
- * > threads are treated as normal messages, so we don't filter them out.
- *
- * Значит разделение — наша обязанность, и жить оно должно в одном месте:
- * иначе лента канала и панель комментариев разойдутся в трактовке.
+ * @param msg - Message record, possibly absent.
+ * @returns `true` when the message carries a non-empty `responseTo`.
+ * @remarks
+ * status-go does not distinguish entries from replies at the channel level: a
+ * comment sits in the same `user_messages` table with the same `local_chat_id`.
+ * `MessageByChatID` filters on `response_to` only through `thread_id`, and that
+ * filter is off when threads are disabled ("If threads are disabled, then we are
+ * backwards compatible and messages in threads are treated as normal messages")
+ * — so the separation is the client's, and it belongs in one place, or the channel
+ * feed and the comment panel will disagree.
  */
 export function isReply(msg: { responseTo?: string } | null | undefined): boolean {
   return !!msg?.responseTo && msg.responseTo.length > 0;
 }
 
 // ===========================================================================
-// КОНТАКТЫ
+// CONTACTS
 // ===========================================================================
 
-// Контакты оставлены здесь же: они часть того же пространства имён и
-// используются списком чатов для подстановки имён.
+// Contacts share the same namespace and are used by the chat list to resolve
+// display names, so they live here too.
 export async function getContacts(port: number): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -925,12 +951,16 @@ export async function acceptContactRequest(port: number, contactPublicKey: strin
 }
 
 /**
- * Отклоняет входящий запрос контакта.
+ * Declines an incoming contact request.
  *
- * status-go ищет запрос по `id`; если записи с таким id нет, использует
- * детерминированный `defaultContactRequestID(contactId)`. Поэтому передаём
- * тот же вычисленный id: он совпадает с тем, что лежит в базе для запроса от
- * этого контакта.
+ * @param port - Auth proxy port.
+ * @param contactPublicKey - Public key of the contact.
+ * @returns The backend's response.
+ * @remarks
+ * status-go looks the request up by `id` and, when no record has that id, falls
+ * back to the deterministic `defaultContactRequestID(contactId)`. The id computed
+ * here is that same value, so it matches the row stored for a request from this
+ * contact.
  */
 export async function declineContactRequest(port: number, contactPublicKey: string): Promise<any> {
   const id = '0x' + contactPublicKey.replace(/^0x/, '') + '20';
@@ -942,7 +972,7 @@ export async function declineContactRequest(port: number, contactPublicKey: stri
   });
 }
 
-/** Помечает все сообщения чата прочитанными (сбрасывает счётчик «1»). */
+/** Marks every message in a chat as read, clearing its unread counter. */
 export async function markChatRead(port: number, chatId: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -953,30 +983,43 @@ export async function markChatRead(port: number, chatId: string): Promise<any> {
 }
 
 /**
- * Рассылает обновлённое экранное имя уже добавленным контактам.
+ * Sends the updated display name to contacts that were already added.
  *
- * Заявка в контакты несёт имя из настроек, а контакт, которому оно уже
- * отправлено, видит старое, пока не придёт обновление. Вызывается после
- * сохранения имени в профиле.
+ * @param port - Auth proxy port.
+ * @param displayName - New display name.
+ * @returns The backend's response.
+ * @remarks
+ * A contact request carries the name from settings at the time it was sent, and a
+ * contact that already received it keeps seeing the old name until an update
+ * arrives. Call this after the name is saved to the profile.
  */
 export async function sendContactUpdates(port: number, displayName: string): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_sendContactUpdates',
-    // Аргументы status-go: name, picture, customizationColor (как при создании профиля).
+    // status-go arguments: name, picture, customizationColor (as at profile creation).
     params: [displayName, '', 'primary'],
   });
 }
 
 /**
- * Отправляет заявку в контакты.
+ * Sends a contact request.
  *
- * status-go отвергает пустое сообщение
+ * @param port - Auth proxy port.
+ * @param publicKey - Contact public key, compressed `0x`-hex or multibase.
+ * @param message - Greeting; empty falls back to a default.
+ * @returns The backend's response.
+ * @remarks
+ * status-go rejects an empty message
  * (`requests.SendContactRequest.Validate`: `ErrSendContactRequestInvalidMessage`),
- * а интерфейс приглашения по ключу сообщения не спрашивает. Поэтому пустой
- * текст заменяем на приветствие по умолчанию: без него заявка не уходит
- * вовсе, и ошибка выглядит как «invalid message» без объяснения.
+ * and the invite-by-key screen does not ask for one, so empty text is replaced
+ * with a default greeting: without it the request never leaves.
+ *
+ * A compressed key must be sent in multibase form (`zQ3…`). status-go decodes
+ * `0x`-hex as `f` + hex and reads the first byte `03` as a key-type code, which
+ * yields `unsupported public key type '3'`. A legacy uncompressed key (132
+ * characters) is accepted as is, so it is passed through unchanged.
  */
 export async function sendContactRequest(
   port: number,
@@ -984,10 +1027,9 @@ export async function sendContactRequest(
   message = ''
 ): Promise<any> {
   const text = message.trim() || 'Hi! Please add me as a contact.';
-  // status-go ждёт multibase-ключ (`zQ3…`). `0x`-hex сжатого ключа он
-  // декодирует как `f`+hex, и первый байт `03` читается как код типа ключа —
-  // отсюда `unsupported public key type '3'`. Старый несжатый ключ (132
-  // символа) принимается как есть.
+  // status-go expects a multibase key (`zQ3…`). It decodes `0x`-hex as `f` + hex,
+  // so the leading `03` byte reads as a key-type code and the call fails with
+  // `unsupported public key type '3'`.
   let id = publicKey.trim();
   if (/^0x[0-9a-fA-F]{66}$/.test(id)) {
     id = hexToBase58Key(id);

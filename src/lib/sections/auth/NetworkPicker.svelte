@@ -17,20 +17,19 @@
   function selectNetwork(net: string) {
     selectedNetwork = net;
     if (onSelect) onSelect(net);
-    isTestnetExpanded = false; // Схлопываем после выбора
+    isTestnetExpanded = false; // Collapse after a choice.
   }
 
   function toggleTestnet() {
-    // Просто переключаем видимость списка, НЕ выбирая сеть
+    // Only toggles the visibility of the list; it never selects a network.
     isTestnetExpanded = !isTestnetExpanded;
   }
 
-  // Проверка, выбран ли тестнет (для подсветки кнопки)
+  // Whether a testnet is selected, for highlighting the button.
   const isTestnetSelected = $derived(selectedNetwork !== mainnet);
 </script>
 
 <div class="w-full max-w-md space-y-2">
-  <!-- Кнопка Mainnet -->
   <button
     onclick={() => selectNetwork(mainnet)}
     class="w-full flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors {selectedNetwork === mainnet ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-border hover:bg-secondary'}"
@@ -39,7 +38,6 @@
     <span class="font-medium text-foreground">Mainnet</span>
   </button>
 
-  <!-- Кнопка Testnet (с раскрытием) -->
   <div class="relative">
     <button
       onclick={toggleTestnet}
@@ -54,7 +52,6 @@
       </svg>
     </button>
 
-    <!-- Выпадающий список тестнетов (показываем если раскрыт) -->
     {#if isTestnetExpanded}
       <div class="mt-2 ml-4 space-y-1">
         {#each testnets as net (net)}

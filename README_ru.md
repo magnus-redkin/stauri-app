@@ -68,8 +68,6 @@ Stauri — настольный клиент для экосистемы [Status
   поток данных, подсистемы, инварианты.
 - [`docs/ru/networks_and_balances.md`](docs/ru/networks_and_balances.md) — путь
   от баланса до экрана: кэши `status-go`, локальный RPC-форвардер.
-- [`docs/ru/wallet_plan.md`](docs/ru/wallet_plan.md) — что осталось по кошельку,
-  главный план проверки реальными деньгами, известные риски.
 - [`docs/ru/providers_and_dapps.md`](docs/ru/providers_and_dapps.md) — внешние
   источники данных и dApp: модель доверия, изоляция, что уже работает.
 - [`docs/ru/akk_scheme.md`](docs/ru/akk_scheme.md) — схема «Автор → Канал →
@@ -78,8 +76,6 @@ Stauri — настольный клиент для экосистемы [Status
   почему `status-go` устроен сложно (историческая справка).
 - [`docs/ru/tests.md`](docs/ru/tests.md) — уровни тестов, что покрыто и что
   проверяется руками.
-- [`docs/PLAN.md`](docs/PLAN.md) — план работ, разбор внешнего аудита,
-  ближайшие большие задачи.
 
 ## Сборка
 
@@ -123,7 +119,7 @@ pnpm test:e2e    # Playwright, запускает реальное прилож�
 ## Что дальше
 
 Ближайшие задачи, в порядке: убрать явные недоделки, собрать бинарник для
-Android (затем Windows). Подробности — в [`docs/PLAN.md`](docs/PLAN.md), этап 5.
+Android (затем Windows).
 
 ## Лицензия
 

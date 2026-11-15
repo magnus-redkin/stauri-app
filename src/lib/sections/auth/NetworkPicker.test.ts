@@ -18,7 +18,7 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Mainnet должен быть подсвечен (bg-green-50 или border-green-500)
+    // Mainnet must be highlighted (bg-green-50 or border-green-500).
     const mainnetButton = screen.getByText('Mainnet').closest('button');
     expect(mainnetButton).toHaveClass('border-green-500');
   });
@@ -31,14 +31,13 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Изначально Sepolia и Holesky не видны
+    // Initially Sepolia and Holesky are hidden.
     expect(screen.queryByText('Sepolia')).not.toBeInTheDocument();
     expect(screen.queryByText('Holesky')).not.toBeInTheDocument();
 
-    // Кликаем на Testnet
     await fireEvent.click(screen.getByText('Testnet'));
 
-    // Теперь они должны быть видны
+    // Both are now visible.
     expect(screen.getByText('Sepolia')).toBeInTheDocument();
     expect(screen.getByText('Holesky')).toBeInTheDocument();
   });
@@ -51,10 +50,10 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Раскрываем список
+    // Expand the list.
     await fireEvent.click(screen.getByText('Testnet'));
 
-    // Кликаем на Sepolia
+    // Click Sepolia.
     await fireEvent.click(screen.getByText('Sepolia'));
 
     expect(mockOnSelect).toHaveBeenCalledWith('sepolia');
@@ -68,7 +67,7 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Кликаем на Mainnet
+    // Click Mainnet.
     await fireEvent.click(screen.getByText('Mainnet'));
 
     expect(mockOnSelect).toHaveBeenCalledWith('mainnet');
@@ -82,7 +81,7 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Testnet должен быть подсвечен (bg-orange-50 или border-orange-500)
+    // Testnet must be highlighted (bg-orange-50 or border-orange-500).
     const testnetButton = screen.getByText('Testnet').closest('button');
     expect(testnetButton).toHaveClass('border-orange-500');
   });

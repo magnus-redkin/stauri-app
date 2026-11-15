@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# release-create.sh — шаг 1 релиза: локальный тег и draft-релиз на GitHub.
+# release-create.sh — release step 1: local tag and a GitHub draft release.
 #
-# Использование (из stauri-app/):
-#   ./scripts/release-create.sh 0.4.0-beta          # создать тег и draft
-#   ./scripts/release-create.sh 0.4.0-beta --check  # только проверки, ничего не создаёт
+# Usage (from stauri-app/):
+#   ./scripts/release-create.sh 0.4.0-beta          # create tag and draft
+#   ./scripts/release-create.sh 0.4.0-beta --check  # checks only, creates nothing
 #
-# Предусловия (скрипт откажется, если хоть одно не выполнено):
-#   - рабочее дерево чистое, все изменения закоммичены (включая CHANGELOG.md);
-#   - в package.json, tauri.conf.json, Cargo.toml и appdata.xml уже стоит VERSION;
-#   - в CHANGELOG.md есть секция "## [VERSION]";
-#   - тега v<VERSION> нет ни локально, ни на origin, и релиза с таким тегом нет.
+# Preconditions (the script refuses unless all hold):
+#   - the tree is clean, everything committed (CHANGELOG.md included);
+#   - package.json, tauri.conf.json, Cargo.toml and appdata.xml already carry
+#     VERSION;
+#   - CHANGELOG.md has a "## [VERSION]" section;
+#   - tag v<VERSION> exists neither locally nor on origin, and no release with
+#     that tag exists.
 #
-# Что делает:
-#   - ставит локальный аннотированный тег v<VERSION> на HEAD (НЕ отправляет);
-#   - создаёт draft-релиз на GitHub с текстом из CHANGELOG.md и target = HEAD.
-#     У draft-релиза тег на GitHub появляется только при публикации, поэтому
-#     до шага 4 пользователи релиз не видят.
+# Steps:
+#   - create a local annotated tag v<VERSION> on HEAD (NOT pushed);
+#   - create a GitHub draft release with the CHANGELOG.md text and target = HEAD.
+#     A draft gets its GitHub tag only on publication, so users see nothing
+#     before step 4.
 #
-# Что НЕ делает: не загружает ассеты (шаги 2 и 3), не публикует (шаг 4).
+# Does not upload assets (steps 2 and 3) or publish (step 4).
 
 set -euo pipefail
 
@@ -49,7 +51,7 @@ ok()   { echo "  ✓ $1"; }
 
 echo "=== Релиз $VERSION (тег $TAG) ==="
 
-# 1. Чистое дерево. Untracked не учитываем: сборка их не использует.
+# 1. Clean tree. Untracked files do not matter: the build does not use them.
 echo "[1/5] Рабочее дерево"
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   fail "есть незакоммиченные изменения:"
@@ -58,7 +60,7 @@ else
   ok "чистое, HEAD = $(git rev-parse --short HEAD)"
 fi
 
-# 2. Версии согласованы с VERSION.
+# 2. Versions match VERSION.
 echo "[2/5] Версии в файлах"
 PKG_V="$(node -p "require('./package.json').version")"
 TAURI_V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
@@ -73,7 +75,7 @@ for pair in "package.json:$PKG_V" "tauri.conf.json:$TAURI_V" "Cargo.toml:$CARGO_
   fi
 done
 
-# 3. Секция в CHANGELOG.md.
+# 3. Section in CHANGELOG.md.
 echo "[3/5] CHANGELOG.md"
 NOTES="$(awk -v hdr="## [$VERSION]" 'index($0, hdr)==1 {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md 2>/dev/null || true)"
 if [[ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]]; then
@@ -82,7 +84,7 @@ else
   ok "секция [$VERSION]: $(echo "$NOTES" | grep -c '^- ') пунктов"
 fi
 
-# 4. Тега и релиза ещё нет — ни локально, ни на origin.
+# 4. Neither the tag nor the release exists yet — locally or on origin.
 echo "[4/5] Тег и релиз"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   fail "локальный тег $TAG уже есть"
@@ -100,7 +102,7 @@ else
   ok "релиза $TAG на GitHub нет"
 fi
 
-# 5. Доступ к GitHub.
+# 5. GitHub access.
 echo "[5/5] GitHub CLI"
 if gh auth status >/dev/null 2>&1; then
   ok "gh авторизован"
@@ -120,7 +122,7 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-# Создание. Тег — локальный и аннотированный, на origin не отправляем.
+# Creation. The tag is local and annotated; nothing is pushed to origin.
 SHA="$(git rev-parse HEAD)"
 git tag -a "$TAG" -m "Stauri $VERSION" "$SHA"
 echo "  локальный тег $TAG -> $(git rev-parse --short "$SHA") (не отправлен)"

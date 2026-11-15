@@ -11,8 +11,8 @@
   import WalletAccountsTab from './tabs/WalletAccountsTab.svelte';
 
   /**
-   * Вкладка живёт в сторе, а не здесь: её переключает ещё и ссылка
-   * «Управление аккаунтами» в левой панели (см. `walletView.svelte.ts`).
+   * Active tab comes from the store, not from local state: the "Manage accounts" link in
+   * the left panel switches it too (see `walletView.svelte.ts`).
    */
   const activeTab = $derived(walletView.activeTab);
 
@@ -20,8 +20,8 @@
     { id: 'assets', label: i18n.t('Assets') },
     { id: 'send', label: i18n.t('Send') },
     { id: 'receive', label: i18n.t('Receive') },
-    // Buy и Swap остаются видимыми, но выключенными: так видно, что они
-    // запланированы, и не появляется кнопки, которая ничего не делает.
+    // Buy stays visible but disabled: the tab is visibly planned and does not present
+    // itself as a working control.
     { id: 'buy', label: i18n.t('Buy'), disabled: true },
     { id: 'swap', label: i18n.t('Swap') },
   ];
@@ -36,27 +36,26 @@
   }
 
   /**
-   * Общий баланс по основным сетям.
+   * Total across the main networks.
    *
-   * Считается из тех же балансов и цен, что уже загружены, — отдельного
-   * запроса нет. Тестовые сети в итог не входят: сеполия-ETH не конвертируется
-   * в ETH, и сумма по ним была бы числом, которого нигде нет.
+   * Computed from balances and prices already loaded, with no extra request. Test networks
+   * are excluded: Sepolia ETH does not convert to ETH, and including it would produce a
+   * number that exists nowhere.
    */
   const total = $derived(totalBalance(walletState.balances, walletState.prices));
 
-  /** В мобильной оболочке заголовок и Reload выводит титульная строка. */
+  /** In the mobile shell the title bar renders the heading and the refresh button instead. */
   let { compact = false }: { compact?: boolean } = $props();
 </script>
 
 <div class="h-full flex flex-col bg-card overflow-hidden">
-  <!-- Шапка: заголовок + адрес + кнопка обновления -->
   {#if !compact}
   <div class="p-6 pb-0 flex justify-between items-start">
     <div>
       <h2 class="text-2xl font-bold text-primary">{i18n.t('All accounts')}</h2>
       <!--
-        Итог по основным сетям. «≈» стоит намеренно: сумма собрана из курсов,
-        которые меняются, а часть токенов может быть без цены вовсе.
+        Total across the main networks. The "≈" is deliberate: the sum is built from rates
+        that move, and some tokens may have no price at all.
       -->
       {#if total.priced > 0}
         <div class="text-sm font-medium text-foreground mt-1">
@@ -75,11 +74,9 @@
       {/if}
     </div>
     <!--
-      «Обновить» запускает полный перезапрос балансов в бэкенде
-      (`wallet_restartWalletReloadTimer`) и перечитывает кэш через паузу.
-      Раньше здесь стоял `loadWallet(true)`, который только перечитывал
-      кэш: `forceRefresh` в status-go игнорируется, поэтому числа не менялись
-      и кнопка выглядела нерабочей.
+      Refresh restarts the backend reload timer and then re-reads the cache; reading the
+      cache alone leaves the numbers unchanged because status-go ignores the refresh flag
+      on that endpoint.
     -->
     <button
       onclick={refresh}
@@ -93,7 +90,6 @@
   </div>
   {/if}
 
-  <!-- Кнопки-вкладки -->
   <div class="px-6 mt-4 border-b border-border flex gap-1 overflow-x-auto">
     {#each tabs as tab (tab.id)}
       <button
@@ -112,7 +108,6 @@
     {/each}
   </div>
 
-  <!-- Контент вкладки -->
   <div class="flex-1 overflow-hidden">
     {#if activeTab === 'assets'}
       <WalletAssetsTab />

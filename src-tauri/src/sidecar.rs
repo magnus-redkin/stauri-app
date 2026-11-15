@@ -1,5 +1,5 @@
-//! Управление процессом `status-backend`: запуск, остановка, PID-файл,
-//! чтение логов.
+//! Managing the `status-backend` process: starting, stopping, the PID file and
+//! reading its output.
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -10,11 +10,12 @@ use tauri::Manager;
 use tauri_plugin_shell::{ShellExt, process::CommandChild};
 use tracing::{debug, info, warn};
 
+use crate::appdirs;
 use crate::auth_proxy;
 use crate::config::{config_for_network, load_config};
 use crate::error::{AppError, AppResult};
 
-/// Состояние бэкенда, разделяемое командами.
+/// Backend state shared with the commands.
 pub struct BackendState {
     pub child: Mutex<Option<CommandChild>>,
     pub port: Mutex<Option<u16>>,
@@ -24,8 +25,8 @@ pub struct BackendState {
 #[derive(Serialize)]
 pub struct StartBackendResponse {
     pub port: u16,
-    /// Порт аутентифицирующего прокси. Фронтенд ходит только сюда;
-    /// `port` — настоящий порт бэкенда, наружу не нужен.
+    /// Port of the authenticating proxy. The frontend talks only to this one;
+    /// `port` is the real backend port and is not needed outside.
     #[serde(rename = "authPort")]
     pub auth_port: u16,
     #[serde(rename = "dataDir")]
@@ -52,10 +53,11 @@ impl Default for BackendState {
     }
 }
 
-/// Убивает процесс, оставшийся от предыдущего запуска.
+/// Kills a backend process left over from a previous run.
 ///
-/// PID-файл пишется при старте, но при аварийном завершении остаётся.
-/// Проверяем имя процесса, чтобы не убить чужой PID, если файл устарел.
+/// The PID file is written at startup and survives an abnormal exit. The process
+/// name is checked before signalling so a stale PID file cannot kill an
+/// unrelated process. On Linux this reads `/proc/<pid>/comm`.
 pub fn kill_stale_backend(dir: &Path) {
     let pid_file = dir.join("status-backend.pid");
     if let Ok(s) = std::fs::read_to_string(&pid_file) {
@@ -76,24 +78,37 @@ pub fn kill_stale_backend(dir: &Path) {
     }
 }
 
-/// Запускает sidecar и аутентифицирующий прокси.
+/// Starts the sidecar and the authenticating proxy.
+///
+/// When the backend is already running this returns the existing ports and
+/// configuration instead of starting a second process.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the backend runs on a
+/// different network than the one requested, when the sidecar command cannot be
+/// created or spawned, and when the proxy fails to start. Returns
+/// [`crate::error::ErrorKind::Config`] for an unknown network and
+/// [`crate::error::ErrorKind::Io`] when the data directory cannot be determined
+/// or created. Returns [`crate::error::ErrorKind::Internal`] when a lock is
+/// poisoned or no free port can be found.
 pub async fn start(
     app: tauri::AppHandle,
     network: Option<String>,
 ) -> AppResult<StartBackendResponse> {
     let state = app.state::<BackendState>();
 
-    // 1. Проверяем, не запущен ли уже процесс.
+    // 1. Check whether a process is already running.
     //
-    // Мьютексы здесь удерживаются только для чтения и отпускаются до
-    // первого await: MutexGuard не Send, а start — async.
+    // The mutexes are held only for reading and released before the first
+    // await: a `MutexGuard` is not `Send`, and `start` is async.
     let already_running = {
         let child_lock = state.child.lock().map_err(|_| AppError::poisoned())?;
         child_lock.is_some()
     };
 
     if already_running {
-        // Если процесс уже запущен, но запрошена другая сеть — возвращаем ошибку
+        // The process is running but a different network was requested: switch
+        // requires a restart.
         let current_config = load_config();
         if let Some(ref net) = network
             && net != &current_config.network_name()
@@ -123,8 +138,8 @@ pub async fn start(
             load_config()
         };
 
-        // Запускаем аутентифицирующий прокси и отдаём фронтенду его порт.
-        // Сам порт бэкенда остаётся внутренним.
+        // Start the authenticating proxy and report its port to the frontend.
+        // The backend port itself stays internal.
         let auth_state = app.state::<auth_proxy::AuthProxyState>();
         let auth_port = auth_proxy::start(&auth_state, port).await?;
 
@@ -140,7 +155,7 @@ pub async fn start(
         });
     }
 
-    // 2. Загружаем конфигурацию
+    // 2. Load the configuration
     let config = if let Some(net) = &network {
         config_for_network(net)?
     } else {
@@ -158,19 +173,18 @@ pub async fn start(
         is_testnet: config.is_testnet(),
     };
 
-    // 3. Формируем dataDir
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| AppError::io(e.to_string()))?;
+    // 3. Build dataDir. `appdirs::data_dir()` honours `STAURI_DATA_DIR`, which is
+    //    how a clean copy of the application runs against its own profile.
+    let app_data_dir =
+        appdirs::data_dir().ok_or_else(|| AppError::io("cannot determine app data dir"))?;
     let data_dir = app_data_dir.join(config.data_dir_suffix());
     std::fs::create_dir_all(&data_dir).map_err(|e| AppError::io(e.to_string()))?;
     let data_dir_str = data_dir.to_string_lossy().to_string();
 
-    // 4. Убиваем "зомби"
+    // 4. Kill leftovers from a previous run
     kill_stale_backend(&data_dir);
 
-    // 5. Ищем свободный порт
+    // 5. Find a free port
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|e| AppError::internal(format!("failed to find free port: {e}")))?;
     let port = listener
@@ -179,17 +193,17 @@ pub async fn start(
         .port();
     drop(listener);
 
-    // 6. Аргументы для status-backend
+    // 6. Arguments for status-backend
     let args = vec!["-address".to_string(), format!("127.0.0.1:{port}")];
 
-    // 7. Запускаем sidecar.
+    // 7. Start the sidecar.
     //
-    // В dev libsds.so лежит в target/debug/binaries/, поэтому нужен
-    // LD_LIBRARY_PATH=./binaries (относительно cwd = target/debug/).
-    // В release/AppImage libsds.so лежит рядом со status-backend (usr/bin/),
-    // и работает RPATH=$ORIGIN, который Tauri ставит при сборке.
-    // LD_LIBRARY_PATH в release НЕ выставляем, иначе он перекрывает RPATH
-    // и указывает на usr/lib/stauri-app/, где libsds.so нет.
+    // In a dev build libsds.so sits in target/debug/binaries/, so the process
+    // needs LD_LIBRARY_PATH=./binaries (relative to cwd = target/debug/).
+    // In a release build and in an AppImage libsds.so sits next to
+    // status-backend (usr/bin/) and the RPATH=$ORIGIN that Tauri sets at build
+    // time finds it. LD_LIBRARY_PATH must NOT be set in release: it overrides
+    // the RPATH and points at usr/lib/stauri-app/, where libsds.so is absent.
     let sidecar = app
         .shell()
         .sidecar("status-backend")
@@ -206,17 +220,17 @@ pub async fn start(
         .spawn()
         .map_err(|e| AppError::backend(format!("failed to spawn sidecar: {e}")))?;
 
-    // 7a. Поднимаем аутентифицирующий прокси.
+    // 7a. Bring up the authenticating proxy.
     //
-    // status-backend не проверяет, кто к нему подключился, и слушает
-    // 127.0.0.1, доступный всем локальным процессам. Прокси требует
-    // секретный заголовок и пропускает только наш фронтенд.
+    // status-backend does not check who connects to it and listens on
+    // 127.0.0.1, which every local process can reach. The proxy demands a secret
+    // header and lets only our frontend through.
     let auth_port = {
         let auth_state = app.state::<auth_proxy::AuthProxyState>();
         auth_proxy::start(&auth_state, port).await?
     };
 
-    // 8. Записываем PID
+    // 8. Write the PID
     let pid = child.pid();
     let pid_file = data_dir.join("status-backend.pid");
     if let Err(e) = std::fs::write(&pid_file, pid.to_string()) {
@@ -232,7 +246,7 @@ pub async fn start(
         "backend started"
     );
 
-    // 9. Сохраняем процесс, порт и dataDir
+    // 9. Store the process, the port and dataDir
     {
         let mut child_lock = state.child.lock().map_err(|_| AppError::poisoned())?;
         *child_lock = Some(child);
@@ -242,7 +256,7 @@ pub async fn start(
         *data_dir_lock = Some(data_dir.clone());
     }
 
-    // 10. Читаем логи в фоне
+    // 10. Stream the logs in the background
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -251,8 +265,9 @@ pub async fn start(
                     log_backend_line(&line, tracing::Level::DEBUG);
                 }
                 tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                    // status-backend пишет в stderr и обычный прогресс, поэтому
-                    // уровень не WARN: иначе релизный лог превратится в шум.
+                    // status-backend writes ordinary progress to stderr too, so
+                    // the level is INFO rather than WARN; WARN would turn the
+                    // release log into noise.
                     log_backend_line(&line, tracing::Level::INFO);
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
@@ -282,7 +297,11 @@ pub async fn start(
     })
 }
 
-/// Останавливает sidecar и удаляет PID-файл.
+/// Stops the sidecar and removes the PID file.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the process cannot be
+/// killed and [`crate::error::ErrorKind::Internal`] when a lock is poisoned.
 pub fn stop(app: tauri::AppHandle) -> AppResult<String> {
     let state = app.state::<BackendState>();
     let mut child_lock = state.child.lock().map_err(|_| AppError::poisoned())?;
@@ -299,7 +318,7 @@ pub fn stop(app: tauri::AppHandle) -> AppResult<String> {
     drop(port_lock);
     drop(child_lock);
 
-    // Удаляем PID-файл, используя сохраненный dataDir
+    // Remove the PID file, using the stored dataDir
     let data_dir_lock = state.data_dir.lock().map_err(|_| AppError::poisoned())?;
     if let Some(data_dir) = data_dir_lock.as_ref() {
         let pid_file = data_dir.join("status-backend.pid");
@@ -309,7 +328,7 @@ pub fn stop(app: tauri::AppHandle) -> AppResult<String> {
     child_res.map(|_| "Backend stopped".to_string())
 }
 
-/// Останавливает sidecar при выходе из приложения. Ошибки игнорируются.
+/// Stops the sidecar when the application exits. Errors are ignored.
 pub fn shutdown(app_handle: &tauri::AppHandle) {
     let state = app_handle.state::<BackendState>();
     if let Ok(mut child_lock) = state.child.lock()
@@ -325,10 +344,10 @@ pub fn shutdown(app_handle: &tauri::AppHandle) {
     }
 }
 
-/// Пишет строку вывода `status-backend` в общий лог.
+/// Writes one line of `status-backend` output to the shared log.
 ///
-/// Поток читается построчно, поэтому `\n` на конце отбрасывается — иначе
-/// каждая запись лога получала бы пустую строку в хвосте.
+/// The stream is read line by line, so the trailing `\n` is stripped; otherwise
+/// every entry would gain an empty line at its tail.
 fn log_backend_line(bytes: &[u8], level: tracing::Level) {
     let text = String::from_utf8_lossy(bytes);
     let line = text.trim_end_matches(['\r', '\n']);

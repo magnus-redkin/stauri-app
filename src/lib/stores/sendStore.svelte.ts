@@ -1,28 +1,26 @@
 /**
- * Состояние отправки средств.
+ * Send state.
  *
- * ## Где живёт пароль
+ * The profile password is needed for every transfer: status-go unlocks the key
+ * with it (`wallet_signMessage` → `gethManager.LoadAccount`). It is entered once
+ * per session, as in the Status mobile app, and kept in frontend memory until
+ * logout. That is an accepted trade-off: under XSS the password is reachable by
+ * the script.
  *
- * Пароль профиля нужен на каждом переводе: status-go разблокирует ключ им
- * (`wallet_signMessage` → `gethManager.LoadAccount`). Пользователь вводит его
- * **один раз за сессию**, как в мобильном Status, и дальше он хранится здесь,
- * в памяти фронтенда, до выхода из аккаунта.
+ * @remarks
+ * The transfer itself goes through the Rust command `send_transfer`, which runs
+ * the three status-go calls (build → sign → send) itself: the password is passed
+ * for the duration of the call, and signing and transaction assembly are not
+ * exposed. A foreign script therefore gets neither a general signing primitive
+ * nor a password stored on disk. status-go returns the signature with a `0x`
+ * prefix that `wallet_sendTransactionWithSignature` must not receive, so the
+ * prefix is stripped inside Rust. The password is never written to disk;
+ * `resetSend` runs on logout.
  *
- * Это осознанный выбор с известной ценой: при XSS пароль доступен скрипту.
- * Поэтому сам перевод идёт через команду Rust `send_transfer` — пароль
- * передаётся в неё на время вызова, а подпись и сборка транзакции наружу не
- * выставлены. Так у чужого скрипта нет ни универсальной машинки подписи, ни
- * сохранённого пароля на диске.
- *
- * На диск пароль НЕ пишется никогда. `resetSend()` вызывается при выходе из
- * аккаунта.
- *
- * ## Почему шаги, а не одна форма
- *
- * Между «ввёл» и «улетело» нужен экран, где видно всё, что уйдёт: сеть,
- * актив, сумму, получателя и комиссию. Это последняя возможность заметить,
- * что адрес не тот. Кнопка «Отправить» на этом экране фиксирует намерение,
- * и только после неё начинается работа с ключом.
+ * The flow is split into steps rather than one form so that a confirmation
+ * screen can show network, asset, amount, recipient and fee — the last chance to
+ * notice a wrong address. The "Send" button there records the intent, and only
+ * after it does any work with the key begin.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -35,12 +33,11 @@ import { formatError } from '$lib/utils/errors';
 export type SendStep = 'form' | 'confirm' | 'sending' | 'sent' | 'failed';
 
 /**
- * Причина отказа отправки.
+ * Reason a send failed.
  *
- * Каждая — отдельным кодом, потому что человеку нужно разное действие:
- * при неверном пароле — ввести заново, при нехватке средств — уменьшить
- * сумму, при недоступном RPC — подождать. Один текст «Failed» не говорит
- * ничего.
+ * Each case gets its own code because each needs a different action: re-enter
+ * the password, lower the amount, or wait for RPC. A single "Failed" text says
+ * nothing.
  */
 export type SendErrorCode =
   | 'send-wallet-not-ready'
@@ -52,35 +49,36 @@ export type SendErrorCode =
 
 export const sendState = $state({
   step: 'form' as SendStep,
-  /** Пароль сессии. В памяти, не на диске. */
+  /** Session password. In memory, not on disk. */
   password: '',
-  /** Пароль запрашивается у пользователя — показывается поле ввода. */
+  /** The user is being asked for the password — the input field is shown. */
   needsPassword: false,
   isSending: false,
   error: '',
-  /** Хэш отправленной транзакции — для ссылки в обозреватель. */
+  /** Hash of the sent transaction, for the explorer link. */
   txHash: '',
   /**
-   * Оценка комиссии в минимальных единицах (null — ещё не посчитана).
+   * Fee estimate in smallest units (`null` when not computed yet).
    *
-   * Считается на шаге подтверждения ДО ввода пароля: `estimate_transfer_fee`
-   * только собирает транзакцию, ключ не трогает и в сеть не отправляет.
+   * Computed on the confirmation step before the password is entered:
+   * `estimate_transfer_fee` only assembles the transaction, does not touch the
+   * key and sends nothing.
    */
   fee: null as bigint | null,
-  /** Идёт оценка комиссии. */
+  /** A fee estimate is running. */
   isEstimating: false,
-  /** Комиссию получить не удалось — показываем причину, но не блокируем. */
+  /** The fee could not be obtained — the reason is shown, sending is not blocked. */
   feeError: '',
   /**
-   * Ошибка, разобранная по причине, для показа человеку.
+   * The error resolved to a known cause, for display.
    *
-   * Код вместо текста: перевод ошибки status-go в понятную фразу — дело
-   * интерфейса, и он должен быть переводимым.
+   * A code rather than text: turning a status-go error into a readable phrase is
+   * the UI's job, and the phrase must be translatable.
    */
   errorCode: '' as SendErrorCode | '',
 });
 
-/** Забыть пароль. Вызывается при выходе из аккаунта и смене профиля. */
+/** Forgets the password. Called on logout and profile switch. */
 export function resetSend(): void {
   sendState.step = 'form';
   sendState.password = '';
@@ -94,7 +92,11 @@ export function resetSend(): void {
   sendState.errorCode = '';
 }
 
-/** Сохранить пароль в памяти сессии (после успешного ввода). */
+/**
+ * Stores the password in session memory after a successful entry.
+ *
+ * @param password - Profile password to keep for the session.
+ */
 export function rememberPassword(password: string): void {
   sendState.password = password;
   sendState.needsPassword = false;
@@ -102,20 +104,21 @@ export function rememberPassword(password: string): void {
 
 export interface TransferInput {
   token: WalletToken;
-  /** Адрес получателя, уже проверенный на форме. */
+  /** Recipient address, already validated on the form. */
   to: string;
-  /** Сумма в минимальных единицах. */
+  /** Amount in smallest units. */
   amount: bigint;
 }
 
 /**
- * Оценка комиссии для перевода.
+ * Estimates the fee for a transfer.
  *
- * Вызывается при входе на экран подтверждения, до ввода пароля: команда
- * только собирает транзакцию и читает из неё `gas` и `gasPrice`, ключ не
- * используется. Ошибка не блокирует отправку — если цену газа получить не
- * удалось, человек всё равно должен иметь возможность отправить, просто без
- * строки комиссии.
+ * @param input - Token, recipient and amount.
+ * @remarks
+ * Called when entering the confirmation screen, before the password: the command
+ * only assembles the transaction and reads `gas` and `gasPrice` from it, without
+ * touching the key. A failure does not block sending — the user can still send,
+ * just without the fee line.
  */
 export async function estimateFee(input: TransferInput): Promise<void> {
   const port = statusState.backendPort;
@@ -140,8 +143,8 @@ export async function estimateFee(input: TransferInput): Promise<void> {
     sendState.fee = BigInt(result.fee);
     debug(`[send] fee estimate: ${result.fee} wei (gas ${result.gas} × ${result.gas_price})`);
   } catch (e) {
-    // Показываем причину рядом с местом комиссии, но не мешаем отправке:
-    // сумму комиссии нода всё равно пересчитает при сборке.
+    // Show the reason next to the fee but do not block sending: the node
+    // recomputes the fee when it assembles the transaction anyway.
     sendState.fee = null;
     sendState.feeError = formatError(e, 'Failed to estimate the fee');
     debug('[send] fee estimate failed:', e);
@@ -151,11 +154,15 @@ export async function estimateFee(input: TransferInput): Promise<void> {
 }
 
 /**
- * Относит ошибку status-go к одной из известных причин.
+ * Maps a status-go error to one of the known causes.
  *
- * status-go не даёт кодов — только текст, поэтому различаем по подстрокам.
- * Ошибиться не страшно: код влияет лишь на текст подсказки, отправку он не
- * меняет, а исходная ошибка остаётся в `error` и показывается целиком.
+ * @param message - Error text from the backend.
+ * @returns The matching code, or `send-unknown`.
+ * @remarks
+ * status-go provides no error codes, only text, so causes are matched by
+ * substring. A mismatch is harmless: the code only selects the hint text, it does
+ * not change the send, and the original error stays in `error` and is shown in
+ * full.
  */
 export function classifySendError(message: string): SendErrorCode {
   const m = message.toLowerCase();
@@ -166,8 +173,8 @@ export function classifySendError(message: string): SendErrorCode {
   if (m.includes('insufficient funds') || m.includes('exceeds balance') || m.includes('not enough')) {
     return 'send-insufficient-funds';
   }
-  // RPC: сеть не ответила. Именно этот случай был у пользователя, когда
-  // системный прокси рвал соединение, и все провайдеры отказали сразу.
+  // RPC: the network did not answer. Seen when a system proxy tore the
+  // connection down and every provider failed at once.
   if (
     m.includes('error sending request') ||
     m.includes('bad gateway') ||
@@ -184,20 +191,21 @@ export function classifySendError(message: string): SendErrorCode {
 }
 
 /**
- * Отправляет перевод.
+ * Sends a transfer.
  *
- * ## Почему вся последовательность — в Rust
+ * @param input - Token, recipient and amount in smallest units.
+ * @returns `true` when the transfer went through, `false` when it failed or the
+ * password is still needed.
+ * @remarks
+ * The whole sequence runs in Rust. `send_transfer` makes three status-go calls —
+ * build → sign → send — so the webview never calls `wallet_signMessage` itself,
+ * which would be a general signing primitive for arbitrary bytes with the wallet
+ * key. See the header of `src-tauri/src/transfer.rs`.
  *
- * `send_transfer` делает три вызова status-go: собрать, подписать, отправить.
- * Если бы их делал фронтенд, вебвью пришлось бы вызывать `wallet_signMessage`
- * напрямую, а это универсальная подпись произвольных байтов ключом кошелька.
- * См. шапку `src-tauri/src/transfer.rs`.
- *
- * ## Почему баланс обновляем после отправки
- *
- * Кэш бэкенда обновляет фоновый контроллер, а не наш запрос
- * (`forceRefresh` в `wallet_fetchOrGetCachedWalletBalances` игнорируется).
- * Поэтому после отправки запускаем полный перезапрос и перечитываем.
+ * The balance is refreshed after sending because the backend cache is filled by
+ * the background controller, not by this request (`forceRefresh` in
+ * `wallet_fetchOrGetCachedWalletBalances` is ignored), so a full refetch is
+ * started and the cache is read again.
  */
 export async function sendTransfer(input: TransferInput): Promise<boolean> {
   const port = statusState.backendPort;
@@ -235,18 +243,18 @@ export async function sendTransfer(input: TransferInput): Promise<boolean> {
     sendState.step = 'sent';
     info(`[send] sent ${input.amount} of ${input.token.symbol} on ${input.token.chainId}`);
 
-    // Баланс после перевода: перезапрос в фоне, затем чтение.
+    // Balance after the transfer: refetch in the background, then read.
     void refreshAfterSend();
     return true;
   } catch (e) {
-    // Неверный пароль — самый частый отказ. Стираем сохранённый, чтобы
-    // следующий раз спросить заново, а не повторять неудачу молча.
+    // A wrong password is the most common failure. Drop the stored one so the
+    // next attempt asks again instead of silently repeating the failure.
     const message = formatError(e, 'Failed to send');
     sendState.errorCode = classifySendError(message);
 
     if (sendState.errorCode === 'send-wrong-password') {
-      // Повторять заведомо неудачную попытку молча — худшее, что можно
-      // сделать на этом экране: человек должен увидеть, что пароль не тот.
+      // Silently retrying a known-bad attempt is the worst option here: the user
+      // must see that the password was wrong.
       sendState.password = '';
       sendState.needsPassword = true;
     }
@@ -260,10 +268,10 @@ export async function sendTransfer(input: TransferInput): Promise<boolean> {
   }
 }
 
-/** Обновление баланса после отправки. Ошибку не показываем: она вторична. */
+/** Balance refresh after a send. Errors are not shown: they are secondary. */
 async function refreshAfterSend(): Promise<void> {
   try {
-    // Даём сети принять транзакцию, затем просим бэкенд перезапросить всё.
+    // Let the network accept the transaction, then ask the backend to refetch.
     await new Promise((r) => setTimeout(r, 3000));
     if (statusState.backendPort) {
       await restartWalletReloadTimer(statusState.backendPort);
@@ -275,7 +283,7 @@ async function refreshAfterSend(): Promise<void> {
   }
 }
 
-/** Возвращает форму на шаг ввода — используется кнопкой «Изменить». */
+/** Returns to the input step — used by the "Edit" button. */
 export function backToForm(): void {
   sendState.step = 'form';
   sendState.error = '';

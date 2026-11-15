@@ -27,7 +27,7 @@ const CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[tauri::command]
 pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
-    // 1. Проверяем кэш
+    // 1. Check the cache
     if let Ok(guard) = CACHE.lock()
         && let Some(entry) = &*guard
         && entry.fetched_at.elapsed() < CACHE_TTL
@@ -35,12 +35,13 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
         return Ok(entry.data.clone());
     }
 
-    // 2. Ключ CoinGecko — необязателен.
+    // 2. CoinGecko key is optional.
     //
-    //    Публичный эндпоинт отдаёт данные без ключа; x-cg-demo-api-key только
-    //    повышает лимит запросов. При кэше в 60 с и одном запросе на 50 монет
-    //    анонимного лимита хватает, поэтому отсутствие ключа — не ошибка.
-    //    Ключ читается из ~/.config/com.magnus.stauri-app/.env (см. load_env).
+    //    The public endpoint serves data without a key; `x-cg-demo-api-key`
+    //    only raises the rate limit. With a 60 s cache and one request for 50
+    //    coins the anonymous limit is enough, so a missing key is not an error.
+    //    The key is read from ~/.config/com.magnus.stauri-app/.env (see
+    //    `env::load_env`).
     let api_key = std::env::var("COINGECKO_KEY").unwrap_or_default();
 
     let url = "https://api.coingecko.com/api/v3/coins/markets\
@@ -50,7 +51,7 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
         &page=1\
         &price_change_percentage=24h";
 
-    // 3. Запрос
+    // 3. Request
     let client = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(10))
@@ -70,14 +71,14 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        // Тело ответа не включаем: оно может содержать служебные данные.
+        // The response body is left out: it can carry service-side details.
         return Err(AppError::network(format!(
             "CoinGecko HTTP {status} ({} bytes)",
             body.len()
         )));
     }
 
-    // 4. Читаем тело (для диагностики при ошибке парсинга)
+    // 4. Read the body (kept for diagnostics if parsing fails)
     let body = resp
         .text()
         .await
@@ -86,7 +87,7 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
     let data: Vec<MarketCoin> = serde_json::from_str(&body)
         .map_err(|e| AppError::network(format!("JSON parse error: {e}")))?;
 
-    // 5. Сохраняем в кэш
+    // 5. Store in the cache
     if let Ok(mut guard) = CACHE.lock() {
         *guard = Some(CacheEntry {
             data: data.clone(),

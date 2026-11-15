@@ -1,31 +1,23 @@
 /**
- * Перевод сумм между тем, что видит человек, и тем, что принимает сеть.
+ * Converts amounts between what a person enters and what the network accepts.
  *
- * ## Почему `BigInt`, а не `Number`
+ * Token amounts are integers in the smallest unit: 18 decimal places make one
+ * ether. A `Number` holds 53 bits exactly, about 15–16 significant digits —
+ * `0.1` is not representable at all and `1e18` is already inexact — so
+ * `parseFloat(amount) * 10 ** decimals` can send an amount other than the one
+ * that was entered. All arithmetic here stays in `bigint`; `Number` is used
+ * only where the value is known to be small (string length, digit count).
  *
- * Минимальные единицы токена — целые числа, и у ETH это 18 знаков после
- * запятой. `Number` хранит 53 бита точно, то есть примерно 15–16 значащих
- * цифр: `0.1` в нём вообще не представимо, а `1e18` уже неточно. Отправка
- * через `parseFloat(amount) * 10 ** decimals` даёт сумму, не равную
- * введённой, и разница тем заметнее, чем больше знаков.
- *
- * Здесь всё считается целыми: строка разбирается поточечно, без
- * промежуточного `Number`. `Number` используется только там, где значение
- * заведомо мало (длина строки, количество цифр).
- *
- * ## Почему ошибки, а не «лучшее усилие»
- *
- * Функция разбора сидит на пути отправки денег. Молча «округлить» или
- * «принять что получилось» здесь недопустимо: пользователь увидит на экране
- * одно, а уйдёт другое. Всё, что не удалось разобрать однозначно, —
- * исключение.
+ * A failed parse throws instead of returning a best-effort value: this sits on
+ * the path that sends money, and a silent rounding would show one amount on
+ * screen while another leaves the wallet.
  */
 
 /**
- * Причина отказа разбора.
+ * Reason a parse was rejected.
  *
- * Код, а не готовый текст: интерфейс переводит его на язык пользователя.
- * Сообщение в `message` остаётся английским — оно для логов.
+ * A code rather than display text: the UI translates it into the user's
+ * language, while `message` stays English for the logs.
  */
 export type AmountErrorCode =
   | 'amount-empty'
@@ -33,7 +25,7 @@ export type AmountErrorCode =
   | 'amount-too-many-decimals'
   | 'amount-bad-decimals';
 
-/** Ошибка разбора суммы. `code` — то, что показывает интерфейс. */
+/** Thrown when an amount cannot be parsed; `code` selects the localized message. */
 export class AmountError extends Error {
   readonly code: AmountErrorCode;
 
@@ -45,22 +37,22 @@ export class AmountError extends Error {
 }
 
 /**
- * Разбирает введённую сумму в минимальные единицы токена.
+ * Parses an entered amount into the token's smallest unit.
  *
- * Принимает то, что человек реально печатает:
- *   * `0.5`, `12`, `0,5` (запятая — распространённая раскладка);
- *   * `.5` и `5.` — как обычный калькулятор, `5.` означает `5`.
+ * Accepts what a person actually types: `0.5`, `12`, `0,5` (comma as the
+ * decimal separator) and the calculator forms `.5` and `5.` (a trailing
+ * separator means no fractional part).
  *
- * Отклоняет:
- *   * пустую строку, `NaN`, буквы, два разделителя, экспоненту;
- *   * минус (отправка отрицательной суммы — не то, что имелось в виду);
- *   * больше знаков после запятой, чем есть у токена: `0.1234567` при
- *     `decimals = 6` — это не «0.123456», а ошибка ввода. Округление
- *     вниз потеряло бы часть суммы незаметно для человека.
+ * Rejects an empty string, letters, two separators, exponent notation and a
+ * minus sign. More fractional digits than the token has is an input error too,
+ * not a rounding case: `0.1234567` at `decimals = 6` would otherwise lose part
+ * of the amount without telling anyone.
  *
- * @param raw строка из поля ввода
- * @param decimals количество знаков после запятой у токена
- * @returns сумма в минимальных единицах (wei и т. п.)
+ * @param raw - The raw string from the input field.
+ * @param decimals - Decimal places of the token, from 0 to 77.
+ * @returns The amount in the smallest unit, e.g. wei for ETH.
+ * @throws An `AmountError` when the input is empty, malformed, carries too many
+ * decimal places, or `decimals` is not a valid count.
  */
 export function parseAmount(raw: string, decimals: number): bigint {
   const value = String(raw ?? '').trim().replace(',', '.');
@@ -70,8 +62,8 @@ export function parseAmount(raw: string, decimals: number): bigint {
     throw new AmountError('amount-bad-decimals', `Invalid token decimals: ${decimals}`);
   }
 
-  // Цифры, не более одного разделителя. Всё остальное — ошибка ввода:
-  // `1e18`, `1.2.3`, `-1`, `1 000` сюда не проходят.
+  // Digits and at most one separator; anything else is an input error, so
+  // `1e18`, `1.2.3`, `-1` and `1 000` do not match.
   const match = value.match(/^(\d*)(?:\.(\d*))?$/);
   if (!match) throw new AmountError('amount-invalid', 'Enter a valid number');
 
@@ -85,8 +77,8 @@ export function parseAmount(raw: string, decimals: number): bigint {
     );
   }
 
-  // Ведущие нули не нужны: `007` и `7` — одно и то же число, а длинные
-  // строки только замедляют BigInt.
+  // Leading zeros carry no value — `007` and `7` are the same number — and a
+  // long digit string only slows `BigInt` down.
   const whole = wholeRaw.replace(/^0+/, '') || '0';
   const frac = fracRaw.padEnd(decimals, '0');
 
@@ -94,15 +86,17 @@ export function parseAmount(raw: string, decimals: number): bigint {
 }
 
 /**
- * Обратное преобразование: минимальные единицы в строку для показа.
+ * Renders a smallest-unit amount back into a decimal string.
  *
- * Без ведущих нулей и без хвоста из нулей: `1000000000000000000` при
- * `decimals = 18` даёт `"1"`, а `1500000` при `decimals = 6` — `"1.5"`.
- * Это — точное представление, не для экрана; округление для показа делает
- * `formatBalance` в `utils/format.ts`.
+ * No leading zeros and no trailing zeros: `1000000000000000000` at
+ * `decimals = 18` gives `"1"`, and `1500000` at `decimals = 6` gives `"1.5"`.
  *
- * @param units сумма в минимальных единицах
- * @param decimals количество знаков после запятой у токена
+ * @param units - The amount in the smallest unit.
+ * @param decimals - Decimal places of the token, 0 or more.
+ * @returns An exact decimal string, unrounded.
+ * @remarks This is the exact value, not a screen format; `formatBalance` in
+ * `utils/format.ts` rounds for display.
+ * @throws An `AmountError` when `decimals` is not a non-negative integer.
  */
 export function formatUnits(units: bigint, decimals: number): string {
   if (!Number.isInteger(decimals) || decimals < 0) {
@@ -124,11 +118,15 @@ export function formatUnits(units: bigint, decimals: number): string {
 }
 
 /**
- * Сравнивает сумму с балансом в тех же единицах.
+ * Compares an amount with a balance held in the same unit.
  *
- * Нужна на шаге проверки отправки: перевод больше баланса должен
- * отклоняться до обращения к сети, с понятным текстом, а не ответом RPC
- * «insufficient funds».
+ * Checked on the send confirmation step so an overdraft is refused before the
+ * network is called, with a readable message rather than an RPC
+ * `insufficient funds` reply.
+ *
+ * @param amount - The amount to send, in the smallest unit.
+ * @param balance - The available balance, in the same unit.
+ * @returns `true` when the amount is strictly greater than the balance.
  */
 export function exceedsBalance(amount: bigint, balance: bigint): boolean {
   return amount > balance;

@@ -1,26 +1,26 @@
-//! Проверка и установка обновлений.
+//! Update check and installation.
 //!
-//! ## Почему команды, а не JS-плагин
+//! ## Why commands rather than the JS plugin
 //!
-//! `@tauri-apps/plugin-updater` умеет всё сам, но работает из webview и
-//! требует permission `updater:default`. Мы намеренно сужаем права webview
-//! (см. `capabilities/default.json` и `auth_proxy.rs`), поэтому здесь только
-//! две тонкие команды: проверка отдаёт версию и заметки, установка идёт
-//! целиком в Rust.
+//! `@tauri-apps/plugin-updater` does everything itself, but runs from the
+//! webview and needs the `updater:default` permission. Webview rights are
+//! deliberately narrow here (see `capabilities/default.json` and `auth_proxy.rs`),
+//! so only two thin commands exist: the check returns the version and release
+//! notes, and installation runs entirely in Rust.
 //!
-//! ## Почему адрес сервера и ключ берутся из `tauri.conf.json`
+//! ## Why the server address and key come from `tauri.conf.json`
 //!
-//! `plugins.updater.endpoints` и `plugins.updater.pubkey` — штатное место
-//! для этого, их читает сам плагин. Пока ключ пуст, `check_for_update`
-//! возвращает `None`, а не ошибку: сборка без ключа подписи должна
-//! запускаться нормально, просто без обновлений.
+//! `plugins.updater.endpoints` and `plugins.updater.pubkey` are the standard
+//! place for them, and the plugin reads them itself. While the key is empty,
+//! `check_for_update` returns `None` rather than an error: a build without a
+//! signing key must start normally, just without updates.
 //!
-//! ## Подпись
+//! ## Signature
 //!
-//! Каждый артефакт подписывается ключом, а публичная часть лежит в
-//! `tauri.conf.json`. Плагин проверяет подпись до установки; подделать файл
-//! без приватного ключа нельзя. Ключ подписи — единственный секрет релиза,
-//! и он не должен попадать в репозиторий.
+//! Every artefact is signed, and the public half lives in `tauri.conf.json`.
+//! The plugin verifies the signature before installing, so the file cannot be
+//! forged without the private key. That key is the only release secret and must
+//! never enter the repository.
 
 use serde::Serialize;
 use tauri::{AppHandle, Runtime};
@@ -28,26 +28,25 @@ use tauri_plugin_updater::UpdaterExt;
 
 use crate::error::{AppError, AppResult};
 
-/// Обновление, найденное сервером.
+/// An update found by the server.
 #[derive(Serialize)]
 pub struct UpdateInfo {
     pub version: String,
     #[serde(rename = "currentVersion")]
     pub current_version: String,
-    /// Заметки к релизу. `None`, если сервер их не прислал.
+    /// Release notes. `None` when the server sent none.
     pub notes: Option<String>,
-    /// Дата публикации в ISO 8601.
+    /// Publication date in ISO 8601.
     pub date: Option<String>,
 }
 
-/// Настроено ли автообновление.
+/// Whether auto-update is configured.
 ///
-/// Пока в `tauri.conf.json` пустой `pubkey`, обновление не только не
-/// установить — его нельзя и предлагать: подпись проверяется только на
-/// установке, поэтому `check()` вернул бы версию с сервера, интерфейс
-/// показал бы «доступно обновление», а нажатие «Установить» упало бы на
-/// декодировании пустого ключа. Пользователь увидел бы заведомо
-/// нерабочую кнопку.
+/// While `pubkey` in `tauri.conf.json` is empty the update can not be offered,
+/// let alone installed: the signature is verified only at install time, so
+/// `check()` would return a version from the server, the interface would show
+/// "update available", and pressing "Install" would fail decoding an empty key.
+/// The user would be shown a button that cannot work.
 fn is_configured<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.config()
         .plugins
@@ -58,11 +57,15 @@ fn is_configured<R: Runtime>(app: &AppHandle<R>) -> bool {
         .is_some_and(|key| !key.trim().is_empty())
 }
 
-/// Спрашивает сервер об обновлении.
+/// Asks the server for an update.
 ///
-/// Возвращает `Ok(None)`, когда обновлений нет или обновления выключены
-/// (пустой ключ подписи, пустой список адресов). Это не ошибка — так
-/// выглядит нормальное состояние сборки без настроенного сервера.
+/// Returns `Ok(None)` when there is no update or updates are off (empty signing
+/// key, empty endpoint list). That is not an error — it is the normal state of a
+/// build with no update server configured.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Config`] when the updater cannot be built
+/// and [`crate::error::ErrorKind::Network`] when the check request fails.
 pub async fn check<R: Runtime>(app: &AppHandle<R>) -> AppResult<Option<UpdateInfo>> {
     if !is_configured(app) {
         tracing::debug!("updater is not configured (no pubkey); skipping check");
@@ -87,13 +90,18 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> AppResult<Option<UpdateInf
     }))
 }
 
-/// Скачивает, проверяет подпись и устанавливает обновление.
+/// Downloads, verifies and installs an update.
 ///
-/// Подпись проверяется плагином до установки: неподписанный или подписанный
-/// чужим ключом файл отвергается, и команда возвращает ошибку.
+/// The plugin verifies the signature before installing: an unsigned file, or one
+/// signed with a foreign key, is rejected and the command returns an error.
 ///
-/// На Linux файл заменяется на месте, поэтому для запуска новой версии нужен
-/// перезапуск — его делает пользователь.
+/// On Linux the file is replaced in place, so the new version starts only after a
+/// restart, which the user performs.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Config`] when the updater cannot be built
+/// or no update is available any more, and [`crate::error::ErrorKind::Network`]
+/// when the check, download or install fails.
 pub async fn install<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     let updater = app
         .updater_builder()
@@ -105,8 +113,8 @@ pub async fn install<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
         .await
         .map_err(|e| AppError::network(format!("update check failed: {e}")))?
     else {
-        // Между проверкой и установкой релиз могли снять. Это не сбой:
-        // сообщаем, что устанавливать нечего.
+        // The release could have been withdrawn between the check and the install.
+        // This is not a failure: it reports that there is nothing to install.
         return Err(AppError::config("no update available"));
     };
 

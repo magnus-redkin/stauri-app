@@ -7,7 +7,7 @@
   import { getDisplayName } from '$lib/utils/user';
   import { isIncomingRequest } from '$lib/status/contactState';
 
-  // Теперь пропсов для данных нет, только для навигации (если нужно)
+  // Only navigation props; contact data comes from the store.
   let { onOpenChat }: { onOpenChat?: (chatId: string) => void } = $props();
 
   let searchQuery = $state('');

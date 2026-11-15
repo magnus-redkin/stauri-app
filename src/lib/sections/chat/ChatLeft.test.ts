@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import ChatLeft from './ChatLeft.svelte';
 import { chatsState } from '$lib/stores/chatsStore.svelte';
 
-// Мокаем стор, чтобы не вызывать loadChats
+// The store is mocked so loadChats is not called.
 vi.mock('$lib/stores/chatsStore.svelte', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/stores/chatsStore.svelte')>();
   return {
@@ -31,7 +31,7 @@ describe('ChatLeft', () => {
 
   it('должен отображать иконку pending-запроса', () => {
     render(ChatLeft, { props: {} });
-    // Для Bob Chat isPendingRequest = true, значит, должен быть значок "!"
+    // Bob Chat has isPendingRequest = true, so the "!" badge must be rendered.
     expect(screen.getByText('!')).toBeInTheDocument();
   });
 });

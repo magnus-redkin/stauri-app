@@ -1,19 +1,16 @@
-//! Seed-фраза: хранение вне webview.
+//! Seed phrase: kept outside the webview.
 //!
-//! Раньше фронтенд запрашивал `settings_getSettings` напрямую и получал
-//! всю фразу строкой в JavaScript. Это означало, что фраза живёт в куче
-//! webview и доступна любому скрипту в нём (включая XSS).
+//! The phrase is fetched once on the Rust side and stays in process memory. The
+//! frontend only ever receives:
 //!
-//! Теперь фраза забирается один раз на стороне Rust и остаётся в памяти
-//! процесса. Фронтенд получает только:
+//!   * `seed_word(index)` — a single word, for display;
+//!   * `seed_challenge()` — random indices for verification;
+//!   * `verify_seed_answer(i, answer)` — the comparison result, without
+//!     revealing the expected word.
 //!
-//!   * `seed_word(index)`          — одно слово для показа пользователю;
-//!   * `seed_challenge()`          — случайные индексы для проверки;
-//!   * `verify_seed_answer(i, ans)` — результат сравнения, без раскрытия слова.
-//!
-//! Пользователю всё равно нужно увидеть фразу, чтобы записать её — полностью
-//! скрыть её невозможно. Цель — исключить хранение в webview и логгирование:
-//! `clear_seed()` стирает фразу из памяти при уходе с экрана.
+//! The user still has to see the phrase in order to write it down, so it cannot
+//! be hidden entirely. The goal is to keep it out of the webview and out of the
+//! logs; `clear_seed()` wipes it from memory when the screen is left.
 
 use std::sync::Mutex;
 
@@ -21,12 +18,12 @@ use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-/// Фраза в памяти процесса. `None`, пока не загружена или после очистки.
+/// The phrase in process memory. `None` until loaded and after clearing.
 static PHRASE: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 #[derive(Serialize)]
 pub struct SeedInfo {
-    /// Количество слов: фронтенд нумерует их при показе.
+    /// Word count; the frontend numbers the words when displaying them.
     pub word_count: usize,
 }
 
@@ -35,9 +32,16 @@ pub struct VerifyResult {
     pub correct: bool,
 }
 
-/// Достаёт mnemonic из status-go и сохраняет его в памяти Rust.
+/// Fetches the mnemonic from status-go and keeps it in Rust memory.
 ///
-/// Возвращает только число слов — не саму фразу.
+/// Returns the word count only, never the phrase itself.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the backend is not running,
+/// the `settings_getSettings` call fails, or the response carries no usable
+/// mnemonic. Returns [`crate::error::ErrorKind::Network`] on transport and body
+/// read failures, [`crate::error::ErrorKind::Internal`] when the HTTP client
+/// cannot be built or a lock is poisoned.
 #[tauri::command]
 pub async fn fetch_seed_phrase(app: tauri::AppHandle) -> AppResult<SeedInfo> {
     let port = {
@@ -101,7 +105,12 @@ pub async fn fetch_seed_phrase(app: tauri::AppHandle) -> AppResult<SeedInfo> {
     Ok(SeedInfo { word_count: count })
 }
 
-/// Одно слово по индексу — для отображения пользователю.
+/// One word by index, for display to the user.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded,
+/// [`crate::error::ErrorKind::Internal`] when the index is out of range or a
+/// lock is poisoned.
 #[tauri::command]
 pub fn seed_word(index: usize) -> AppResult<String> {
     let guard = PHRASE.lock().map_err(|_| AppError::poisoned())?;
@@ -114,7 +123,11 @@ pub fn seed_word(index: usize) -> AppResult<String> {
         .ok_or_else(|| AppError::internal(format!("word index {index} out of range")))
 }
 
-/// Случайные неповторяющиеся индексы для проверки запоминания.
+/// Random distinct indices for checking that the phrase was memorised.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded or
+/// is empty, and [`crate::error::ErrorKind::Internal`] when a lock is poisoned.
 #[tauri::command]
 pub fn seed_challenge(count: usize) -> AppResult<Vec<usize>> {
     let guard = PHRASE.lock().map_err(|_| AppError::poisoned())?;
@@ -128,9 +141,9 @@ pub fn seed_challenge(count: usize) -> AppResult<Vec<usize>> {
     }
     let take = count.min(total);
 
-    // Простой и детерминированный по объёму выбор без внешних зависимостей.
-    // Криптостойкость здесь не нужна: цель — не дать пользователю отвечать
-    // всегда на одни и те же слова, а не защититься от атакующего.
+    // A simple choice with no external dependencies. Cryptographic strength is
+    // not needed: the point is to stop the user from always being asked the same
+    // words, not to resist an attacker.
     let mut seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -151,7 +164,14 @@ pub fn seed_challenge(count: usize) -> AppResult<Vec<usize>> {
     Ok(picked)
 }
 
-/// Проверяет ответ пользователя, не раскрывая ожидаемое слово.
+/// Checks the user's answer without revealing the expected word.
+///
+/// Comparison is case-insensitive and ignores surrounding whitespace.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded,
+/// [`crate::error::ErrorKind::Internal`] when the index is out of range or a
+/// lock is poisoned.
 #[tauri::command]
 pub fn verify_seed_answer(index: usize, answer: String) -> AppResult<VerifyResult> {
     let guard = PHRASE.lock().map_err(|_| AppError::poisoned())?;
@@ -167,13 +187,13 @@ pub fn verify_seed_answer(index: usize, answer: String) -> AppResult<VerifyResul
     })
 }
 
-/// Стирает фразу из памяти. Вызывается при уходе с экрана.
+/// Wipes the phrase from memory. Called when the screen is left.
 #[tauri::command]
 pub fn clear_seed() {
     if let Ok(mut guard) = PHRASE.lock() {
         if let Some(words) = guard.as_mut() {
             for w in words.iter_mut() {
-                // Перезаписываем содержимое, чтобы строка не осталась в куче.
+                // Overwrite the contents so the string does not linger in the heap.
                 w.clear();
             }
         }

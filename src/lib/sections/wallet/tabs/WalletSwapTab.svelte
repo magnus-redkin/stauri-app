@@ -1,24 +1,18 @@
 <script lang="ts">
   /**
-   * Обмен токенов внутри одной сети.
+   * Token swap within a single network.
    *
-   * ## Почему только mainnet
+   * Swapping is offered only on mainnet networks: providers hold no liquidity on test
+   * networks, so a Sepolia swap is impossible by construction, not merely unimplemented.
+   * On a test network the tab explains that instead of rendering a form that would fail.
    *
-   * Ликвидности в тестовых сетях у провайдеров нет: Sepolia-обмен невозможен
-   * в принципе, а не «пока не сделали». Поэтому на тестовой сети показываем
-   * объяснение, а не форму, которая заведомо откажет.
+   * Slippage is fixed at 1 % — a compromise between "the swap goes through" and "it was not
+   * a bad deal". A free-form field is dangerous here: a careless 10 % is a direct loss, and
+   * an experienced user does not need to tune it on the first run. The value shown on screen
+   * matches the one hard-coded in `swap.rs`.
    *
-   * ## Почему проскальзывание не настраивается
-   *
-   * 1 % — компромисс между «обмен проходит» и «не обделили». Свободное поле
-   * здесь опасно: необдуманные 10 % — прямой убыток, а человек, который
-   * понимает, что делает, всё равно не должен искать это в первом прогоне.
-   * Значение показано на экране и совпадает с зашитым в `swap.rs`.
-   *
-   * ## Пароль
-   *
-   * Общий на сессию (`sendStore`): любой обмен — это подпись, и спрашивать
-   * пароль в третьем месте подряд незачем.
+   * The password is the session one from `sendStore`: every swap is a signature, so asking
+   * again in a third place serves no purpose.
    */
   import { i18n } from '$lib/i18n';
   import { walletState } from '$lib/stores/walletStore.svelte';
@@ -51,10 +45,10 @@
 
   const sources = $derived(swapSources(walletState.balances));
 
-  /** Исходный токен; от него зависит, какие сети и цели предлагать. */
+  /** Source token; it decides which networks and targets can be offered. */
   const fromToken = $derived(findToken(walletState.balances, swapState.fromKey));
 
-  /** Цели — токены той же сети, что у источника. */
+  /** Targets are tokens on the same network as the source. */
   const targets = $derived(swapTargets(walletState.balances, fromToken?.chainId ?? null));
 
   const toToken = $derived(findToken(walletState.balances, swapState.toKey));
@@ -122,7 +116,7 @@
     }
   }
 
-  /** Подставляет весь баланс: точной строкой, а не обрезанной. */
+  /** Fills in the whole balance, as the exact amount rather than the trimmed display value. */
   function useMax() {
     if (!fromToken) return;
     swapState.amount = formatUnits(BigInt(fromToken.balance || '0'), fromToken.decimals);
@@ -160,8 +154,8 @@
         {/if}
         {#if swapState.approvalTxHash}
           <!--
-            Обмен из двух транзакций: approve, затем сам обмен. Показываем
-            оба — иначе человек не поймёт, почему в истории их два.
+            A swap can take two transactions: approve, then the swap itself. Both are
+            shown, otherwise the second entry in the history looks unexplained.
           -->
           <p class="text-xs text-muted-foreground mt-2">{i18n.t('Approval transaction')}:</p>
           <p class="text-xs font-mono break-all">{swapState.approvalTxHash}</p>
@@ -177,7 +171,6 @@
 
   {:else if swapState.step === 'form'}
     <div class="space-y-4 max-w-md">
-      <!-- Отдаём -->
       <div>
         <div class="flex items-center justify-between">
           <label class="text-sm font-medium" for="swap-from">{i18n.t('From')}</label>
@@ -217,7 +210,6 @@
         {/if}
       </div>
 
-      <!-- Меняем местами -->
       <div class="flex justify-center">
         <button
           onclick={flipTokens}
@@ -228,7 +220,6 @@
         </button>
       </div>
 
-      <!-- Получаем -->
       <div>
         <label class="text-sm font-medium" for="swap-to">{i18n.t('To')}</label>
         <select
@@ -266,8 +257,8 @@
     </div>
 
   {:else}
-    <!-- Подтверждение, отправка и отказ — в одной ветке: при отказе форма
-         не должна исчезать, чаще всего достаточно поправить сумму. -->
+    <!-- Confirmation, progress and failure share one branch so that a failure keeps the
+         entered values on screen; usually only the amount needs correcting. -->
     <div class="space-y-4 max-w-md">
       <div class="border border-border rounded-lg divide-y divide-border">
         <div class="p-3 flex justify-between gap-3">
@@ -315,9 +306,9 @@
         </div>
         {#if swapState.needsApproval}
           <!--
-            Две транзакции вместо одной: сначала разрешение контракту
-            распоряжаться токеном, затем обмен. Человек должен знать об этом
-            заранее — иначе вторая подпись выглядит неожиданно.
+            Two transactions instead of one: first the contract is allowed to move the
+            token, then the swap itself runs. That has to be known beforehand, otherwise the
+            second signature appears out of nowhere.
           -->
           <div class="p-3 text-xs text-muted-foreground">
             {i18n.t('Two transactions will be sent: a token approval and the swap itself.')}

@@ -1,10 +1,11 @@
 <script lang="ts">
   /**
-   * Правая панель раздела «Чат» по умолчанию (и по лупе из левой панели).
+   * Default right panel of the Chat section, also opened by the magnifier in the
+   * left panel.
    *
-   * Плоский список контактов и каналов в одном месте. Ищем по всем контактам,
-   * включая не принятые и отклонённые: такие показываем с красным крестиком.
-   * Человечек справа — у контакта; у канала его нет.
+   * A single flat list of contacts and channels. Search covers all contacts,
+   * including unaccepted and rejected ones, which are marked with a red cross. The
+   * person icon appears on contacts only.
    */
   import { onMount } from 'svelte';
   import { i18n } from '$lib/i18n';
@@ -27,9 +28,11 @@
   let inputEl = $state<HTMLInputElement | null>(null);
 
   /**
-   * Широкий экран: список принятых контактов уже есть слева, поэтому справа
-   * остаётся только поле поиска. Узкий экран (десктоп ≤ 768px и Android):
-   * панель одна, список показываем под полем.
+   * Whether the layout is narrow.
+   *
+   * A wide screen already shows accepted contacts on the left, so the right panel
+   * keeps only the search field. A narrow screen (desktop ≤ 768px and Android) has a
+   * single panel, so the list appears below the field.
    */
   let narrow = $state(false);
   $effect(() => {
@@ -40,7 +43,7 @@
     return () => mq.removeEventListener('change', update);
   });
 
-  /** Входящие заявки, ещё не принятые: первой строкой списка. */
+  /** Incoming requests not yet accepted, shown as the first rows of the list. */
   const incoming = $derived(contactsState.items.filter((c: any) => isIncomingRequest(c)));
 
   const q = $derived(query.trim().toLowerCase());
@@ -49,7 +52,7 @@
     | { kind: 'contact'; key: string; name: string; sub: string; contact: any; accepted: boolean }
     | { kind: 'channel'; key: string; name: string; sub: string; chatId: string };
 
-  // Все контакты и каналы — один плоский список, отсортированный по имени.
+  // All contacts and channels as one flat list, sorted by name.
   const rows = $derived.by<Row[]>(() => {
     const contacts: Row[] = contactsState.items.map((c: any) => ({
       kind: 'contact',
@@ -74,9 +77,11 @@
   });
 
   /**
-   * Без запроса — только принятые контакты и каналы: это основной список
-   * (слева на десктопе, под поиском на мобильном). Отвергнутые и непринятые
-   * появляются только в результатах поиска: их ищут по имени или ключу.
+   * Rows to show for the current query.
+   *
+   * Without a query only accepted contacts and channels are listed: that is the
+   * main list (on the left on desktop, below the search field on mobile). Rejected
+   * and unaccepted contacts appear only in search results, looked up by name or key.
    */
   const matched = $derived.by<Row[]>(() => {
     const matches = (r: Row) => {
@@ -90,10 +95,13 @@
   });
 
   /**
-   * Крестик — заявка не принята. `mutual` от status-go точнее, чем сравнение
-   * двух полей: при принятии локальное состояние становится `Sent`, а удалённое
-   * остаётся `Received`, и `isMutual` на этом даёт верный ответ, но только если
-   * снимок свежий. Отклонённая заявка — `Dismissed`.
+   * Whether the contact should be marked as not accepted (red cross).
+   *
+   * @remarks
+   * `mutual` from status-go is more reliable than comparing the two request-state
+   * fields: after accepting, the local state becomes `Sent` while the remote one
+   * stays `Received`, and `isMutual` still answers correctly on that pair, but only
+   * while the snapshot is fresh. A dismissed request is `Dismissed`.
    */
   function isRejected(contact: any): boolean {
     if (contact.contactRequestLocalState === LOCAL_DISMISSED) return true;
@@ -102,8 +110,8 @@
   }
 
   onMount(() => {
-    // force: состояние заявок меняется при Accept и при входящих сигналах.
-    // Без перезагрузки принятый контакт остаётся с крестиком из прошлого снимка.
+    // force: request state changes on Accept and on incoming signals. Without a
+    // reload an accepted contact keeps the red cross from a previous snapshot.
     loadContacts(true);
     queueMicrotask(() => inputEl?.focus());
   });
@@ -114,8 +122,8 @@
       selectChat(row.chatId);
       return;
     }
-    // Контакт → его чат (1-1 чат имеет тот же id, что у контакта). Если чата
-    // ещё нет в списке, сначала перечитываем список.
+    // A contact maps to its chat, which carries the same id. If the chat is not in
+    // the list yet, reload the list first.
     const id = row.contact.id as string;
     const open = () => {
       setRightPanel('chat');

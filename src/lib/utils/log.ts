@@ -1,29 +1,23 @@
 /**
- * Логирование фронтенда.
+ * Frontend logging.
  *
- * ## Куда идут сообщения
+ * ## Where messages go
  *
- * В webview логи бесполезны: в release-сборке `console.*` вырезается
- * бандлером, а stdout окна пользователь не видит. Поэтому всё уходит в Rust
- * командой `log_frontend`, и `logging.rs` пишет в тот же файл, что и
- * серверные сообщения:
+ * Logging from the webview alone is useless: a release bundle drops
+ * `console.*`, and the user never sees the window's stdout. Messages are sent
+ * to Rust through the `log_frontend` command, and `logging.rs` writes them to
+ * the same file as backend messages:
  *
- *   ~/.local/share/com.magnus.stauri-app/logs/stauri.<дата>.log
+ *   ~/.local/share/com.magnus.stauri-app/logs/stauri.<date>.log
  *
- * Вычищение секретов делает `RedactingWriter` на стороне Rust — здесь об этом
- * заботиться не нужно, и это правильно: чистка в одном месте, а не в каждом
- * вызове.
+ * Secret redaction is done by `RedactingWriter` on the Rust side — one place
+ * rather than every call site here.
  *
- * ## Включение
+ * ## Enabling
  *
- * Во время отладки включено **всегда**. Отключить можно сборкой с
- * `VITE_DEBUG_LOG=0`.
- *
- * Так сделано намеренно: первый заход показал, что при выключенном по
- * умолчанию логировании разбор сценария в собранном приложении невозможен —
- * в файле были только сообщения Rust, а ни одного RPC-вызова нет. Когда
- * отладка закончится, условие меняется на `=== '1'`, и логирование
- * становится опциональным.
+ * Logging is on by default and can only be turned off with a
+ * `VITE_DEBUG_LOG=0` build. Opt-in logging leaves a release log with only Rust
+ * messages and no RPC calls, which makes a scenario impossible to trace.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -31,18 +25,17 @@ import { invoke } from '@tauri-apps/api/core';
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
 const isDev = import.meta.env.DEV;
-// По умолчанию включено; выключается только явным VITE_DEBUG_LOG=0.
+// On by default; disabled only by an explicit VITE_DEBUG_LOG=0.
 const enabled = import.meta.env.VITE_DEBUG_LOG !== '0';
 
 /**
- * Ограничение на объём одного сообщения.
+ * Cap on the size of a single message.
  *
- * Rust обрезает по 4096 символов, но лишний трафик через IPC ни к чему:
- * обрезаем здесь же.
+ * Rust truncates at 4096 characters, but the extra IPC traffic is pointless.
  */
 const MAX_LEN = 4000;
 
-/** Превращает произвольное значение в строку, не падая на циклах. */
+/** Turns any value into a string without throwing on cyclic structures. */
 function stringify(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value instanceof Error) {
@@ -59,24 +52,24 @@ function send(level: Level, args: unknown[]) {
   const message = args.map(stringify).join(' ');
   const trimmed = message.length > MAX_LEN ? `${message.slice(0, MAX_LEN)}…` : message;
 
-  // В dev дублируем в консоль: так видно без переключения на файл.
+  // In dev, mirror to the console so the log file is not needed.
   if (isDev) {
-    // eslint-disable-next-line no-console -- модуль существует именно для этого
+    // eslint-disable-next-line no-console -- this module exists for exactly this
     (console[level] ?? console.log)(trimmed);
   }
 
   if (!enabled) return;
 
-  // Не ждём промис: логирование не должно задерживать вызывающий код.
-  // Ошибку глотаем — если IPC недоступен, падать из-за лога нельзя.
+  // The promise is not awaited: logging must not hold up the caller.
+  // The error is swallowed — a missing IPC channel must not crash the app.
   //
-  // `?.catch` обязателен: в тестах `invoke` мокается обычной функцией, и
-  // прямой вызов `.catch` на undefined роняет вызывающий код.
+  // `?.catch` is required: tests mock `invoke` with a plain function, and
+  // calling `.catch` on `undefined` would throw in the caller.
   try {
     invoke('log_frontend', { level, message: trimmed })?.catch(() => {});
   } catch {
-    // Синхронный throw от invoke (например, в тестовом окружении) тоже
-    // не должен влиять на приложение.
+    // A synchronous throw from invoke (a test environment, for instance) must
+    // not affect the application either.
   }
 }
 
@@ -86,14 +79,17 @@ export const warn = (...args: unknown[]) => send('warn', args);
 export const error = (...args: unknown[]) => send('error', args);
 
 /**
- * Логирует вход и результат вызова RPC.
+ * Logs the entry into and the outcome of an RPC call.
  *
- * Тела запросов и ответов НЕ логируются: `settings_getSettings` возвращает
- * seed-фразу в поле `mnemonic`. Логируем имя метода, размер ответа и признак
- * ошибки.
+ * Only the method name, the response size and whether it failed are logged:
+ * request and response bodies stay out of the log because
+ * `settings_getSettings` returns the seed phrase in its `mnemonic` field.
  *
- * Возвращает обёртку, чтобы вызывающий код не дублировал `try/finally`
- * в каждом месте.
+ * @param method - RPC method name, used as the log label.
+ * @param fn - The call to run.
+ * @returns Whatever `fn` resolves to.
+ * @throws Whatever `fn` throws; the error is logged first.
+ * @remarks Wrapping the call here keeps `try/finally` out of every call site.
  */
 export async function traceRpc<T>(method: string, fn: () => Promise<T>): Promise<T> {
   const started = performance.now();

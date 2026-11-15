@@ -1,37 +1,34 @@
-//! Регистрация имени ENS вида `<имя>.stateofus.eth`.
+//! Registration of an ENS name of the form `<name>.stateofus.eth`.
 //!
-//! ## Почему это не похоже на перевод
-//!
-//! Обычный перевод — три синхронных вызова (`transfer.rs`). Регистрация идёт
-//! через Router, и там статус-го устроен иначе:
+//! This does not look like a transfer. A plain transfer is three synchronous
+//! calls (`transfer.rs`), while registration goes through the Router, where
+//! status-go works differently:
 //!
 //! ```text
-//! wallet_getSuggestedRoutes(input)            → маршрут + uuid   (синхронно)
-//! wallet_buildTransactionsFromRoute(uuid)     → НИЧЕГО не возвращает
-//!    ⟶ сигнал wallet.router.sign-transactions   {signingDetails.hashes}
+//! wallet_getSuggestedRoutes(input)            → route + uuid   (synchronous)
+//! wallet_buildTransactionsFromRoute(uuid)     → returns NOTHING
+//!    ⟶ signal wallet.router.sign-transactions   {signingDetails.hashes}
 //! wallet_signMessage(hash, from, password)    × N
 //! wallet_sendRouterTransactionsWithSignatures({uuid, signatures})
-//!    ⟶ сигнал wallet.router.transactions-sent   {sentTransactions[].hash}
+//!    ⟶ signal wallet.router.transactions-sent   {sentTransactions[].hash}
 //! ```
 //!
-//! Сам механизм сигналов и подписей живёт в `router.rs` — он общий с обменом
-//! токенов. Здесь только то, что специфично для регистрации имени.
+//! The signal and signature machinery itself lives in `router.rs` — it is
+//! shared with token swaps. Only what is specific to name registration is here.
 //!
-//! ## Почему оркестрация в Rust, а не в компоненте
+//! The orchestration is in Rust, not in a component, because the number of
+//! transactions to sign is not known in advance: it is whatever the Router
+//! returned. If the hashes reached the webview, it could ask to sign any of
+//! them — `wallet_signMessage` does not know what it is signing. The hashes
+//! therefore stay here: only "register this name" crosses the boundary, while
+//! the password and the sequence of signatures do not leave Rust. Same
+//! principle as in `send_transfer`.
 //!
-//! Здесь подписывается не одна заранее известная транзакция, а столько,
-//! сколько вернул Router. Если бы хэши приходили в webview, тот мог бы
-//! попросить подписать любой из них — `wallet_signMessage` не знает, что
-//! именно подписывает. Поэтому хэши остаются здесь: наружу уходит только
-//! «зарегистрируй такое-то имя», а пароль и последовательность подписей
-//! не покидают Rust. Тот же принцип, что в `send_transfer`.
-//!
-//! ## Почему через Router, а не `ens_register`
-//!
-//! В собранном бэкенде (status-go v10.35.0-167) метода `ens_register` нет:
-//! служба `ens` отдаёт только чтение (`ens_price`, `ens_ownerOf`,
-//! `ens_expireAt`, `ens_addressOf`). Регистрация идёт маршрутом с
-//! `SendType: ENSRegister`, где оплата — в SNT на mainnet и в STT на Sepolia.
+//! The Router is used because the built backend (status-go v10.35.0-167) has no
+//! `ens_register` method: the `ens` service is read-only (`ens_price`,
+//! `ens_ownerOf`, `ens_expireAt`, `ens_addressOf`). Registration goes through a
+//! route with `SendType: ENSRegister`, paid in SNT on mainnet and STT on
+//! Sepolia.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,19 +39,22 @@ use crate::router::{
     GAS_FEE_MEDIUM, execute_route, hex_u128, is_address, strip_hex_prefix, unique_uuid,
 };
 
-/// `SendType` из `pkg/services/wallet/router/sendtype/send_type.go`:
+/// `SendType` from `pkg/services/wallet/router/sendtype/send_type.go`:
 /// Transfer=0, ENSRegister=1, ENSRelease=2, ENSSetPubKey=3, StickersBuy=4,
 /// Bridge=5, ERC721Transfer=6, ERC1155Transfer=7, Swap=8, …
 const SEND_TYPE_ENS_REGISTER: u64 = 1;
 
-/// Адрес контракта SNT/STT по сети.
+/// SNT/STT contract address per network.
 ///
-/// Нужен как `tokenKey` в параметрах маршрута: Router сверяет его с адресом
-/// из `internal/contracts/snt/address.go` и отвергает любой другой
+/// Needed as `tokenKey` in the route parameters: the Router compares it with
+/// the address from `internal/contracts/snt/address.go` and rejects any other
 /// (`ErrENSRegisterTestnetSTTOnly` / `ErrENSRegisterMainnetSNTOnly`).
 ///
-/// Регистрация поддерживается только на mainnet и Sepolia — там же, где
-/// развёрнут контракт (`ENSRegisterProcessor.AvailableFor`).
+/// Registration is supported only on mainnet and Sepolia, where the contract is
+/// deployed (`ENSRegisterProcessor.AvailableFor`).
+///
+/// # Errors
+/// `ErrorKind::Config` for any other chain.
 fn snt_address(chain_id: u64) -> AppResult<&'static str> {
     match chain_id {
         1 => Ok("0x744d70fdbe2ba4cf95131626614a1763df805b9e"),
@@ -65,7 +65,10 @@ fn snt_address(chain_id: u64) -> AppResult<&'static str> {
     }
 }
 
-/// `tokenKey` в том виде, в каком его ждёт Router: `<chainId>-<адрес строчными>`.
+/// `tokenKey` in the form the Router expects: `<chainId>-<lowercase address>`.
+///
+/// # Errors
+/// Whatever [`snt_address`] returns for an unsupported chain.
 fn token_key(chain_id: u64) -> AppResult<String> {
     Ok(format!(
         "{chain_id}-{}",
@@ -73,52 +76,61 @@ fn token_key(chain_id: u64) -> AppResult<String> {
     ))
 }
 
-/// Тело запроса на регистрацию.
+/// Registration request body.
 #[derive(Debug, Deserialize)]
 pub struct EnsRegisterRequest {
-    /// Порт аутентифицирующего прокси.
+    /// Port of the authenticating proxy.
     pub port: u16,
     pub chain_id: u64,
-    /// Адрес кошелька, с которого платим SNT и которому достанется имя.
+    /// Wallet address paying in SNT and receiving the name.
     pub from: String,
-    /// Имя без домена: `myname` → `myname.stateofus.eth`.
+    /// Name without the domain: `myname` → `myname.stateofus.eth`.
     pub username: String,
-    /// Пароль профиля. Используется только внутри этого вызова.
+    /// Profile password. Used only inside this call.
     pub password: String,
 }
 
-/// Результат регистрации.
+/// Registration result.
 #[derive(Debug, Serialize)]
 pub struct EnsRegisterResult {
-    /// Хэш транзакции регистрации.
+    /// Hash of the registration transaction.
     pub tx_hash: String,
-    /// Полное имя, которое уйдёт в базу профиля.
+    /// Full name to be stored in the profile database.
     pub full_name: String,
 }
 
-/// Сколько стоит имя и свободно ли оно.
+/// What the name costs and whether it is free.
 #[derive(Debug, Serialize)]
 pub struct EnsQuote {
-    /// Цена в минимальных единицах SNT/STT (строкой: 18 знаков не влезают в f64).
+    /// Price in the smallest unit of SNT/STT (a string: 18 digits do not fit
+    /// in f64).
     pub price: String,
-    /// Комиссия сети в wei. `null` — маршрут не собрался или цену газа не дали.
+    /// Network fee in wei. `null` when the route could not be built or no gas
+    /// price was given.
     ///
-    /// Именно `null`, а не `"0"`: ноль в этом поле читается как «перевод
-    /// бесплатный», хотя на деле комиссия неизвестна и уйдёт из кошелька.
+    /// `null` rather than `"0"`: a zero in this field reads as "the transfer is
+    /// free", when in fact the fee is unknown and will be taken from the
+    /// wallet.
     pub fee: Option<String>,
-    /// Срок действия, hex. `0` — имени нет.
+    /// Expiry, hex. `0` means the name does not exist.
     pub expires_at: String,
-    /// Владелец. Пустая строка — имя свободно.
+    /// Owner. An empty string means the name is free.
     pub owner: String,
     pub available: bool,
 }
 
-/// Проверяет имя до обращения к сети.
+/// Validates the name before any network access.
 ///
-/// Правила взяты из контракта: имя — это один label, то есть буквы, цифры и
-/// дефис; точка недопустима (иначе `a.b` превратилось бы в `a.b.stateofus.eth`,
-/// где `a.b` — уже не label). Длину ограничиваем разумной: короткие имена
-/// контракт позволяет «слэшить» (отобрать), а слишком длинные незачем.
+/// The rules come from the contract: a name is a single label, i.e. letters,
+/// digits and hyphens; a dot is not allowed (otherwise `a.b` would become
+/// `a.b.stateofus.eth`, where `a.b` is no longer a label). The length is capped
+/// at a sensible range: short names can be slashed by the contract, and
+/// excessively long ones serve no purpose.
+///
+/// # Errors
+/// `ErrorKind::Config` for an empty name, a length outside 3..=31, a leading or
+/// trailing hyphen, or a character outside lowercase letters, digits and
+/// hyphens.
 fn validate_username(username: &str) -> AppResult<()> {
     let name = username.trim();
     if name.is_empty() {
@@ -141,42 +153,42 @@ fn validate_username(username: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Полное имя, под которым оно хранится у профиля.
+/// Full name under which the profile stores it.
 fn full_name(username: &str) -> String {
     format!("{}.stateofus.eth", username.trim())
 }
 
-/// Имя в том виде, в каком его ждёт `ens_ownerOf`.
+/// The name in the form `ens_ownerOf` expects.
 ///
-/// ## Почему не всё равно
-///
-/// В status-go два чтения одного имени хешируют его по-разному, и это не
-/// наша ошибка — так написано в исходниках:
+/// Two reads of the same name hash it differently in status-go, as written in
+/// its sources:
 ///
 ///   * `ens_ownerOf` → `EnsResolver.OwnerOf` (pkg/services/ens/ensresolver/
-///     resolver.go:141) сначала вызывает `ValidateENSUsername`, а тот
-///     требует суффикс `.eth` и отвечает «user name must be a valid ENS name
-///     ending with .eth» на голое имя. Пройдя проверку, резолвер срезает
-///     `.stateofus.eth` и хеширует остаток (:168) — то есть label;
-///   * `ens_expireAt` → `EnsResolver.ExpireAt` (там же, :242) проверки не
-///     делает вовсе и хеширует строку как есть.
+///     resolver.go:141) first calls `ValidateENSUsername`, which requires an
+///     `.eth` suffix and answers "user name must be a valid ENS name ending
+///     with .eth" for a bare name. Having passed, the resolver strips
+///     `.stateofus.eth` and hashes the rest (:168), i.e. the label;
+///   * `ens_expireAt` → `EnsResolver.ExpireAt` (same file, :242) does no
+///     validation and hashes the string as is.
 ///
-/// Поэтому владельца спрашиваем полным именем (иначе отказ), а срок — голым
-/// (иначе получили бы срок совсем другого label).
+/// The owner is therefore queried with the full name (otherwise refusal) and
+/// the expiry with the bare one (otherwise the expiry of a different label).
 fn owner_lookup_name(username: &str) -> String {
     full_name(username)
 }
 
-/// Имя в том виде, в каком его ждёт `ens_expireAt`. См. `owner_lookup_name`.
+/// The name in the form `ens_expireAt` expects. See [`owner_lookup_name`].
 fn expire_lookup_name(username: &str) -> &str {
     username.trim()
 }
 
-/// Параметры маршрута для регистрации.
+/// Route parameters for registration.
 ///
-/// Вынесены отдельно, чтобы экран подтверждения и сама отправка считали
-/// одинаково: расхождение здесь означало бы «показали одну цену, заплатили
-/// другую».
+/// Kept separate so the confirmation screen and the send compute identically: a
+/// divergence here would mean showing one price and paying another.
+///
+/// # Errors
+/// Whatever [`token_key`] returns for an unsupported chain.
 fn route_params(
     uuid: &str,
     chain_id: u64,
@@ -205,11 +217,17 @@ fn route_params(
     }))
 }
 
-/// Публичный ключ кошелька — из аккаунтов профиля, а не от фронтенда.
+/// Public key of the wallet — taken from the profile accounts, not from the
+/// frontend.
 ///
-/// `ExtractCoordinates` в status-go режет строку как `0x04` + X + Y, поэтому
-/// принимаем только такую форму: с другим ключом регистрация соберёт
-/// calldata с нулями, и имя будет записано на мусорный публичный ключ.
+/// `ExtractCoordinates` in status-go splits the string as `0x04` + X + Y, so
+/// only that form is accepted: another key would make registration assemble
+/// calldata full of zeros, recording the name against a garbage public key.
+///
+/// # Errors
+/// `ErrorKind::Backend` when the accounts cannot be listed or the matching
+/// account has no usable key; `ErrorKind::Config` when the account is not part
+/// of this profile.
 async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
     let accounts = backend.call("accounts_getAccounts", json!([])).await?;
     let list = accounts
@@ -228,7 +246,7 @@ async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
             .get("public-key")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        // Без `0x04…` Router не сможет разобрать координаты.
+        // Without `0x04…` the Router cannot parse the coordinates.
         let key = strip_hex_prefix(key);
         if key.len() != 130 || !key.starts_with("04") {
             return Err(AppError::backend(
@@ -241,11 +259,16 @@ async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
     Err(AppError::config("account not found in this profile"))
 }
 
-/// Сколько стоит имя и свободно ли оно.
+/// What the name costs and whether it is free.
 ///
-/// Всё только чтение: ни подписи, ни пароля не нужно. Комиссию сети берём из
-/// того же маршрута, по которому потом пойдёт регистрация, поэтому цифра на
-/// экране подтверждения — не отдельная догадка, а та же оценка.
+/// Entirely read-only: no signature and no password are needed. The network fee
+/// comes from the same route the registration will later take, so the figure on
+/// the confirmation screen is not a separate guess but the same estimate.
+///
+/// # Errors
+/// `ErrorKind::Config` when the backend is not running, the name is invalid, the
+/// wallet address is malformed or the chain has no registrar; `ErrorKind::Backend`
+/// when the price or the owner cannot be read.
 #[tauri::command]
 pub async fn get_ens_quote(
     port: u16,
@@ -259,7 +282,7 @@ pub async fn get_ens_quote(
     if !is_address(&from) {
         return Err(AppError::config("invalid wallet address"));
     }
-    // Проверяем сеть до запросов: на прочих сетях регистрации нет.
+    // The network is checked before any request: other chains have no registrar.
     snt_address(chain_id)?;
 
     let name = username.trim();
@@ -272,11 +295,11 @@ pub async fn get_ens_quote(
         .to_string();
     let price = hex_u128(&price_raw).unwrap_or(0);
 
-    // Владелец: нулевой адрес означает «свободно».
+    // Owner: the zero address means "free".
     //
-    // Ошибку НЕ проглатываем. Раньше здесь стоял `.ok()`, и отказ валидации
-    // превращался в пустой владелец, то есть занятое имя выглядело свободным —
-    // а дальше человек платил бы за регистрацию, которую контракт отклонит.
+    // The error is NOT swallowed: an empty owner would make a taken name look
+    // free, and the user would then pay for a registration the contract
+    // rejects.
     let owner_raw = backend
         .call("ens_ownerOf", json!([chain_id, owner_lookup_name(name)]))
         .await?;
@@ -284,8 +307,8 @@ pub async fn get_ens_quote(
     let zero = "0x0000000000000000000000000000000000000000";
     let available = owner.is_empty() || owner == zero || owner.eq_ignore_ascii_case("0x0");
 
-    // Срок действия — справочно: если его не удалось прочитать, это не повод
-    // отказывать в цене и занятости.
+    // Expiry is informational: failing to read it is not a reason to refuse the
+    // price and availability.
     let expires_at = backend
         .call("ens_expireAt", json!([chain_id, expire_lookup_name(name)]))
         .await
@@ -293,9 +316,9 @@ pub async fn get_ens_quote(
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "0".to_string());
 
-    // Комиссия сети. Маршрут может не собраться (нет SNT на балансе, газ
-    // недоступен) — это не повод отказывать в цене и занятости имени, но и
-    // показывать ноль вместо «неизвестно» нельзя.
+    // Network fee. The route may fail to build (no SNT on the balance, gas
+    // unavailable) — that is not a reason to refuse the price and availability,
+    // but showing zero instead of "unknown" is not acceptable either.
     let mut fee: Option<String> = None;
     if let Ok(public_key) = public_key_of(backend, &from).await {
         let uuid = unique_uuid();
@@ -317,7 +340,7 @@ pub async fn get_ens_quote(
     })
 }
 
-/// Комиссия сети из маршрута (`Route[0].TxTotalFee`, hex wei).
+/// Network fee from the route (`Route[0].TxTotalFee`, hex wei).
 fn route_fee(route: &Value) -> Option<String> {
     let first = route.get("Route")?.as_array()?.first()?;
     let raw = first.get("TxTotalFee")?.as_str()?;
@@ -325,7 +348,13 @@ fn route_fee(route: &Value) -> Option<String> {
     Some(value.to_string())
 }
 
-/// Регистрирует имя и возвращает хэш транзакции.
+/// Registers the name and returns the transaction hash.
+///
+/// # Errors
+/// `ErrorKind::Config` for a stopped backend, an invalid name, a bad wallet
+/// address, an empty password or an unsupported chain; `ErrorKind::Backend`
+/// when a backend call fails, the public key is unusable, or no transaction hash
+/// comes back.
 #[tauri::command]
 pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegisterResult> {
     let backend =
@@ -342,8 +371,8 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
     let name = request.username.trim();
     let public_key = public_key_of(backend, &request.from).await?;
 
-    // Цену берём у контракта, а не у фронтенда: сумму approve определяет
-    // регистратор, и любая другая цифра означала бы отказ контракта.
+    // The price comes from the contract, not the frontend: the registrar
+    // decides the approve amount, and any other figure would be rejected.
     let price_hex = backend
         .call("ens_price", json!([request.chain_id]))
         .await?
@@ -364,9 +393,9 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
 
     let hashes = execute_route(backend, params, &request.from, &request.password).await?;
 
-    // У регистрации одна транзакция (approveAndCall делает approve внутри).
-    // Берём последний хэш: если Router всё же добавит отдельный approve,
-    // интересен именно он, а не подготовительный.
+    // Registration is a single transaction (`approveAndCall` approves inside).
+    // The last hash is taken: if the Router does add a separate approve, the
+    // registration hash is the interesting one, not the preparatory one.
     let tx_hash = hashes
         .last()
         .cloned()
@@ -391,7 +420,7 @@ mod tests {
 
     #[test]
     fn rejects_names_that_are_not_a_single_label() {
-        // С точкой ушло бы «a.b.stateofus.eth» — это уже другой label.
+        // With a dot it would become "a.b.stateofus.eth" — a different label.
         assert!(validate_username("a.b").is_err());
         assert!(validate_username("Name").is_err(), "uppercase");
         assert!(validate_username("na me").is_err(), "space");
@@ -406,16 +435,17 @@ mod tests {
     #[test]
     fn builds_full_name() {
         assert_eq!(full_name("myname"), "myname.stateofus.eth");
-        // Пробелы по краям не должны попадать в имя.
+        // Surrounding whitespace must not end up in the name.
         assert_eq!(full_name("  myname  "), "myname.stateofus.eth");
     }
 
-    /// Расхождение status-go: владельца спрашивают полным именем, срок — голым.
+    /// status-go divergence: the owner is queried with the full name, the
+    /// expiry with the bare one.
     ///
-    /// Оба утверждения — не стилистика, а условие работоспособности:
-    /// `ens_ownerOf` отвергает голое имя (а раньше ошибка глушилась через
-    /// `.ok()`, и занятое имя выглядело свободным), а `ens_expireAt` с полным
-    /// именем хеширует не тот label.
+    /// Both assertions are conditions for the code to work, not style:
+    /// `ens_ownerOf` rejects a bare name (and an empty owner would make a taken
+    /// name look free), while `ens_expireAt` with the full name hashes a
+    /// different label.
     #[test]
     fn owner_and_expiry_are_looked_up_differently() {
         assert_eq!(owner_lookup_name("myname"), "myname.stateofus.eth");
@@ -427,7 +457,7 @@ mod tests {
 
     #[test]
     fn token_key_matches_status_go_format() {
-        // `<chainId>-<адрес строчными>`: так же строит TokenKey в status-go.
+        // `<chainId>-<lowercase address>`: the same form status-go builds in TokenKey.
         assert_eq!(
             token_key(11155111).unwrap(),
             "11155111-0xe452027cdef746c7cd3db31cb700428b16cd8e51"
@@ -460,7 +490,7 @@ mod tests {
         assert_eq!(params["sendType"], 1, "ENSRegister");
         assert_eq!(params["gasFeeMode"], 1, "medium");
         assert_eq!(params["amountIn"], "0x3e8");
-        // Получатель совпадает с отправителем: имя принадлежит плательщику.
+        // The recipient equals the sender: the name belongs to the payer.
         assert_eq!(params["addrFrom"], params["addrTo"]);
         assert_eq!(params["tokenKey"], params["toTokenKey"]);
         assert_eq!(params["username"], "myname");

@@ -15,7 +15,7 @@
     displayName?: string,
     onDisconnect?: () => void,
     onCreateSeed?: () => void,
-    /** Открыть редактирование профиля (в SA — единственный путь к нему). */
+    /** Opens profile editing (the only route to it in the app). */
     onEditProfile?: () => void
   } = $props();
 
@@ -46,7 +46,7 @@
     {i18n.t('Profile')}
   </div>
 
-  <!-- Ссылка на редактирование: на узком экране без неё профиль не открыть. -->
+  <!-- Link to editing: on a narrow screen this is the only way into the profile editor. -->
   <div class="px-4 py-2 border-b border-border">
     <button
       type="button"
@@ -58,7 +58,6 @@
   </div>
 
   <ScrollArea class="flex-1 min-h-0 overflow-x-hidden">
-    <!-- Connect Info -->
     <div class="p-4 border-b border-border bg-secondary/30">
       {#if statusState.isConnecting}
         <div class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -77,7 +76,6 @@
           {i18n.t('Disconnect')}
         </button>
 
-        <!-- Profile ID -->
         <div class="mt-3">
           <div class="text-[0.75rem] font-bold text-muted-foreground uppercase">Profile ID</div>
           <button
@@ -90,7 +88,6 @@
           </button>
         </div>
 
-        <!-- Public Key -->
         <div class="mt-2">
           <div class="text-[0.75rem] font-bold text-muted-foreground uppercase">Public Key (for chat)</div>
           <button
@@ -103,7 +100,6 @@
           </button>
         </div>
 
-        <!-- Сетевая информация -->
         <NetworkInfo />
       {:else}
         <button class="w-full py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium">
@@ -112,7 +108,6 @@
       {/if}
     </div>
 
-    <!-- Profile Info (только если залогинен) -->
     {#if statusState.isLoggedIn}
       <div class="p-4 flex flex-col items-center gap-3">
         <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center text-primary">
@@ -121,9 +116,9 @@
         <div class="text-center">
           <div class="font-bold text-lg">{statusState.alias || displayName}</div>
           <!--
-            Имя ENS под ником. Пусто, пока профиль о нём не знает: читается
-            через `ens_getEnsUsernames`, а не обратным разрешением —
-            регистратор Status reverse-запись не создаёт.
+            The ENS name under the alias. It stays empty until the profile knows about it:
+            the name is read through `ens_getEnsUsernames`, not by reverse resolution, since
+            the Status registrar does not create a reverse record.
           -->
           {#if ensState.profileNames.length > 0}
             <div class="text-xs text-muted-foreground font-mono break-all mt-0.5">
@@ -135,7 +130,6 @@
           </div>
         </div>
 
-        <!-- Красная плашка "Seed не сохранена" -->
         {#if !statusState.isSeedSaved}
           <button
             onclick={() => onCreateSeed?.()}

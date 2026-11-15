@@ -1,23 +1,17 @@
 /**
- * Состояние обмена токенов.
+ * Token swap state.
  *
- * ## Почему только mainnet
+ * @remarks
+ * Mainnet only: providers (Paraswap, LI.FI) have no liquidity on test networks,
+ * so a swap there is impossible. This is checked both in Rust (`swap.rs`) and on
+ * the form, so the user does not pick tokens only to be refused on submit.
  *
- * У провайдеров (Paraswap, LI.FI) нет ликвидности в тестовых сетях, поэтому
- * обмен там невозможен в принципе. Это проверяется и в Rust (`swap.rs`), но и
- * на форме: иначе человек выбирал бы токены и получал отказ после нажатия.
+ * The quote runs before the password is entered: `get_swap_quote` only builds a
+ * route at the provider and reads the amounts from it — no key, no signature,
+ * nothing sent to the network — so the expected output is visible early.
  *
- * ## Почему оценка до пароля
- *
- * `get_swap_quote` только строит маршрут у провайдера и читает из него суммы.
- * Ключ не используется, подписи нет, в сеть ничего не уходит. Поэтому
- * «сколько получим» видно раньше, чем человек введёт пароль.
- *
- * ## Проскальзывание
- *
- * Допуск фиксированный (1 %) и показан на экране. Менять его в интерфейсе
- * пока не даём: это настройка для тех, кто понимает, что делает, а
- * необдуманно выставленные 10 % — прямой способ потерять деньги.
+ * Slippage is fixed at 1% and shown on screen. It is not adjustable in the UI: a
+ * careless 10% is a direct way to lose money.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -30,32 +24,32 @@ import { formatError } from '$lib/utils/errors';
 
 export type SwapStep = 'form' | 'confirm' | 'sending' | 'done' | 'failed';
 
-/** Сети, где обмен работает. Совпадает с `SWAP_CHAINS` в `swap.rs`. */
+/** Networks where swaps work. Matches `SWAP_CHAINS` in `swap.rs`. */
 export const SWAP_CHAINS: ReadonlySet<number> = new Set([1, 10, 56, 8453, 42161]);
 
-/** Нативный актив: у него нулевой адрес. */
+/** Native asset: identified by the zero address. */
 export const NATIVE_TOKEN = '0x0000000000000000000000000000000000000000';
 
-/** Допуск проскальзывания, зашитый в `swap.rs`. Показывается человеку. */
+/** Slippage tolerance, fixed in `swap.rs` and shown to the user. */
 export const SLIPPAGE_PERCENT = 1;
 
 export const swapState = $state({
   step: 'form' as SwapStep,
-  /** Ключ исходного токена: `chainId:адрес`. */
+  /** Source token key: `chainId:address`. */
   fromKey: '',
-  /** Ключ целевого токена. */
+  /** Target token key. */
   toKey: '',
-  /** Сумма к обмену, как ввёл человек. */
+  /** Amount to swap, as entered. */
   amount: '',
-  /** Сколько получим (минимальные единицы целевого токена). */
+  /** Expected output, in the target token's smallest units. */
   amountOut: null as bigint | null,
-  /** Минимум при текущем проскальзывании. */
+  /** Minimum output at the current slippage. */
   minAmountOut: null as bigint | null,
-  /** Комиссия сети в wei. `null` — не посчитана. */
+  /** Network fee in wei. `null` when not computed. */
   fee: null as bigint | null,
-  /** Нужен ли отдельный approve. */
+  /** Whether a separate approve is needed. */
   needsApproval: false,
-  /** Через кого идёт обмен. */
+  /** Provider the route goes through. */
   provider: '',
   isQuoting: false,
   quoteError: '',
@@ -63,7 +57,7 @@ export const swapState = $state({
   error: '',
   txHash: '',
   approvalTxHash: '',
-  /** Обмен в тестовой сети невозможен. */
+  /** A swap is impossible on the test network. */
   unsupportedChain: false,
 });
 
@@ -86,12 +80,12 @@ export function resetSwap(): void {
   swapState.unsupportedChain = false;
 }
 
-/** Ключ токена в том же виде, что и в `walletStore`. */
+/** Token key in the same form the wallet store uses. */
 export function tokenKeyOf(token: WalletToken): string {
   return `${token.chainId}:${token.tokenAddress.toLowerCase()}`;
 }
 
-/** Токены, которые можно отдать: с ненулевым балансом в основной сети. */
+/** Tokens that can be given: non-zero balance on a supported network. */
 export function swapSources(tokens: WalletToken[]): WalletToken[] {
   return tokens.filter(
     (t) => SWAP_CHAINS.has(t.chainId) && !t.hasError && t.balance !== '0'
@@ -99,28 +93,36 @@ export function swapSources(tokens: WalletToken[]): WalletToken[] {
 }
 
 /**
- * Токены, которые можно получить: та же сеть, что у источника.
+ * Tokens that can be received: the same network as the source.
  *
- * Список ограничен известными кошельку токенами этой сети, включая нулевые:
- * держать в интерфейсе 17 700 токенов бессмысленно. Прочие адреса человек
- * может ввести вручную — поле рядом.
+ * @param tokens - Wallet tokens to choose from.
+ * @param chainId - Source chain, or `null` when nothing is selected.
+ * @returns Tokens of that chain, zero balances included.
+ * @remarks
+ * The list is limited to tokens the wallet already knows on that network —
+ * showing 17,700 tokens in the UI is pointless. Other addresses can be entered
+ * manually in the field next to it.
  */
 export function swapTargets(tokens: WalletToken[], chainId: number | null): WalletToken[] {
   if (chainId === null) return [];
   return tokens.filter((t) => t.chainId === chainId);
 }
 
-/** Ищет токен по ключу. */
+/** Finds a token by key. */
 export function findToken(tokens: WalletToken[], key: string): WalletToken | undefined {
   return tokens.find((t) => tokenKeyOf(t) === key);
 }
 
 /**
- * Запрашивает оценку обмена.
+ * Requests a swap quote.
  *
- * Вызывается при входе на подтверждение и при смене суммы. Ошибка не
- * блокирует экран совсем, но кнопку отправки выключает: без суммы на выходе
- * человек не знает, на что соглашается.
+ * @param fromToken - Token to swap from.
+ * @param toToken - Token to swap to.
+ * @param amountRaw - Amount as entered by the user.
+ * @remarks
+ * Called when entering confirmation and when the amount changes. A failure does
+ * not block the screen but disables the send button: without an output amount
+ * the user does not know what they are agreeing to.
  */
 export async function quoteSwap(
   fromToken: WalletToken,
@@ -130,8 +132,9 @@ export async function quoteSwap(
   const port = statusState.backendPort;
   if (!port || !walletState.address) return;
 
-  // `checkAmountAgainstBalance` возвращает код ошибки, а не бросает: разбор
-  // суммы и сравнение с балансом нужны оба, и оба дают переводимый код.
+  // `checkAmountAgainstBalance` returns an error code instead of throwing:
+  // parsing the amount and comparing it with the balance are both needed, and
+  // both yield a translatable code.
   const parsed = checkAmountAgainstBalance(amountRaw, fromToken);
   if (!parsed.ok) {
     swapState.quoteError = parsed.error;
@@ -152,7 +155,7 @@ export async function quoteSwap(
       needs_approval: boolean;
       provider: string;
     }>('get_swap_quote', {
-      // Имена — camelCase: Tauri сам приводит аргументы команды к этому виду.
+      // Names are camelCase: Tauri converts command arguments to this form.
       port,
       chainId: fromToken.chainId,
       from: walletState.address,
@@ -178,11 +181,16 @@ export async function quoteSwap(
 }
 
 /**
- * Выполняет обмен.
+ * Executes the swap.
  *
- * Пароль берётся из общей сессии, как в переводе и регистрации имени: он уже
- * нужен для любой подписи, и спрашивать его ещё раз в третьем месте — лишний
- * ввод.
+ * @param fromToken - Token to swap from.
+ * @param toToken - Token to swap to.
+ * @param amountRaw - Amount as entered by the user.
+ * @returns `true` when the swap went through.
+ * @remarks
+ * The password comes from the shared session, as in transfers and name
+ * registration: it is already needed for any signature, and asking for it again
+ * in a third place would be redundant input.
  */
 export async function performSwap(
   fromToken: WalletToken,
@@ -215,7 +223,7 @@ export async function performSwap(
   try {
     const result = await invoke<{ tx_hash: string; approval_tx_hash: string }>('swap_tokens', {
       request: {
-        // Внутри `request` — snake_case: это serde-структура `SwapRequest`.
+        // Inside `request` names stay snake_case: it is the serde `SwapRequest`.
         port,
         chain_id: fromToken.chainId,
         from: walletState.address,
@@ -246,14 +254,14 @@ export async function performSwap(
   }
 }
 
-/** Вернуться на форму. */
+/** Returns to the form. */
 export function backToSwapForm(): void {
   swapState.step = 'form';
   swapState.error = '';
   swapState.txHash = '';
 }
 
-/** Меняет местами исходный и целевой токен. */
+/** Swaps the source and target tokens. */
 export function flipTokens(): void {
   const from = swapState.fromKey;
   swapState.fromKey = swapState.toKey;

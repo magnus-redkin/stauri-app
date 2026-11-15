@@ -2,8 +2,15 @@ import i18n from 'sveltekit-i18n';
 import type { Config } from 'sveltekit-i18n';
 import { locales } from './locales';
 
-// Каждый язык — плоский словарь строк.
-// Для 'en' ключ = значение, для остальных — перевод или fallback на ключ.
+/**
+ * Flattens a locale dictionary into the key/value table sveltekit-i18n loads.
+ *
+ * In `en` the key already equals the value; every other locale falls back to the key when
+ * its translation is empty, so an untranslated string still renders as readable text.
+ *
+ * @param lang - Locale whose dictionary is flattened.
+ * @returns Every key of that dictionary mapped to its text or to the key itself.
+ */
 function transformLocales(lang: keyof typeof locales): Record<string, string> {
   const source = locales[lang] as Record<string, string>;
   const result: Record<string, string> = {};

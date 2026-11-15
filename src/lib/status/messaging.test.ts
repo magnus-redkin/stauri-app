@@ -4,21 +4,21 @@ import { hexToBase58Key } from './invite';
 import { sendContactRequest, sendContactUpdates } from './messaging';
 import { statusFetch } from './http';
 
-// Мокаем HTTP-границу: интересует только тело запроса, которое уходит
-// в status-go, а не транспорт.
+// Mock the HTTP boundary: only the request body that reaches status-go matters,
+// not the transport.
 vi.mock('./http', () => ({
   statusFetch: vi.fn(),
 }));
 
 const fetchMock = vi.mocked(statusFetch);
 
-/** Ключ из Invite на Android — на нём ловились обе ошибки. */
+/** Key from an Android invite; both failure modes were reproduced with it. */
 const KEY_B58 = 'zQ3shgzWjnQtDHjmoYf6ZtzsWHkV31nfP4fisEiTmX1LuvGhm';
 const KEY_HEX = '0x0322f1afef301489b0102a63d7f0ea6746ae1d6eaf35347854acbed82e4773d1c0';
-/** Старый несжатый ключ: 132 символа, status-go принимает как есть. */
+/** Legacy uncompressed key: 132 characters, accepted by status-go as is. */
 const KEY_LEGACY = '0x04' + 'a'.repeat(128);
 
-/** Тело последнего вызова `statusFetch` (params[0] от `wakuext_sendContactRequest`). */
+/** Body of the last `statusFetch` call (`params[0]` of `wakuext_sendContactRequest`). */
 function sentBody(): any {
   expect(fetchMock).toHaveBeenCalled();
   const call = fetchMock.mock.calls.at(-1)!;

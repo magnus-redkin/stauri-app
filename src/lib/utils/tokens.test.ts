@@ -24,8 +24,7 @@ describe('blockReasonOf', () => {
   });
 
   it('ставит ошибку RPC выше нулевого баланса', () => {
-    // Если RPC не ответил, про баланс ничего не известно: «нет средств»
-    // здесь было бы неправдой.
+    // With no RPC reply the balance is unknown, and "no funds" would be false.
     expect(blockReasonOf(token({ balance: '0', hasError: true }))).toBe('rpc-error');
     expect(blockReasonOf(token({ hasError: true }))).toBe('rpc-error');
   });

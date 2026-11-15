@@ -5,7 +5,7 @@ import { statusState, resetState, setNetworkInfo } from '$lib/stores/statusStore
 
 describe('NetworkInfo Component', () => {
   beforeEach(() => {
-    // Гарантируем чистое состояние перед каждым тестом
+    // A clean state before every test.
     resetState();
   });
 
@@ -14,13 +14,13 @@ describe('NetworkInfo Component', () => {
 
     render(NetworkInfo);
 
-    // Проверяем тексты
+    // Texts.
     expect(screen.getByText('Ethereum Mainnet')).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument(); // Chain ID
     expect(screen.getByText('https://ethereum-rpc.publicnode.com')).toBeInTheDocument();
     expect(screen.getByText('status.prod')).toBeInTheDocument();
 
-    // Проверяем наличие бейджа Mainnet и отсутствие Testnet
+    // The Mainnet badge is present and the Testnet badge is not.
     expect(screen.getByText('Mainnet')).toBeInTheDocument();
     expect(screen.queryByText('Testnet')).not.toBeInTheDocument();
   });
@@ -35,7 +35,7 @@ describe('NetworkInfo Component', () => {
     expect(screen.getByText('https://rpc.sepolia.org')).toBeInTheDocument();
     expect(screen.getByText('status.test')).toBeInTheDocument();
 
-    // Проверяем наличие бейджа Testnet и отсутствие Mainnet
+    // The Testnet badge is present and the Mainnet badge is not.
     expect(screen.getByText('Testnet')).toBeInTheDocument();
     expect(screen.queryByText('Mainnet')).not.toBeInTheDocument();
   });
@@ -51,7 +51,7 @@ describe('NetworkInfo Component', () => {
   });
 
   it('должен отображать "unknown" для нераспознанной сети', () => {
-    // Симулируем кастомную сеть, которую нет в getChainId()
+    // Simulate a custom network that `getChainId()` does not know.
     statusState.networkName = 'custom-network';
     statusState.isTestnet = true;
     statusState.rpcUrl = 'https://custom.rpc';

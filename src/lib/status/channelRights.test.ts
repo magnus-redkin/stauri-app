@@ -4,9 +4,9 @@ import { canRecord, canComment, ROLE_OWNER } from './channelRights';
 describe('запись в канал зависит от типа', () => {
   it('news: запись только у автора', () => {
     expect(canRecord('news', ROLE_OWNER)).toBe(true);
-    expect(canRecord('news', 4)).toBe(false); // админ — не автор
-    expect(canRecord('news', 0)).toBe(false); // участник
-    expect(canRecord('news', undefined)).toBe(false); // роль не пришла — не разрешаем
+    expect(canRecord('news', 4)).toBe(false); // admin, not the author
+    expect(canRecord('news', 0)).toBe(false); // member
+    expect(canRecord('news', undefined)).toBe(false); // no role came through, deny
   });
 
   it('request: запись только у автора', () => {

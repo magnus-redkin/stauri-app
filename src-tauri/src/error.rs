@@ -1,40 +1,37 @@
-//! Типизированные ошибки команд Tauri.
+//! Typed errors for Tauri commands.
 //!
-//! Раньше все команды возвращали `Result<T, String>`, и фронтенд не мог
-//! отличить «бэкенд не запущен» от «сеть не найдена» иначе как разбором
-//! текста сообщения. Тексты менялись при правках и были на русском.
-//!
-//! Теперь ошибка сериализуется в объект:
+//! Every command returns `AppError`, so the frontend can branch on `kind`
+//! instead of matching on message text. The error serialises as an object:
 //!
 //! ```json
 //! { "kind": "backend", "message": "..." }
 //! ```
 //!
-//! `kind` стабилен и предназначен для программной обработки, `message` —
-//! для показа пользователю и логов.
+//! `kind` is stable and meant for programmatic handling; `message` is for the
+//! user and the logs.
 
 use serde::Serialize;
 
-/// Категория ошибки. Сериализуется в snake_case строку.
+/// Error category. Serialises to a snake_case string.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
-    /// Бэкенд не запущен, упал или недоступен.
+    /// The backend is not running, has crashed, or is unreachable.
     Backend,
-    /// Ошибка конфигурации: неизвестная сеть, битый config.json.
+    /// Configuration problem: unknown network, malformed config.json.
     Config,
-    /// Файловые операции: чтение, запись, создание каталогов.
+    /// File operations: reading, writing, creating directories.
     Io,
-    /// Сбой при обращении к внешнему сервису (CoinGecko, RPC-провайдер).
+    /// Failure talking to an external service (CoinGecko, RPC provider).
     Network,
-    /// Внутренние инварианты: отравленный мьютекс, некорректный индекс.
+    /// Broken internal invariants: poisoned mutex, out-of-range index.
     Internal,
 }
 
-/// Ошибка команды Tauri.
+/// Error returned by a Tauri command.
 ///
-/// Сериализуется как объект с полями `kind` и `message`, поэтому фронтенд
-/// получает структурированное значение, а не строку.
+/// Serialises as an object with `kind` and `message` fields, so the frontend
+/// receives a structured value rather than a string.
 #[derive(Debug, Serialize)]
 pub struct AppError {
     pub kind: ErrorKind,
@@ -69,8 +66,8 @@ impl AppError {
         Self::new(ErrorKind::Internal, message)
     }
 
-    /// Ошибка отравленного мьютекса. Единый текст, чтобы не повторять
-    /// строку в каждом `map_err`.
+    /// Error for a poisoned mutex. One shared message so the string is not
+    /// repeated in every `map_err`.
     pub fn poisoned() -> Self {
         Self::internal("internal lock poisoned")
     }

@@ -1,42 +1,44 @@
 import { statusState, setSeedSaved } from './statusStore.svelte';
 
 /**
- * Возвращает отображаемое имя (alias или displayName).
+ * Returns the display name (alias, falling back to "User").
  */
 export function getAlias(): string {
   return statusState.alias || 'User';
 }
 
 /**
- * Проверяет, сохранена ли seed-фраза.
+ * Reports whether the seed phrase has been saved.
  */
 export function isSeedSaved(): boolean {
   return statusState.isSeedSaved;
 }
 
 /**
- * Сохраняет флаг seed-фразы (и в localStorage).
+ * Stores the seed-phrase flag, both in state and in `localStorage`.
+ *
+ * @param saved - Whether the user confirmed saving the seed phrase.
  */
 export function saveSeedStatus(saved: boolean) {
   setSeedSaved(saved);
 }
 
 /**
- * Возвращает публичный ключ профиля.
+ * Returns the profile public key, or an empty string before login.
  */
 export function getPublicKey(): string {
   return statusState.publicKey || '';
 }
 
 /**
- * Возвращает Profile ID (key-uid).
+ * Returns the Profile ID (`key-uid`), or an empty string before login.
  */
 export function getProfileId(): string {
   return statusState.accountKeyUid || '';
 }
 
 /**
- * Возвращает список аккаунтов.
+ * Returns the account list known to the backend.
  */
 export function getAccounts(): any[] {
   return statusState.accounts || [];

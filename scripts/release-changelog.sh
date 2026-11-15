@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# release-changelog.sh — шаг 0 релиза: генерирует CHANGELOG.md из git-истории.
+# release-changelog.sh — release step 0: generates CHANGELOG.md from git history.
 #
-# Использование (из stauri-app/):
+# Usage (from stauri-app/):
 #   ./scripts/release-changelog.sh 0.4.0-beta
 #
-# Что делает:
-#   - берёт коммиты от последнего тега v* (или от начала истории, если тегов нет);
-#   - группирует по типу Conventional Commits (feat, fix, refactor, …);
-#   - переписывает CHANGELOG.md, добавляя секцию новой версии сверху;
-#   - показывает diff.
+# Steps:
+#   - take commits since the last v* tag (or all of history when there is none);
+#   - group them by Conventional Commits type (feat, fix, refactor, …);
+#   - rewrite CHANGELOG.md, prepending the new version section;
+#   - print the diff.
 #
-# Что НЕ делает: не коммитит и не ставит тег. Файл проверяете вы, затем коммит.
+# Does not commit and does not tag: the file is reviewed, then committed
+# separately.
 
 set -euo pipefail
 
@@ -30,7 +31,7 @@ cd "$ROOT"
 CHANGELOG="CHANGELOG.md"
 TODAY="$(date +%Y-%m-%d)"
 
-# Диапазон: от последнего тега версии до HEAD. Тегов нет — вся история.
+# Range: from the last version tag to HEAD. With no tags, the whole history.
 LAST_TAG="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)"
 if [[ -n "$LAST_TAG" ]]; then
   RANGE="$LAST_TAG..HEAD"
@@ -40,14 +41,14 @@ else
   echo "  тегов v* нет — беру всю историю"
 fi
 
-# Формат: хеш, тема. Тело не нужно: группируем по теме.
+# Format: hash, subject. The body is not needed, grouping goes by subject.
 COMMITS="$(git log --no-merges --format='%h%x09%s' "$RANGE")"
 if [[ -z "$COMMITS" ]]; then
   echo "ERROR: нет коммитов в диапазоне $RANGE — нечего описывать." >&2
   exit 1
 fi
 
-# Python разбирает Conventional Commits и пишет секцию в временный файл.
+# Python parses Conventional Commits and writes the section to a temp file.
 SECTION_FILE="$(mktemp)"
 trap 'rm -f "$SECTION_FILE" "$COMMITS_FILE"' EXIT
 
@@ -59,7 +60,7 @@ import re, sys
 version, today, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = [l for l in open(sys.argv[4], encoding="utf-8").read().splitlines() if l.strip()]
 
-# Порядок секций в changelog и заголовки.
+# Section order and headings in the changelog.
 GROUPS = [
     ("feat", "Новое"),
     ("fix", "Исправления"),
@@ -111,7 +112,7 @@ if other:
 open(out_path, "w", encoding="utf-8").write("\n".join(out))
 PY
 
-# Заголовок файла + новая секция + старое содержимое (без своего заголовка).
+# File header + new section + old contents (without its own header).
 HEADER="# Changelog
 
 Все заметные изменения Stauri. Секции генерирует \`scripts/release-changelog.sh\`
@@ -124,7 +125,7 @@ else
   OLD=""
 fi
 
-# Если версия уже есть в файле — не дублируем секцию.
+# If the version is already in the file, the section is not duplicated.
 if [[ -f "$CHANGELOG" ]] && grep -q "^## \[$VERSION\]" "$CHANGELOG"; then
   echo "ERROR: версия $VERSION уже есть в $CHANGELOG. Удалите секцию или выберите другую версию." >&2
   exit 1

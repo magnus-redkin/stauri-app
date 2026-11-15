@@ -1,32 +1,18 @@
 <script lang="ts">
   /**
-   * Обёртка содержимого панели: гарантирует прокрутку в самой вёрстке.
+   * Wrapper for panel content that guarantees scrolling at the layout level.
    *
-   * ## Зачем отдельный компонент
+   * Scrolling is a property of the layout, not of each page, so it is defined once at the
+   * panel boundary and holds for every section, including ones added later. Sections that
+   * scroll on their own (chat, wallet) fit the panel height exactly and produce no outer
+   * scroll; a section taller than the panel and without its own scrolling overflows into
+   * this wrapper's `scrollHeight`, and the wrapper scrolls for it.
    *
-   * Прокрутка — свойство раскладки, а не страницы. Раньше её приходилось
-   * проверять в каждом разделе по отдельности, и это уже дважды приводило к
-   * одному и тому же отказу: раздел не помещался в панель, а прокрутки не
-   * было вовсе. Здесь прокрутка стоит один раз, на границе панели, и
-   * действует для любого раздела — включая те, что появятся позже.
-   *
-   * ## Почему `h-full`, а не `min-h-full`
-   *
-   * Разделы сами задают корню `h-full` и раскладывают внутри шапку и
-   * прокручиваемую часть (`flex flex-col` + `flex-1 min-h-0`). Процентная
-   * высота считается только от определённой высоты родителя: у обёртки она
-   * определена (`h-full` от панели), а у `min-h-full` — нет, и тогда
-   * `flex-1` внутри раздела не получает границы, ниже которой сжимается,
-   * то есть прокрутка внутри снова ломается.
-   *
-   * ## Как это сочетается с внутренней прокруткой
-   *
-   * Если раздел умеет прокручиваться сам (чат, кошелёк), его содержимое
-   * ровно по высоте панели — внешняя прокрутка не появляется и не мешает
-   * держать шапку и поле ввода на месте. Если раздел длиннее панели и
-   * собственной прокрутки у него нет, лишнее выходит за его корень
-   * (`overflow: visible`), попадает в `scrollHeight` этой обёртки — и
-   * прокрутка работает. Это и есть страховка на случай нового раздела.
+   * `h-full` rather than `min-h-full` is deliberate: sections set `h-full` on their root and
+   * lay out a header plus a scrollable part (`flex flex-col` with `flex-1 min-h-0`).
+   * Percentage heights resolve only against a parent with a definite height, which `h-full`
+   * provides and `min-h-full` does not — with the latter, `flex-1` inside the section has no
+   * boundary to shrink below and scrolling breaks again.
    */
   import type { Snippet } from 'svelte';
 

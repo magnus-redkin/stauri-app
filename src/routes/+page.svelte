@@ -4,7 +4,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { formatError } from '$lib/utils/errors';
 
-  // Сторы
+  // Stores
   import {
     statusState,
     resetState,
@@ -79,8 +79,7 @@
   import MobileShell from "$lib/sections/layout/MobileShell.svelte";
 
 
-  // История раздела пока пустая: стрелки появятся, когда разделы начнут её вести.
-  // Карандаш в мобильной шапке: Profile открывает редактирование, Wallet — список аккаунтов.
+  // Sections do not keep a navigation history yet; the arrows appear once they do.
   let mobileEditProfile = $state(false);
   let mobileWalletAccounts = $state(false);
 
@@ -94,11 +93,10 @@
     return SECTION_TITLES[id] ?? '';
   }
 
-  // Навигация
   let activeSection = $state('home');
-  // Мобильный layout: одна панель, нижнее меню. Порог — ширина окна (≤ 768px).
+  // Mobile layout uses a single panel and a bottom bar; the breakpoint is window width (≤ 768px).
   let isMobile = $state(false);
-  // Какая панель раздела видна в мобильном layout: LP или RP.
+  // Which section panel the mobile layout shows: left or right.
   $effect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
     const update = () => (isMobile = mq.matches);
@@ -109,13 +107,13 @@
   let showRecovery = $state(false);
   let showCreateSeed = $state(false);
 
-  // Выбор аккаунта для логина
+  // Account selected for login.
   let selectedAccountKeyUid = $state('');
   let selectedNetwork = $state('mainnet');
 
-  const hasProfiles = $derived(statusState.accounts.length > 0); // <-- Добавить
+  const hasProfiles = $derived(statusState.accounts.length > 0);
 
-  // Ctrl+Q
+  // Ctrl+Q closes the window.
   $effect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'q') {
@@ -128,30 +126,27 @@
   });
 
   /**
-   * Горячие клавиши: масштаб и навигация.
+   * Global keyboard shortcuts: font scaling and navigation.
    *
-   * ## Почему здесь `capture: true`
+   * @remarks
+   * The listener runs in the capture phase. The webview surface consumes some
+   * combinations before the bubbling phase: without capture `Ctrl+"+"` is sometimes
+   * taken by WebKit's built-in zoom, which scales the whole page including scroll
+   * instead of only the text. Capture also keeps an overlaid form (such as search)
+   * from swallowing navigation, because the event is seen first.
    *
-   * Поверхность webview перехватывает часть сочетаний раньше bubbling-фазы:
-   * без capture `Ctrl+«+»` иногда достаётся встроенному зуму WebKit, и тогда
-   * масштабируется вся страница вместе с прокруткой, а не только шрифт.
-   * К тому же наложение формы (например, поиска) не должно «съедать»
-   * навигацию — capture гарантирует, что мы увидим событие первыми.
-   *
-   * ## Почему не `zoom_hotkeys_enabled` Tauri
-   *
-   * Встроенный зум масштабирует весь viewport, включая размеры полей в
-   * `rem` и `px` одинаково. Нам нужен именно размер текста, который в
-   * Настройках уже настраивается ползунком: два разных механизма дали бы
-   * несогласованное состояние. Поэтому масштаб один — `uiStore`.
+   * Tauri's `zoom_hotkeys_enabled` is deliberately not used: built-in zoom scales the
+   * whole viewport, including `rem` and `px` field sizes, while what is needed is text
+   * size, which Settings already controls with a slider. Two mechanisms would
+   * disagree, so `uiStore` is the only source of scale.
    */
   $effect(() => {
     const handleShortcut = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
 
-      // Ctrl+«+» / Ctrl+«-» / Ctrl+0. Клавиши сравниваем по `code` и по
-      // `key`: на разных раскладках «+» приходит как `=` (без Shift),
-      // `+`, `Equal` или `NumpadAdd` — проверяем все варианты.
+      // Ctrl+"+", Ctrl+"-", Ctrl+0. Keys are matched by both `code` and `key`:
+      // layouts differ, and "+" arrives as `=` (without Shift), `+`, `Equal` or
+      // `NumpadAdd`, so every spelling is checked.
       if (mod && !e.altKey) {
         const key = e.key;
         const code = e.code;
@@ -172,7 +167,7 @@
         }
       }
 
-      // Alt+← / Alt+→ — навигация назад/вперёд.
+      // Alt+Left / Alt+Right navigate back and forward.
       if (e.altKey && !mod && !e.shiftKey) {
         if (e.key === 'ArrowLeft') {
           e.preventDefault();
@@ -191,19 +186,22 @@
   });
 
   /**
-   * Применение снимка истории.
+   * Applies a navigation history snapshot.
    *
-   * Функция регистрируется до первого `record`, чтобы шаг назад сразу после
-   * старта не оказался пустым. Все поля выставляем явно: снимок полный, и
-   * частичное восстановление оставило бы, например, открытое сообщество при
-   * переходе в другой раздел.
+   * @param snap - Snapshot to restore.
+   *
+   * @remarks
+   * Registered before the first `record` so that stepping back right after startup
+   * is not empty. Every field is assigned explicitly: the snapshot is complete, and a
+   * partial restore could leave, for example, a community open while switching to
+   * another section.
    */
   registerNavigationApplier((snap) => {
     showRecovery = snap.showRecovery;
     showCreateSeed = snap.showCreateSeed;
     dappsState.active = (snap.dappView as typeof dappsState.active) ?? null;
 
-    // Сообщество ищем в каталоге: восстанавливать надо объект, а не id.
+    // The community is looked up in the catalogue; the object is restored, not the id.
     communitiesState.selected = snap.communityId
       ? communitiesState.entries.find((e) => e.id === snap.communityId) ?? null
       : null;
@@ -213,14 +211,15 @@
   });
 
   /**
-   * Запись истории.
+   * Records navigation history.
    *
-   * Следим за ключевыми состояниями, а не вызываем `record` в каждом месте
-   * навигации: забыть вызов легко, а эффект видит любое изменение — и по
-   * клику, и по ссылке, и по горячей клавише.
+   * @remarks
+   * Key states are watched instead of calling `record` at every navigation site:
+   * a call is easy to forget, while the effect sees every change, whether it came
+   * from a click, a link or a shortcut.
    *
-   * `untrack` нужен, потому что сам `record` пишет `navState`, а чтение
-   * `canBack`/`canForward` в шаблоне не должно замыкать эффект.
+   * `untrack` is needed because `record` itself writes `navState`, and reading
+   * `canBack`/`canForward` in the template must not close the effect back on itself.
    */
   $effect(() => {
     const section = activeSection;
@@ -230,8 +229,8 @@
     const recovery = showRecovery;
     const createSeed = showCreateSeed;
 
-    // Пишем только когда пользователь вошёл: экран входа — не место, куда
-    // стоит возвращаться горячей клавишей.
+    // Records only while signed in: the login screen is not a place a shortcut should
+    // return to.
     if (!statusState.isLoggedIn) return;
 
     untrack(() => {
@@ -246,38 +245,42 @@
     });
   });
 
-  // Загрузка чатов при входе в раздел.
-  //
-  // Раньше список грузился только по сигналу `messages.new`, то есть при
-  // первом открытии раздела чатов было пусто: сигналов ещё не было, а
-  // другого повода загрузить не существовало. В логе это выглядело как
-  // «после startMessenger — тишина», хотя пользователь уже был в чате.
-  //
-  // `untrack` вокруг вызова обязателен: `loadChats` пишет `chatsState`
-  // (`loaded`, `isLoading`), и без него эффект перезапускал бы сам себя.
+  /**
+   * Loads the chat list when entering the Chat section.
+   *
+   * @remarks
+   * `untrack` around the call is required: `loadChats` writes `chatsState`
+   * (`loaded`, `isLoading`), so without it the effect would restart itself.
+   */
   $effect(() => {
     const section = activeSection;
     const loggedIn = statusState.isLoggedIn;
     if (section === 'chat' && loggedIn) {
       untrack(() => {
-        // Вход в раздел открывает справа поиск контактов: иначе остаётся
-        // прошлый экран (Invite, новый канал), и формы поиска не видно.
+        // Entering the section opens contact search on the right; otherwise the
+        // previous screen (invite, new channel) stays, and the search form is out of
+        // sight.
         if (!chatsState.selected) setRightPanel('contacts');
         loadChats();
       });
     }
   });
 
-  // Заявки в контакты и их принятие приходят без сигнала, который читает приложение
-  // (на Android сигналов нет вовсе). Поэтому пока открыт раздел Chat, раз в 10 с
-  // перечитываем контакты, а при изменении числа заявок — список чатов.
-  // Без этого новая заявка видна только после переключения раздела.
+  /**
+   * Polls contacts and chat activity while the Chat section is open.
+   *
+   * @remarks
+   * Contact requests and their acceptance arrive without a signal the app reads (on
+   * Android there are no signals at all), so contacts are reread every 10 s and the
+   * chat list is refreshed when the number of requests changes. Without this a new
+   * request would only appear after switching sections.
+   */
   $effect(() => {
     const section = activeSection;
     const loggedIn = statusState.isLoggedIn;
     if (section !== 'chat' || !loggedIn) return;
-    // Состояние по чату: время последнего сообщения, непрочитанные, активность.
-    // Первый проход только запоминает базу, иначе все чаты сочлись бы новыми.
+    // Per-chat state: last message time, unread count, activity. The first pass only
+    // records the baseline, otherwise every chat would count as new.
     const seen = new Map<string, string>();
     let baseline = false;
     const tick = () => untrack(async () => {
@@ -294,14 +297,14 @@
         }
       }
       baseline = true;
-      // Новый чат (заявка, первое сообщение) в списке ещё не виден, и эффект
-      // сигнала его не перечитает: перечитываем список сами.
+      // A new chat (request, first message) is not visible in the list yet, and the
+      // signal effect will not reread it: the list is reread here.
       const visible = new Set(chatsState.items.map((c) => c.id));
       if (changed.some((id) => !visible.has(id))) await loadChats(true);
       if (changed.length) {
         scenarioLog('reply-sync', 'poll-changed', { count: changed.length, chat: short(changed[0]) });
-        // Тот же путь, что у сигнала messages.new: список чатов и открытая
-        // переписка перечитываются эффектами, которые уже работают.
+        // Same path as the messages.new signal: the chat list and the open
+        // conversation are reread by effects that are already running.
         for (const id of changed) statusState.pendingChatIds.add(id);
         statusState.lastMessageSignal++;
       }
@@ -311,38 +314,42 @@
     return () => clearInterval(id);
   });
 
-  // Реагируем на новые сообщения (через lastMessageSignal).
-  //
-  // `untrack` обязателен: `loadChats` внутри читает и пишет `chatsState`
-  // (`loaded`, `isLoading`), а эффект, который читает изменяемое им же
-  // состояние, перезапускает сам себя. В логе это выглядело как 6 вызовов
-  // подряд с интервалом 5–7 мс вместо одного.
-  //
-  // Зависимости объявлены явно: номер сигнала и активная секция.
+  /**
+   * Reloads the chat list when new messages arrive (`lastMessageSignal`).
+   *
+   * @remarks
+   * `untrack` is required: `loadChats` reads and writes `chatsState` (`loaded`,
+   * `isLoading`), and an effect that reads state it also changes restarts itself.
+   *
+   * Dependencies are declared explicitly: the signal number and the active section.
+   */
   $effect(() => {
     const signal = statusState.lastMessageSignal;
     const section = activeSection;
     if (signal > 0 && section === 'chat') {
       untrack(() => {
- // Перечитываем список только если сообщение пришло в чат, который в нём
-        // виден. Сообщения из снятых с отображения каналов приходят постоянно,
-        // и без этой проверки каждое из них тянуло бы полную загрузку
-        // (wakuext_communities ~1.6 МБ): отсюда перезагрузки раз в ~30 секунд.
+        // Reread the list only if the message arrived in a chat visible in it.
+        // Messages from channels no longer shown arrive constantly, and without this
+        // check each one would trigger a full load (wakuext_communities ~1.6 MB),
+        // which produced reloads roughly every 30 seconds.
         const visible = new Set(chatsState.items.map((c) => c.id));
         const ids = [...statusState.pendingChatIds];
- const touched = ids.some((id) => visible.has(id));
-        // Удаляем только то, что сами проверили: открытая лента читает тот же
- // набор, и полная очистка отняла бы у неё её чат.
+        const touched = ids.some((id) => visible.has(id));
+        // Remove only what was checked here: the open feed reads the same set, and a
+        // full clear would take its chat away from it.
         for (const id of ids) if (visible.has(id)) statusState.pendingChatIds.delete(id);
         if (touched) loadChats(true);
       });
     }
   });
 
-  // Загрузка каталога сообществ при входе в раздел.
-  //
-  // Каталог читается из смарт-контракта и мог не меняться — поэтому
-  // грузится один раз за сессию (`loaded`), без force.
+  /**
+   * Loads the community catalogue when entering the dApps section.
+   *
+   * @remarks
+   * The catalogue is read from a smart contract and may not have changed, so it is
+   * loaded once per session (`loaded`), without force.
+   */
   $effect(() => {
     const section = activeSection;
     const loggedIn = statusState.isLoggedIn;
@@ -351,7 +358,7 @@
     }
   });
 
-  // Сбрасываем CreateSeed при уходе с Profile
+  // Clears the seed creation screen when leaving Profile.
   $effect(() => {
     if (activeSection !== 'profile') {
       showCreateSeed = false;
@@ -359,9 +366,13 @@
   });
 
 
-  // wallet
-  // fetchOrGetCachedWalletBalances читает кэш бэкенда (forceRefresh в status-go
-  // игнорируется), поэтому балансы нужно перечитывать периодически.
+  /**
+   * Keeps wallet balances fresh while the Wallet section is open.
+   *
+   * @remarks
+   * `fetchOrGetCachedWalletBalances` reads the backend cache and ignores
+   * `forceRefresh`, so balances have to be reread periodically.
+   */
   $effect(() => {
     if (statusState.isLoggedIn && activeSection === 'wallet') {
       loadWallet();
@@ -372,13 +383,13 @@
   });
 
   onMount(async () => {
-    // Настройки отображения применяем первыми: иначе интерфейс на мгновение
-    // покажется в размере по умолчанию, хотя пользователь выбрал другой.
+    // Display preferences are applied first, otherwise the interface flashes at the
+    // default size even though the user chose another.
     loadUiPreferences();
 
-    // Подписки на внешние ленты и отметки каналов читаются сразу: они нужны
-    // списку чатов, а не только разделу dApp. Ошибка чтения не должна мешать
-    // подключению — испорченное хранилище остаётся с пустым списком.
+    // External feed subscriptions and channel flags are read right away: the chat
+    // list needs them, not only the dApp section. A read error must not block
+    // connecting; a corrupted store is left with an empty list.
     loadFeeds();
     await connect(undefined);
     if (statusState.accounts.length > 0) {
@@ -390,25 +401,22 @@
     await changeNetwork(network);
     selectedNetwork = network;
 
-    // Смена сети — это другой каталог данных, а значит другой набор профилей.
-    // Ключ, выбранный на предыдущей сети, в новой базе не существует, и вход
-    // с ним падает на чтении `kdfIterations`:
+    // A network switch means a different data directory, and therefore a different
+    // set of profiles. A key selected on the previous network does not exist in the
+    // new database, and signing in with it fails while reading `kdfIterations`:
     //   failed to get account kdf iterations number: sql: no rows in result set
-    // (`GetAccountKDFIterationsNumber` ищет строку по keyUid в accounts.sql).
-    //
-    // Раньше ключ выставлялся только в onMount, поэтому после переключения
-    // оставался от mainnet-профиля — и войти в профиль Sepolia было нельзя.
+    // (`GetAccountKDFIterationsNumber` looks up a row by keyUid in accounts.sql).
     selectedAccountKeyUid = statusState.accounts[0]?.['key-uid'] ?? '';
   }
 
   async function handleLogin(password: string) {
     if (!selectedAccountKeyUid) return;
 
-    // Защита от устаревшего ключа: вход с ключом из другого профиля падает
-    // на чтении `kdfIterations` («sql: no rows in result set»), и текст этой
-    // ошибки ничего не объясняет пользователю. Если такого ключа в текущем
-    // наборе нет — значит, сменилась сеть или данные профиля; берём первый
-    // доступный вместо того, чтобы отдавать в бэкенд заведомо чужой.
+    // Guards against a stale key: signing in with a key from another profile fails
+    // while reading `kdfIterations` ("sql: no rows in result set"), and the message
+    // explains nothing to the user. If the key is missing from the current set, the
+    // network or the profile data changed; the first available key is used instead of
+    // sending a foreign one to the backend.
     const known = statusState.accounts.some(
       (a: any) => a?.['key-uid'] === selectedAccountKeyUid
     );
@@ -431,7 +439,7 @@
   async function handleCreateAccount(password: string) {
     try {
       await createAccount(password);
-      // После создания аккаунт автоматически логинится (через waitForLogin)
+      // After creation the account signs in automatically (through waitForLogin).
       if (statusState.accounts.length > 0) {
         selectedAccountKeyUid = statusState.accounts[0]["key-uid"];
       }
@@ -447,31 +455,34 @@
   }
 
   /**
-   * Клик по иконке в нулевой колонке.
-   *
-   * Два случая ведут себя по-разному, и это важно:
-   *   * переход в другой раздел — обычная навигация, ничего сбрасывать не
-   *     нужно;
-   *   * повторный клик по уже активной вкладке — просьба «верни меня к
-   *     началу». `activeSection` при этом не меняется, поэтому эффекты,
-   *     следящие за ней, не сработают, и сброс делаем явно.
-   *
-   * dApps: возврат к списку примеров. Без этого из открытого каталога
-   * сообществ было не выбраться — оставалась только кнопка «обновить».
+   * Opens profile editing: replaces the list on a narrow screen, sits on the right
+   * on a wide one.
    */
-  /** Открыть редактирование профиля: на узком экране — вместо списка, на широком — справа. */
   function openEditProfile() {
     activeSection = 'profile';
     showCreateSeed = false;
     mobileEditProfile = true;
   }
 
+  /**
+   * Handles a click on an icon in the left rail.
+   *
+   * @param id - Section id.
+   *
+   * @remarks
+   * Two cases behave differently: switching to another section is ordinary
+   * navigation and needs no reset, while a repeated click on the already active tab
+   * means "take me back to the start". `activeSection` does not change in that case,
+   * so effects watching it do not fire and the reset is done explicitly. For dApps
+   * that reset returns to the sample list; without it there was no way out of an
+   * open community catalogue except the refresh button.
+   */
   function handleSectionSelect(id: string) {
-    // Раздел открывается заново с его первого экрана.
+    // A section reopens at its first screen.
     mobileEditProfile = false;
     mobileWalletAccounts = false;
-    // Chat всегда открывается с поиска справа, даже если раздел уже открыт
-    // (иначе остаётся Invite или другая форма). Открытый чат не трогаем.
+    // Chat always opens on search on the right, even if the section is already open
+    // (otherwise an invite or another form stays). An open chat is left untouched.
     if (id === 'chat' && !chatsState.selected) setRightPanel('contacts');
     if (id !== activeSection) return;
     if (id === 'dapps') resetDappsView();
@@ -486,21 +497,20 @@
     resetCommunities();
     resetDapps();
     resetWallet();
-    // Пароль для подписи переводов живёт в памяти сессии — при выходе его
-    // нужно стереть, иначе следующий профиль на этой машине унаследует
-    // чужой пароль в памяти вкладки.
+    // The password for signing transfers lives in session memory and must be erased
+    // on sign-out, otherwise the next profile on this machine inherits the previous
+    // one's password in tab memory.
     resetSend();
-    // Состояние регистрации имени принадлежит профилю: чужое имя в поле и
-    // чужой владелец на экране — это ровно то, что нельзя показывать после
-    // смены аккаунта.
+    // Name registration state belongs to the profile: a foreign name in the field and
+    // a foreign owner on screen must not be shown after an account switch.
     resetEns();
-    // История переходов принадлежит профилю: вернуться в чаты предыдущего
-    // аккаунта нельзя, а переход по чужой истории показал бы пустые экраны.
+    // Navigation history belongs to the profile: returning to the previous account's
+    // chats is impossible, and following a foreign history would show empty screens.
     resetNavigation();
-    // Seed-фраза лежит в памяти Rust, и её стирал только `onDestroy` экрана
-    // создания seed. При выходе из аккаунта фраза оставалась в памяти до
-    // закрытия приложения — то есть следующий профиль на этой машине мог её
-    // получить, а при XSS она была бы доступна через `seed_word`.
+    // The seed phrase lives in Rust memory and used to be cleared only by the seed
+    // creation screen's `onDestroy`. On sign-out it stayed there until the app closed,
+    // so the next profile on this machine could get it, and under XSS it was reachable
+    // through `seed_word`.
     invoke('clear_seed').catch(() => {});
     setPendingRequestsCount(0);
     showCreateSeed = false;
@@ -627,21 +637,21 @@ onSave={() => {
     {/snippet}
 
 <div class="min-h-screen bg-background">
-  <!-- Плашка Testnet -->
+  <!-- Testnet banner -->
   {#if statusState.isTestnet}
     <div class="bg-orange-500 text-white text-center py-2 px-4 font-semibold text-sm">
       ⚠️ {statusState.networkName.toUpperCase()} TESTNET MODE — All balances and transactions are on testnets.
     </div>
   {/if}
 
-  <!-- Спиннер -->
+  <!-- Spinner -->
   {#if connectionState.isConnecting}
     <div class="flex flex-col items-center justify-center min-h-screen gap-4">
       <div class="w-10 h-10 border-4 border-muted border-t-primary rounded-full animate-spin"></div>
       <h2 class="text-2xl font-semibold text-foreground">Connecting...</h2>
     </div>
 
-  <!-- Экран входа -->
+  <!-- Login screen -->
   {:else if !statusState.isLoggedIn}
     {#if showRecovery}
       <RecoveryScreen
@@ -663,7 +673,7 @@ onSave={() => {
       />
     {/if}
 
-  <!-- Основной интерфейс -->
+  <!-- Main interface -->
   {:else}
     {#if isMobile}
       <MobileShell
@@ -680,13 +690,13 @@ onSave={() => {
 
       <PaneGroup direction="horizontal" class="h-full w-full">
         <!--
-   Панели прокручиваются сами, а не каждый раздел по отдельности.
+          Panels scroll themselves, not each section separately.
 
-   `SectionPane` даёт обеим панелям определённую высоту и внешнюю
-          прокрутку. Разделы, у которых есть своя прокрутка (список чатов,
-   кошелёк), занимают ровно высоту панели — внешняя не появляется.
-   Раздел без своей прокрутки, оказавшийся длиннее панели, получает
-   её здесь, и проверять это в каждом новом разделе не нужно.
+          `SectionPane` gives both panels a definite height and outer scrolling.
+          Sections that have their own scrolling (chat list, wallet) take exactly the
+          panel height, so the outer one never appears. A section without its own
+          scrolling that grows longer than the panel gets it here, and no new section
+          has to check this.
         -->
         <Pane defaultSize={30} minSize={20} class="h-full overflow-hidden border-r border-border">
    {@render leftPane()}
@@ -694,7 +704,6 @@ onSave={() => {
 
         <PaneResizer class="w-1 bg-border hover:bg-primary transition-colors cursor-col-resize" />
 
-        <!-- MAIN PANEL -->
         <Pane defaultSize={70} class="h-full overflow-hidden bg-card">
    {@render rightPane()}
         </Pane>

@@ -1,50 +1,47 @@
 /**
- * Группировка токенов для экрана «Отправить».
+ * Groups tokens for the Send screen.
  *
- * ## Зачем не показывать всё
+ * `walletStore` deliberately keeps zero balances and tokens with `hasError` (no
+ * RPC reply): in the asset list they are useful, since they show that a token
+ * exists but its balance was not fetched. On the Send screen that list gets in
+ * the way — 17 700 tokens of which two can be sent — so the same set is split
+ * into what can be sent and what cannot, with a reason.
  *
- * `walletStore` намеренно хранит и нулевые балансы, и токены с `hasError`
- * (RPC не ответил): в списке активов они полезны — видно, что токен есть, но
- * баланс не получен. На экране отправки такой список мешает: 17 700
- * токенов, из которых отправить можно два. Человек ищет глазами по списку,
- * в котором почти всё недоступно.
- *
- * Поэтому здесь тот же набор делится на две группы: с чем можно отправлять
- * и что недоступно с причиной. «Недоступно» не скрываем совсем — иначе
- * пропадёт токен, на который только что пришли средства, и будет непонятно,
- * почему его нет.
+ * An unavailable token is never hidden outright: a token that just received
+ * funds would otherwise disappear, with no way to tell why.
  */
 
 import { AmountError, parseAmount, type AmountErrorCode } from './amount';
 import type { WalletToken } from '$lib/stores/walletStore.svelte';
 
-/** Почему токен нельзя отправить. Пустая строка — можно. */
+/** Why a token cannot be sent. An empty string means it can. */
 export type TokenBlockReason = 'no-balance' | 'rpc-error';
 
 /**
- * Коды отказа при проверке суммы.
+ * Refusal codes for an amount check.
  *
- * Коды разбора (`AmountErrorCode`) плюс два случая, которые разбор сам не
- * видит: ноль и превышение баланса — их можно определить только зная
- * баланс токена.
+ * The parse codes (`AmountErrorCode`) plus two cases the parser cannot see:
+ * zero and an overdraft, both of which need the token's balance.
  */
 export type AmountCheckError = AmountErrorCode | 'amount-zero' | 'amount-insufficient';
 
 export interface SendableToken {
   token: WalletToken;
-  /** Ключ внутри группы: `chainId:address`, как и в остальном коде. */
+  /** Key within the group: `chainId:address`, as elsewhere in the code. */
   key: string;
-  /** Причина недоступности; пусто — можно отправлять. */
+  /** Why the token is unavailable; empty when it can be sent. */
   blocked: TokenBlockReason | '';
 }
 
 /**
- * Делит токены на доступные и недоступные.
+ * Splits tokens into sendable and unsendable ones.
  *
- * Порядок внутри групп совпадает с порядком в списке активов (ненулевые
- * сначала, затем по символу), менять его здесь не нужно: сортировку уже
- * сделал `walletStore`, а повторная сортировка по алфавиту перемешала бы
- * сети.
+ * Order within each group matches the asset list (non-zero first, then by
+ * symbol): `walletStore` already sorted it, and re-sorting by letter here would
+ * interleave the networks.
+ *
+ * @param tokens - Tokens as held by `walletStore`.
+ * @returns Both lists, each keeping the input order.
  */
 export function groupTokensForSending(tokens: WalletToken[]): {
   available: SendableToken[];
@@ -67,10 +64,12 @@ export function groupTokensForSending(tokens: WalletToken[]): {
 }
 
 /**
- * Причина, по которой токен не годится для отправки.
+ * Gives the reason a token is not usable for sending.
  *
- * `hasError` стоит первым: если RPC не ответил, про баланс ничего не
- * известно, и сказать «нет средств» было бы неправдой.
+ * @param token - The token to check.
+ * @returns The reason, or an empty string when the token can be sent.
+ * @remarks `hasError` is checked first: with no RPC reply the balance is
+ * unknown, and "no funds" would be a false statement.
  */
 export function blockReasonOf(token: WalletToken): TokenBlockReason | '' {
   if (token.hasError) return 'rpc-error';
@@ -79,7 +78,7 @@ export function blockReasonOf(token: WalletToken): TokenBlockReason | '' {
   try {
     balance = BigInt(token.balance || '0');
   } catch {
-    // Испорченное значение баланса — тоже недоступность, а не ноль.
+    // A malformed balance is also unavailability, not zero.
     return 'rpc-error';
   }
 
@@ -87,11 +86,16 @@ export function blockReasonOf(token: WalletToken): TokenBlockReason | '' {
 }
 
 /**
- * Проверяет, что сумма не превышает баланс токена.
+ * Checks an entered amount against the token's balance.
  *
- * Проверка на клиенте, до обращения к сети: человек должен увидеть
- * «недостаточно средств» сразу, а не ждать ответа RPC. Это не заменяет
- * проверку бэкенда — только избавляет от лишнего шага.
+ * Runs on the client before the network is touched, so "insufficient funds"
+ * appears immediately instead of after an RPC round trip.
+ *
+ * @param raw - The raw string from the amount field.
+ * @param token - The token being sent.
+ * @returns `{ ok: true, amount }` with the amount in the smallest unit, or
+ * `{ ok: false, error }` with a code the UI translates.
+ * @remarks This does not replace the backend check; it only saves a round trip.
  */
 export function checkAmountAgainstBalance(
   raw: string,
@@ -101,8 +105,8 @@ export function checkAmountAgainstBalance(
   try {
     amount = parseAmount(raw, token.decimals);
   } catch (e) {
-    // Наружу — код: интерфейс переводит его на язык пользователя. Английский
-    // текст в `message` остаётся для логов.
+    // A code goes out — the UI translates it into the user's language. The
+    // English text in `message` stays for the logs.
     return {
       ok: false,
       error: e instanceof AmountError ? e.code : 'amount-invalid',

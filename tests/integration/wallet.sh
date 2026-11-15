@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# wallet.sh — перевод между двумя нодами на локальной цепи (anvil).
+# wallet.sh — a transfer between two nodes on a local chain (anvil).
 #
 #   ./tests/integration/wallet.sh
 #
-# Почему anvil, а не тестнет: деньги на локальной цепи бесплатные, блоки
-# мгновенные, поведение детерминировано. Нода думает, что это Sepolia
-# (`--chain-id 11155111`), но RPC-провайдер подменён на anvil, поэтому
-# реальных средств тест не касается.
+# Why anvil instead of a testnet: money on a local chain is free, blocks are
+# instant and behaviour is deterministic. The node believes it is on Sepolia
+# (`--chain-id 11155111`), but the RPC provider is swapped for anvil, so the test
+# never touches real funds.
 #
-# Проверяет:
-#   1. Логин двух профилей и запуск кошелька в обеих нодах.
-#   2. Провайдер сети указывает на anvil; адрес A пополнен.
-#   3. Перевод A → B: buildTransaction → signMessage → sendTransactionWithSignature.
-#   4. Блок с переводом есть в цепи, сумма пришла на адрес B.
-#   5. Нода B показывает новый баланс (с кэшем: сам не обновляется,
-#      нужен restartWalletReloadTimer и опрос).
+# Checks:
+#   1. Both profiles log in and the wallet starts in both nodes.
+#   2. The network provider points at anvil; address A is funded.
+#   3. Transfer A → B: buildTransaction → signMessage → sendTransactionWithSignature.
+#   4. The block carrying the transfer is in the chain and the amount reached B.
+#   5. Node B reports the new balance (from cache: it does not refresh by itself,
+#      restartWalletReloadTimer and polling are required).
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 ANVIL="${ANVIL:-$HOME/.foundry/bin/anvil}"
 CAST="${CAST:-$HOME/.foundry/bin/cast}"
 ANVIL_PORT="${ANVIL_PORT:-8545}"
-# Sepolia (chain-id 11155111): для mainnet нода в этой сборке ходит только в
-# свои встроенные провайдеры (Infura/Grove) и не использует заданный нами URL,
-# поэтому buildTransaction там падает с 401. Провайдер указывает на anvil —
-# реальная сеть не используется, средства не тратятся.
+# Sepolia (chain-id 11155111): for mainnet this build talks only to its built-in
+# providers (Infura/Grove) and ignores a custom URL, so buildTransaction fails
+# there with 401. The provider points at anvil, so no real network is used and no
+# funds are spent.
 CHAIN_ID="${CHAIN_ID:-11155111}"
 AMOUNT_WEI=100000000000000000   # 0.1 ETH
 
@@ -36,7 +36,7 @@ B_PORT=$((BASE_PORT + 1))
 RPC="http://127.0.0.1:$ANVIL_PORT"
 
 step "1. Локальная цепь (anvil, chain-id $CHAIN_ID)"
-# Функции объявляем до первого использования: bash читает файл сверху вниз.
+# Functions are declared before first use: bash reads the file top to bottom.
 cast_ready() { [[ "$("$CAST" chain-id --rpc-url "$RPC" 2>/dev/null)" == "$CHAIN_ID" ]]; }
 "$ANVIL" --port "$ANVIL_PORT" --chain-id "$CHAIN_ID" >"$WORK/anvil.log" 2>&1 &
 PIDS+=($!)
@@ -53,7 +53,7 @@ B_ADDR="$(first_address "$B_PORT")"
 [[ -n "$A_ADDR" && -n "$B_ADDR" ]] || fail "нет кошельковых адресов у профилей"
 ok "A=$A_ADDR  B=$B_ADDR"
 
-# Провайдер: `type: "user"` — единственный вариант, который не требует прокси Stauri.
+# Provider: `type: "user"` is the only kind that needs no Stauri proxy.
 provider_params() {
   python3 -c '
 import json, sys
@@ -68,7 +68,8 @@ step "3. Провайдер сети → anvil, пополнение A"
 for p in "$A_PORT" "$B_PORT"; do
   call "$p" networks_setChainUserRpcProviders "$(provider_params "$CHAIN_ID" "$RPC")" >/dev/null \
     || fail "провайдер не задан для порта $p"
-  # Сеть уже активна по умолчанию; если нет — включаем (ошибка «уже лимит» не важна).
+  # The network is already active by default; enable it if not (the "already
+  # active" error does not matter).
   call "$p" networks_setChainActive "[$CHAIN_ID, true]" >/dev/null 2>&1 || true
 done
 "$CAST" rpc --rpc-url "$RPC" anvil_setBalance "$A_ADDR" 0x56bc75e2d63100000 >/dev/null \
@@ -95,8 +96,9 @@ SIG="$(call "$A_PORT" wallet_signMessage "[\"$MSG\", \"$A_ADDR\", \"$PASSWORD\"]
 [[ -n "$SIG" ]] || fail "подпись пустая"
 ok "подпись получена (пароль проверен нодой)"
 
-# Подпись возвращается с `0x`, а sendTransactionWithSignature разбирает её
-# через hex.DecodeString — префикс надо снять (см. src-tauri/src/transfer.rs).
+# The signature comes back with `0x`, but sendTransactionWithSignature parses it
+# with hex.DecodeString, so the prefix must be stripped (see
+# src-tauri/src/transfer.rs).
 send_params=$(python3 -c '
 import json, sys
 print(json.dumps([int(sys.argv[1]), "WalletTransfer", sys.argv[2], sys.argv[3]]))' \
@@ -107,8 +109,8 @@ TX_HASH="$(call "$A_PORT" wallet_sendTransactionWithSignature "$send_params" \
 ok "перевод отправлен: ${TX_HASH:0:20}…"
 
 step "5. Проверка в цепи"
-# `cast receipt --json` отдаёт status как "0x1"; wait_until не печатает вывод,
-# поэтому сравнение живёт внутри проверки, а не в конвейере.
+# `cast receipt --json` reports status as "0x1"; wait_until discards output, so
+# the comparison happens inside the check rather than in a pipeline.
 tx_confirmed() {
   local status
   status="$("$CAST" receipt "$1" --rpc-url "$RPC" --json 2>/dev/null \
@@ -123,12 +125,13 @@ wait_until 15 tx_confirmed "$TX_HASH" || fail "транзакция не под�
 ok "транзакция подтверждена (status=1)"
 
 step "6. Баланс в ноде B (информационно)"
-# Кэш балансов сам не обновляется: `forceRefresh` в status-go игнорируется,
-# работает только restartWalletReloadTimer + повторный опрос (см. wallet.ts).
-# На локальной цепи кэш может остаться пустым: нода наполняет его своим
-# встроенным провайдером сети, а не тем, что мы задали, и `hasError` в ответе
-# говорит ровно об этом. Поэтому шаг не валит тест — перевод уже подтверждён
-# в самой цепи на шаге 5, а здесь мы только показываем, что видит нода.
+# The balance cache does not refresh by itself: `forceRefresh` is ignored by
+# status-go, and only restartWalletReloadTimer plus a re-query works (see
+# wallet.ts). On a local chain the cache may stay empty — the node fills it from
+# its own built-in network provider, not the one set here, and `hasError` in the
+# response reports exactly that. The step therefore does not fail the test: the
+# transfer is already confirmed on-chain in step 5, and this only shows what the
+# node sees.
 native_balance() {
   python3 -c 'import json,sys;print(json.dumps([[sys.argv[1]], True]))' "$B_ADDR" >"$WORK/bal.json"
   call "$B_PORT" wallet_fetchOrGetCachedWalletBalances "$(cat "$WORK/bal.json")" 2>/dev/null \

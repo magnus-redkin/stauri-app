@@ -1,19 +1,21 @@
 /**
- * Разбор ошибок, приходящих из Rust-команд Tauri.
+ * Normalizes errors coming back from Tauri commands.
  *
- * Команды возвращают `AppError` (см. src-tauri/src/error.rs), который
- * сериализуется объектом:
+ * Commands return `AppError` (see src-tauri/src/error.rs), serialized as an
+ * object:
  *
  *   { "kind": "backend", "message": "backend is not running" }
  *
- * Раньше на фронтенде было `e?.message || e`: для объекта без поля `message`
- * это давало `"[object Object]"` в UI. Здесь — единая точка разбора.
+ * This is the single place that turns such a payload, a plain `Error`, a
+ * string, or anything else into display text, so no call site falls back to
+ * `e?.message || e` and shows `[object Object]` for an object without a
+ * `message` field.
  */
 
-/** Категория ошибки. Совпадает с `ErrorKind` в Rust. */
+/** Error category. Mirrors `ErrorKind` on the Rust side. */
 export type ErrorKind = 'backend' | 'config' | 'io' | 'network' | 'internal';
 
-/** Ошибка команды Tauri после сериализации. */
+/** A Tauri command error after serialization. */
 export interface AppErrorPayload {
   kind: ErrorKind;
   message: string;
@@ -30,10 +32,14 @@ function isAppError(value: unknown): value is AppErrorPayload {
 }
 
 /**
- * Человекочитаемый текст ошибки.
+ * Extracts human-readable text from any thrown value.
  *
- * Для `AppError` берётся `message`; для `Error` — `message`; иначе
- * безопасное `String()`. Никогда не возвращает `[object Object]`.
+ * An `AppError` contributes its `message`, an `Error` its `message`, and
+ * anything else goes through `String()`.
+ *
+ * @param e - Whatever was caught.
+ * @param fallback - Text returned when nothing usable is found.
+ * @returns Display text that is never `[object Object]`.
  */
 export function formatError(e: unknown, fallback = 'Произошла неизвестная ошибка'): string {
   if (isAppError(e)) {
@@ -49,16 +55,25 @@ export function formatError(e: unknown, fallback = 'Произошла неиз�
 }
 
 /**
- * Категория ошибки, если удалось определить.
+ * Returns the error category when one can be determined.
  *
- * Нужна, когда поведение зависит от причины: например, «бэкенд не запущен»
- * обрабатывается иначе, чем «сеть недоступна».
+ * Needed where behavior depends on the cause: "backend is not running" is
+ * handled differently from "network unreachable".
+ *
+ * @param e - Whatever was caught.
+ * @returns The category, or `null` for a value that is not an `AppError`.
  */
 export function errorKind(e: unknown): ErrorKind | null {
   return isAppError(e) ? e.kind : null;
 }
 
-/** Короткая метка для логов: `[backend]` или пусто. */
+/**
+ * Builds a short log tag such as `[backend]`.
+ *
+ * @param e - Whatever was caught.
+ * @returns The tag with a trailing space, or an empty string when the category
+ * is unknown.
+ */
 export function errorTag(e: unknown): string {
   const kind = errorKind(e);
   return kind ? `[${kind}] ` : '';

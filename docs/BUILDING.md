@@ -2,9 +2,8 @@
 
 Документ описывает сборку `status-backend` (десктоп), `libsds.so`, `libstatus.so`
 (Android) и самого Stauri. Состояние на 2026-11-11: десктоп собирается и
-запускается; Android собирается, вход на телефоне работает, чаты и кошелёк в работе
-(см. ветку в `TODO.md`); Windows не собран.
-Открытые задачи — в [`TODO.md`](TODO.md), план — в [`PLAN.md`](PLAN.md).
+запускается; Android собирается, вход на телефоне работает, чаты и кошелёк в работе;
+Windows не собран.
 
 ## Пререквизиты
 
@@ -81,6 +80,36 @@ cd ~/ETH/stauri/stauri-app
 pnpm install
 pnpm tauri dev
 ```
+
+### Чистый профиль при проверке релиза
+
+Профиль (ключи, базы, чаты) лежит в каталоге данных приложения. Запуск
+релизной сборки как есть подхватывает ваш рабочий профиль и пароль, поэтому
+проверять вход и создание профиля на ней бессмысленно. Для этого есть
+`scripts/clean-env.sh`: он задаёт свои каталоги через `STAURI_DATA_DIR` и
+`STAURI_CONFIG_DIR`, а сборка при этом остаётся настоящей.
+
+```bash
+./scripts/clean-env.sh /tmp/upd-check/beta.AppImage
+# или с постоянным каталогом (нужен, чтобы проверить повторный вход):
+./scripts/clean-env.sh /tmp/upd-check/beta.AppImage --keep-dir /tmp/stauri-clean-1
+```
+
+Каталоги по умолчанию: `/tmp/stauri-clean/<имя>-<время>`. Рабочий профиль в
+`~/.local/share/com.magnus.stauri-app/` не затрагивается.
+
+Переменные (см. `src-tauri/src/appdirs.rs`):
+
+| Переменная | Что задаёт |
+|---|---|
+| `STAURI_DATA_DIR` | каталог профиля и логов (абсолютный путь) |
+| `STAURI_CONFIG_DIR` | каталог конфигурации: `rpc-proxy.secret` и прочее |
+| `STAURI_DEBUG_TRACE=1` | подробная трасса моста (ответы до 4000 символов) |
+| `STAURI_NETWORK` | сеть: `mainnet` (по умолчанию), `sepolia`, `holesky` |
+| `STAURI_CONFIG_PATH` | путь к JSON-конфигу вместо переменных |
+
+Относительный путь в `STAURI_DATA_DIR` игнорируется с предупреждением в логе:
+при запуске AppImage текущий каталог неочевиден.
 
 ## 6. Сборка AppImage
 
@@ -192,8 +221,8 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
 
 Не собран. Что известно: `libsds.dll` через `nim c --os:windows` с MinGW не
 находит `chronos`; флейк `nim-sds` для `packages.x86_64-windows` падает на
-`buildInputs` (см. `PLAN.md`, раздел B.3). Сборка запланирована на Windows 11
-(KVM), см. `TODO.md`.
+`buildInputs`. Сборка запланирована на Windows 11
+(KVM).
 
 ## Известные проблемы
 
@@ -215,7 +244,7 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
 - **`dApp`-окна и `open_dapp` на Android** не поддерживаются (заглушка).
 - **`wakuext_*` недоступен в `libstatus.so`** (`method does not exist`): после входа
   `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` не отвечают. Чаты и каналы
-  на телефоне пока не работают (см. `TODO.md`, ветку Android).
+  на телефоне пока не работают.
 
 ## Интеграционные тесты (отдельно, не в CI)
 

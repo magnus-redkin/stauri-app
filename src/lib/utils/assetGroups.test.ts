@@ -31,8 +31,8 @@ describe('chainGroup', () => {
   });
 
   it('каждую тестовую сеть держит отдельно', () => {
-    // Именно здесь была ошибка: раньше все они попадали в «OTHER» и
-    // складывались в одну строку, хотя это разные активы в разных сетях.
+    // A single catch-all group would collapse these five into one row, though
+    // each is a different asset on a different network.
     const testnets = [11155111, 84532, 421614, 11155420, 560048];
     const groups = testnets.map(chainGroup);
     expect(new Set(groups).size).toBe(testnets.length);
@@ -75,8 +75,7 @@ describe('groupAssets', () => {
   });
 
   it('держит тестовые сети отдельными строками', () => {
-    // Ровно та ситуация, которую видел пользователь: на «Активах» было
-    // 4 строки вместо отдельных записей по каждой тестовой сети.
+    // One row per test network, not a single combined Assets row.
     const groups = groupAssets([
       token({ chainId: 11155111, balance: '100' }),
       token({ chainId: 84532, balance: '200' }),
@@ -87,7 +86,7 @@ describe('groupAssets', () => {
 
     expect(groups).toHaveLength(5);
     expect(groups.every((g) => g.totalBalance > 0n)).toBe(true);
-    // Ни одна сумма не сложена из чужих сетей.
+    // No total is summed from more than one network.
     expect(groups.map((g) => g.chains.length)).toEqual([1, 1, 1, 1, 1]);
   });
 
@@ -100,7 +99,7 @@ describe('groupAssets', () => {
   });
 
   it('не суммирует одинаковые символы с разной точностью', () => {
-    // «USDC» с 6 и 18 знаками — разные единицы; сумма была бы бессмысленной.
+    // USDC at 6 and at 18 decimals are different units; their sum means nothing.
     const groups = groupAssets([
       token({ chainId: 1, symbol: 'USDC', decimals: 6, balance: '1000000' }),
       token({ chainId: 1, symbol: 'USDC', decimals: 18, balance: '1000000' }),
@@ -148,7 +147,7 @@ describe('groupLabel', () => {
   });
 
   it('называет тестовую сеть по имени', () => {
-    // Без имени пять разных тестовых ETH не отличить друг от друга.
+    // Without the network name, five different test ETH look identical.
     const groups = groupAssets([
       token({ chainId: 11155111 }),
       token({ chainId: 84532 }),

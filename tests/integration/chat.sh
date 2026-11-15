@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# chat.sh — личный чат на двух нодах: логин, контакт, сообщение и ответ.
+# chat.sh — a direct chat between two nodes: login, contact, message and reply.
 #
 #   ./tests/integration/chat.sh
 #
-# Проверяет:
-#   1. Оба профиля создаются и входят (мессенджер запущен).
-#   2. A отправляет заявку в контакты по ключу B, B принимает, контакт mutual на обеих сторонах.
-#   3. A пишет сообщение B — B его видит.
-#   4. B отвечает A — A видит ответ.
+# Checks:
+#   1. Both profiles are created and log in (messenger running).
+#   2. A sends a contact request to B's key, B accepts, the contact is mutual on
+#      both sides.
+#   3. A messages B — B sees it.
+#   4. B replies to A — A sees the reply.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 

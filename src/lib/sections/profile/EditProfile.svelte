@@ -22,9 +22,12 @@
   let saveError = $state('');
 
   /**
-   * Сохраняет имя в ноду: без этого заявки в контакты уходят с заглушкой
-   * («Stauri User» из создания профиля). Затем рассылает новое имя уже
-   * добавленным контактам. Ошибка остаётся на странице, навигации не будет.
+   * Saves the display name to the node and pushes it to existing contacts.
+   *
+   * The name must reach the node first: otherwise contact requests go out with the
+   * placeholder from profile creation. Failures stay on this page and no navigation happens.
+   *
+   * @returns Whether the name was saved.
    */
   async function saveProfile(): Promise<boolean> {
     if (!isChanged) return true;
@@ -52,16 +55,14 @@
   }
 
   /**
-   * Имена профиля читаются при открытии раздела.
+   * Loads the profile's ENS names when the section opens.
    *
-   * `untrack` вокруг вызова обязателен: `loadProfileNames` пишет
-   * `ensState.profileNames`, и без него эффект, читающий изменяемое им же
-   * состояние, перезапускал бы сам себя. Это уже случалось с `loadChats`
-   * (см. `routes/+page.svelte`).
+   * The call must be wrapped in `untrack`: `loadProfileNames` writes
+   * `ensState.profileNames`, and an effect that reads state it also changes would restart
+   * itself.
    *
-   * Читаем здесь, а не при входе в аккаунт, потому что имя в профиле
-   * показывается только в профиле: запрос при логине почти всегда некому
-   * показать.
+   * Names are read here rather than at login because only the profile displays them; a
+   * request at login would almost never have anything to show.
    */
   $effect(() => {
     const loggedIn = statusState.isLoggedIn;
@@ -82,7 +83,6 @@
     <h2 class="text-2xl font-bold text-primary mb-6">{i18n.t('Edit Profile')}</h2>
 
     <div class="flex flex-col gap-6 max-w-md mx-auto w-full">
-      <!-- Аватар -->
       <div class="flex items-center gap-4">
         <div class="w-20 h-20 rounded-full bg-secondary flex items-center justify-center text-muted-foreground">
           <User size={36} />
@@ -92,7 +92,6 @@
         </button>
       </div>
 
-      <!-- Display Name -->
       <div>
         <label class="text-sm font-medium text-foreground">Display Name</label>
         <input
@@ -101,15 +100,13 @@
         />
       </div>
 
-      <!-- ENS-имя профиля -->
       <EnsNameBlock />
 
       <!--
-        Имя ENS как подпись под ником.
-        Показывается только когда профиль о нём знает (`ens_getEnsUsernames`,
-        см. `loadProfileNames`). Полная форма обязательна: сокращённая не
-        резолвится ни в одном клиенте, и человек ввёл бы её в поле получателя
-        безрезультатно.
+        The ENS name as a caption under the display name. It appears only once the profile
+        knows about it (`ens_getEnsUsernames`, see `loadProfileNames`), and it is always the
+        full form: the shortened one resolves in no client, so pasting it into a recipient
+        field would do nothing.
       -->
       {#if ensState.profileNames.length > 0}
         <p class="text-xs text-muted-foreground font-mono break-all">
@@ -117,7 +114,6 @@
         </p>
       {/if}
 
-      <!-- Блок Seed-фразы -->
         {#if statusState.isSeedSaved}
           <div class="p-3 rounded-lg border bg-green-100 text-green-800 border-green-300">
             ✅ {i18n.t('Seed-фраза сохранена')}
@@ -133,7 +129,8 @@
         {#if saveError}
           <p class="mt-3 text-sm text-red-600">{saveError}</p>
         {/if}
-        <!-- Кнопка Save -->
+        <!-- The save button is disabled only by its own handler, so the block above it is
+             retried without leaving the page. -->
           <div class="mt-4">
             <button
               onclick={async () => {
@@ -147,7 +144,7 @@
     </div>
   </div>
 
-  <!-- Модалка Userpic -->
+  <!-- Userpic dialog -->
   <Dialog.Root bind:open={userpicOpen}>
     <Dialog.Content class="sm:max-w-[425px]">
       <Dialog.Header>

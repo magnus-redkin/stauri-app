@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
-   * Правая панель «пригласить контакт»: QR и ссылка на профиль.
+   * Right panel for inviting a contact: QR code and profile key.
    *
-   * Ключ берётся из логина (`compressedKey`, формат `zQ3…`). Полную ссылку
-   * `status.app/u/<payload>#<ключ>` строит только известный payload; пока он
-   * не подтверждён, показываем сам ключ и QR с ним — это тот же ключ, что в
-   * ссылке SIM после `#`, и по нему SIM добавляет контакт.
+   * The key comes from the login (`compressedKey`, format `zQ3…`). A full
+   * `status.app/u/<payload>#<key>` link can only be built from a payload whose
+   * format is confirmed; until then the key itself is shown with a QR code. It is
+   * the same key that follows `#` in a SIM link, and SIM adds a contact by it.
    */
   import { i18n } from '$lib/i18n';
   import { statusState } from '$lib/stores/statusStore.svelte';
@@ -20,7 +20,7 @@
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
-      // Буфер недоступен: ключ всё равно виден на экране.
+      // Clipboard unavailable: the key is on screen anyway.
     }
   }
 </script>

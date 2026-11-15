@@ -3,9 +3,9 @@ import { walletState, loadWallet, resetWallet } from './walletStore.svelte';
 import { statusState } from './statusStore.svelte';
 import { startWallet, getAccounts, getBalances, getTokensForActiveNetworksMode, restartWalletReloadTimer } from '$lib/status/wallet';
 
-// Мокаем слой status-go для кошелька. Стор импортирует напрямую из
-// `wallet.ts` (обёртки переехали туда из `api.ts`), поэтому мок `api` его
-// больше не перехватывал — все вызовы уходили в настоящий `statusFetch`.
+// Mocks the status-go wallet layer. The store imports from `wallet.ts`
+// directly, so mocking `api` would not intercept its calls and they would reach
+// the real `statusFetch`.
 vi.mock('$lib/status/wallet', () => ({
   startWallet: vi.fn(),
   getAccounts: vi.fn(),
@@ -14,20 +14,20 @@ vi.mock('$lib/status/wallet', () => ({
   restartWalletReloadTimer: vi.fn(),
 }));
 
-// Мокаем statusState
+// Mocks statusState
 vi.mock('./statusStore.svelte', () => ({
   statusState: { backendPort: 12345, isLoggedIn: true },
 }));
 
-/** Метаданные в том виде, в каком их отдаёт status-go. */
+/** Metadata in the shape status-go returns it. */
 const mockMetadata = [
   { chainId: 1, address: '0x0000000000000000000000000000000000000000', symbol: 'ETH', decimals: 18 },
   { chainId: 1, address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', symbol: 'USDC', decimals: 6 },
 ];
 
 /**
- * Аккаунты в том виде, в каком их отдаёт accounts_getAccounts.
- * chat=true — адрес для чатов, кошелька у него нет и балансы по нему не считаются.
+ * Accounts in the shape accounts_getAccounts returns them.
+ * chat=true is the chat address; it has no wallet and no balances are computed for it.
  */
 const mockAccounts = [
   { address: '0xCHAT', chat: true, name: '' },
@@ -91,7 +91,7 @@ describe('walletStore', () => {
     await loadWallet();
 
     expect(walletState.balances).toHaveLength(2);
-    // Ненулевой баланс идёт первым
+    // A non-zero balance comes first
     expect(walletState.balances[0].symbol).toBe('USDC');
     expect(walletState.balances[1].balance).toBe('0');
   });
@@ -113,7 +113,8 @@ describe('walletStore', () => {
   });
 
   it('показывает сообщение о пустом каталоге токенов', async () => {
-    // Пустой ответ — это НЕ ошибка RPC: каталог не наполнен, спрашивать нечего.
+    // An empty response is NOT an RPC error: the catalog is not filled in, so
+    // there is nothing to ask for.
     (getBalances as any).mockResolvedValue({ result: {} });
 
     await loadWallet();
@@ -135,7 +136,7 @@ describe('walletStore', () => {
     await loadWallet(true);
     await loadWallet(true);
 
-    // Ответ весит ~4.6 МБ, поэтому второй и третий опрос не должны его тянуть.
+    // The response weighs ~4.6 MB, so the second and third polls must not fetch it.
     expect(getTokensForActiveNetworksMode).toHaveBeenCalledTimes(1);
   });
 
@@ -155,7 +156,7 @@ describe('walletStore', () => {
   });
 
   it('должен выбрасывать ошибку, если адрес не найден', async () => {
-    // Только чат-адрес: у него нет кошелька, поэтому кошелёк-адресов не остаётся.
+    // Chat address only: it has no wallet, so no wallet addresses remain.
     (getAccounts as any).mockResolvedValue([{ address: '0xCHAT', chat: true }]);
 
     await loadWallet();

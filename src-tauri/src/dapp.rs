@@ -1,28 +1,27 @@
-//! Внешние dApp в отдельном окне.
+//! External dApps in a separate window.
 //!
-//! ## Чем dApp отличается от провайдера
+//! A provider serves **data** in a fixed schema that the app renders itself,
+//! whereas a dApp brings its own interface and runs in its own window
+//! (`docs/ru/providers_and_dapps.md` §12).
 //!
-//! Провайдер отдаёт **данные** по фиксированной схеме, и мы рисуем их сами.
-//! dApp приносит свой интерфейс и работает в своём окне (`docs/ru/providers_and_dapps.md` §12).
+//! ## Isolation
 //!
-//! ## Изоляция
+//! The window is built with `WebviewUrl::External`, so its origin is not ours.
+//! Tauri IPC is available only to windows listed in capabilities, and an
+//! external window has no entry, so `invoke` from a foreign page does not work.
+//! This is the absence of a permission rather than a convention: capabilities
+//! are matched by window label (`dapp-…`) and none of them covers it.
 //!
-//! Окно создаётся с `WebviewUrl::External`, то есть его origin — не наш.
-//! В Tauri IPC доступен только окнам, перечисленным в capabilities; у внешнего
-//! окна записи нет, поэтому `invoke` из чужой страницы не работает. Это не
-//! соглашение, а отсутствие разрешения: capabilities сопоставляются по метке
-//! окна (`dapp-…`), и ни одна из них на неё не распространяется.
+//! The window title carries the host — the visible frame with its source from
+//! §12, so the user always sees whose interface they are looking at.
 //!
-//! Заголовок окна содержит хост — это и есть «видимая рамка с источником»
-//! из §12: пользователь всегда видит, чей интерфейс перед ним.
+//! ## What is validated
 //!
-//! ## Что проверяется
-//!
-//! Адрес проходит тот же фильтр, что и ленты ([`validate_external_url`]):
-//! только `http(s)`, никаких `localhost` и приватных диапазонов. Сама по себе
-//! проверка здесь не про SSRF (запрос делает чужое окно, а не мы) — она не
-//! даёт dApp-строке превратиться в способ открыть наш собственный интерфейс
-//! или локальный сервис в чужой рамке.
+//! The address passes the same filter as feeds ([`validate_external_url`]):
+//! only `http(s)`, no `localhost` and no private ranges. The check itself is not
+//! about SSRF (the foreign window makes the request, not this app) — it stops a
+//! dApp string from becoming a way to open our own interface or a local service
+//! inside a foreign frame.
 
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -33,8 +32,8 @@ use crate::error::{AppError, AppResult};
 #[cfg(desktop)]
 use crate::providers::validate_external_url;
 
-/// Размер окна dApp. Достаточно для десктопного интерфейса, но не
-/// во весь экран: пользователь должен видеть, что это отдельное окно.
+/// dApp window size. Enough for a desktop interface without filling the screen:
+/// the user should see that this is a separate window.
 #[cfg(desktop)]
 const DAPP_WIDTH: f64 = 1024.0;
 #[cfg(desktop)]
@@ -44,11 +43,16 @@ const DAPP_MIN_WIDTH: f64 = 480.0;
 #[cfg(desktop)]
 const DAPP_MIN_HEIGHT: f64 = 360.0;
 
-/// Открывает внешний dApp в изолированном окне.
+/// Opens an external dApp in an isolated window.
 ///
-/// Возвращает метку окна. Повторный вызов с тем же адресом не создаёт второе
-/// окно: оно фокусируется. Иначе клик по примеру дважды оставлял бы
-/// невидимые копии поверх друг друга.
+/// Returns the window label. A repeated call with the same address does not
+/// create a second window; it focuses the existing one, so clicking a sample
+/// twice does not leave invisible copies stacked on each other.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Config`] or [`crate::error::ErrorKind::Network`] from
+/// [`validate_external_url`], and [`crate::error::ErrorKind::Internal`] when the menu or the
+/// window cannot be built.
 #[cfg(desktop)]
 #[tauri::command]
 pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> {
@@ -62,12 +66,12 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
 
     let host = parsed.host_str().unwrap_or("dApp").to_string();
 
-    // Меню навигации. Без него из окна dApp нельзя вернуться назад — его
-    // собственный интерфейс может не иметь такой кнопки, а истории у нас нет
-    // ни на уровне Tauri, ни где-либо ещё.
+    // Navigation menu. Without it there is no way back from a dApp window: the
+    // page's own interface may have no back button, and no history is kept on
+    // the Tauri side or anywhere else.
     //
-    // Только три пункта: «назад», «вперёд», «обновить». Ни «сохранить
-    // страницу», ни devtools — чужому коду на диске пользователя делать нечего.
+    // Only three items: back, forward, reload. No "save page" and no devtools —
+    // foreign code has nothing to do on the user's disk.
     let back = MenuItem::with_id(&app, "dapp-back", "← Back", true, Some("Alt+Left"))
         .map_err(|e| AppError::internal(format!("menu item: {e}")))?;
     let forward = MenuItem::with_id(&app, "dapp-forward", "→ Forward", true, Some("Alt+Right"))
@@ -76,17 +80,17 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
         .map_err(|e| AppError::internal(format!("menu item: {e}")))?;
     let sep = PredefinedMenuItem::separator(&app)
         .map_err(|e| AppError::internal(format!("menu separator: {e}")))?;
-    // Закрытие — пункт меню, а не крестик окна: в полноэкранном режиме крестика
-    // не видно, а выйти нужно всегда.
+    // Closing is a menu item, not the window's close button: in fullscreen mode
+    // that button is not visible, and there must always be a way out.
     let close = MenuItem::with_id(&app, "dapp-close", "✕ Close", true, Some("Ctrl+W"))
         .map_err(|e| AppError::internal(format!("menu item: {e}")))?;
     let menu = Menu::with_items(&app, &[&back, &forward, &reload, &sep, &close])
         .map_err(|e| AppError::internal(format!("dApp menu: {e}")))?;
 
     let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
-        // Хост в заголовке — не украшение: это единственное, что отличает
-        // чужой интерфейс от нашего. Формат `dApp — example.com` читается
-        // однозначно и не даёт подделать себя именем страницы.
+        // The host in the title is not decoration: it is the only thing that
+        // distinguishes a foreign interface from ours. The `dApp — example.com`
+        // format reads unambiguously and cannot be spoofed by a page title.
         .title(format!("dApp — {host}"))
         .inner_size(DAPP_WIDTH, DAPP_HEIGHT)
         .min_inner_size(DAPP_MIN_WIDTH, DAPP_MIN_HEIGHT)
@@ -95,8 +99,8 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
         .build()
         .map_err(|e| AppError::internal(format!("cannot open dApp window: {e}")))?;
 
-    // Обработчик живёт на_window_, а не на приложении: так пункты меню
-    // относятся только к этому окну и не влияют на главное.
+    // The handler lives on the _window_, not on the app: that way the menu items
+    // apply only to this window and leave the main one alone.
     window.on_menu_event(move |win, event| match event.id().0.as_str() {
         "dapp-back" => navigate(win, "history.back()"),
         "dapp-forward" => navigate(win, "history.forward()"),
@@ -114,23 +118,31 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
     Ok(label)
 }
 
-/// Выполняет навигационный вызов в чужой странице.
+/// Rejects dApp opening on mobile.
 ///
-/// `history.back()` — единственный способ вернуться: у Tauri нет нативного
-/// `goBack`, а wry не выставляет историю наружу. Скрипт выполняется в
-/// main-frame окна, то есть в самой странице; ничего из Stauri он не видит.
+/// Mobile platforms have no separate window with a menu, so opening a dApp is
+/// not supported there yet. The command stays registered so the frontend gets a
+/// clear error instead of "command not found".
 ///
-/// Ошибку намеренно проглатываем: если страница ещё грузится, `eval` может
-/// не пройти, и падать из-за этого незачем — пользователь нажмёт ещё раз.
-/// На мобильных платформах отдельного окна с меню нет: открытие dApp там
-/// пока не поддерживается. Команда остаётся зарегистрированной, чтобы
-/// фронтенд получал понятную ошибку, а не «команда не найдена».
+/// Navigation inside a dApp window is done by evaluating `history.back()` and
+/// friends: Tauri has no native `goBack`, and wry does not expose history. That
+/// script runs in the window's main frame, so it sees nothing of Stauri. Its
+/// error is swallowed on purpose — `eval` can fail while the page is still
+/// loading, and there is no reason to fail the command over it.
+///
+/// # Errors
+/// Always returns [`crate::error::ErrorKind::Internal`].
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn open_dapp(_url: String) -> AppResult<String> {
     Err(AppError::internal("dApp windows are not available on mobile yet"))
 }
 
+/// Evaluates a navigation call inside the foreign page.
+///
+/// See [`open_dapp`] for why the call goes through `eval` instead of a native
+/// API. The error is dropped: `eval` can fail while the page is still loading,
+/// and the user can press the item again.
 #[cfg(desktop)]
 fn navigate(win: &tauri::Window, js: &str) {
     if let Some(webview) = win.app_handle().get_webview_window(win.label()) {
@@ -138,11 +150,11 @@ fn navigate(win: &tauri::Window, js: &str) {
     }
 }
 
-/// Метка окна по адресу.
+/// Window label derived from the address.
 ///
-/// Tauri требует метку из `[a-zA-Z0-9-_]`, поэтому URL не годится напрямую.
-/// FNV-1a даёт стабильную метку без зависимостей: один и тот же адрес всегда
-/// открывается в одном и том же окне.
+/// Tauri requires a label of `[a-zA-Z0-9-_]`, so a URL cannot be used directly.
+/// FNV-1a gives a stable label with no dependency, so the same address always
+/// opens in the same window.
 #[cfg(desktop)]
 fn window_label(url: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;

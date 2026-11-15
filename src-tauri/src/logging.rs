@@ -1,29 +1,24 @@
-//! Структурное логирование приложения.
+//! Structured application logging.
 //!
-//! ## Зачем
+//! There are two independent sinks:
 //!
-//! До этого момента все сообщения шли через `println!`/`eprintln!`: в
-//! AppImage-сборке они уходили в никуда, а `status.log` от самого status-go
-//! был выключен, потому что тот писал полные URL RPC-провайдеров вместе с
-//! API-ключами. В итоге при разборе проблем пользователя не оставалось
-//! вообще ничего, кроме экрана с ошибкой.
+//! * **file** — `<data>/<APP_IDENTIFIER>/logs/stauri.<date>.log`, rotated daily,
+//!   7 files kept. In a release build this is the main diagnostic source.
+//! * **stderr** — what is visible when launched from a terminal. Debug builds
+//!   emit from `debug`, release builds only `warn` and above, so launching from
+//!   a desktop environment does not clutter the session journal.
 //!
-//! Здесь два независимых приёмника:
+//! ## Why secrets are scrubbed at the writer
 //!
-//! * **файл** — `<data>/<APP_IDENTIFIER>/logs/stauri.<дата>.log`, суточная
-//!   ротация, хранится 7 файлов. В релизе это основной источник диагностики.
-//! * **stderr** — то, что видно при запуске из терминала. В debug-сборке
-//!   идёт от `debug`, в release — только `warn` и выше, чтобы запуск из
-//!   десктопного окружения не засорял журнал сессии.
-//!
-//! ## Почему секреты вычищаются на уровне писателя
-//!
-//! Чистить на каждом вызове `info!` — значит однажды забыть. Ключи утекают
-//! не только из наших сообщений, но и из чужих ошибок: `reqwest` пишет
+//! Scrubbing on every `info!` call means eventually forgetting one. Keys leak not
+//! only from our own messages but from foreign errors: `reqwest` logs
 //! `error sending request for url (https://eth-mainnet.g.alchemy.com/v2/KEY)`,
-//! а status-backend печатает в stdout JSON с `authToken` и провайдерами.
-//! Поэтому каждый приёмник обёрнут в [`RedactingWriter`], который правит
-//! строку целиком уже на выходе. Один раз обёрнуто — дальше забыть нельзя.
+//! and status-backend prints JSON with `authToken` and providers to stdout.
+//! Every sink is therefore wrapped in [`RedactingWriter`], which rewrites the
+//! whole line on the way out: once wrapped, it cannot be forgotten.
+//!
+//! status-go's own `status.log` is left off because it writes full RPC provider
+//! URLs including API keys.
 
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
@@ -38,43 +33,43 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::env::APP_IDENTIFIER;
 
-/// Сколько файлов лога хранить при суточной ротации.
+/// How many log files to keep under daily rotation.
 const KEEP_LOG_FILES: usize = 7;
 
-/// Предел накопления строки без перевода строки, после которого пишем как есть.
+/// Cap on a line accumulating without a newline, after which it is written as is.
 ///
-/// Страховка от мусора: если в лог попадёт поток без `\n`, буфер не должен
-/// расти бесконечно.
+/// A guard against garbage: if a stream without `\n` reaches the log, the buffer
+/// must not grow without bound.
 const MAX_PENDING_LINE: usize = 1024 * 1024;
 
-/// Держит фоновый поток записи, пока приложение живо.
+/// Keeps the background writer thread alive as long as the application runs.
 ///
-/// `WorkerGuard` останавливает и досбрасывает очередь при своём `Drop`.
-/// Держим его до `RunEvent::Exit`, иначе буферизованный хвост лога теряется
-/// на выходе — а именно там чаще всего и лежит причина падения.
+/// `WorkerGuard` stops and flushes the queue on `Drop`. It is held until
+/// `RunEvent::Exit`, otherwise the buffered log tail is lost on exit — and that
+/// is usually where the cause of a crash sits.
 static GUARD: OnceLock<Mutex<Option<WorkerGuard>>> = OnceLock::new();
 
-/// Инициализирует глобальный подписчик. Повторный вызов безопасен.
+/// Initialises the global subscriber. Calling it again is safe.
 ///
-/// Директория логов вычисляется без `AppHandle`: `app_data_dir()` доступен
-/// только после `.build()`, а логировать хочется уже с первых строк. На Linux
-/// `app_data_dir()` — это `$XDG_DATA_HOME/<identifier>`, что совпадает с
-/// `dirs::data_local_dir()`, поэтому путь тот же.
+/// The log directory is resolved without an `AppHandle`: `app_data_dir()` is only
+/// available after `.build()`, and logging starts with the first lines. On Linux
+/// `app_data_dir()` is `$XDG_DATA_HOME/<identifier>`, which matches
+/// `dirs::data_local_dir()`, so the path is the same.
 pub fn init() {
-    // Android: логи идут в logcat (тег "stauri"), файлового пути на телефоне нет.
+    // Android: logs go to logcat (tag "stauri"); there is no file path on a phone.
     #[cfg(target_os = "android")]
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug).with_tag("stauri"),
     );
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        // Чужой шум (tauri, reqwest, hyper) — только warn: их debug
-        // утопил бы записи самого приложения.
+        // Foreign noise (tauri, reqwest, hyper) is kept at warn: their debug
+        // would drown the application's own records.
         //
-        // `frontend=` обязателен отдельно: сообщения из webview приходят с
-        // target "frontend" (см. commands::log_frontend) и под правило
-        // `tauri_app_lib=` не подпадают. Без него проходили только ERROR,
-        // потому что они выше порога `warn`, — именно так debug/info с
-        // фронтенда и потерялись при первой попытке.
+        // `frontend=` is required separately: webview messages arrive with the
+        // target "frontend" (see commands::log_frontend) and do not fall under
+        // the `tauri_app_lib=` rule. Without it only ERROR passed, because those
+        // are above the `warn` threshold, and debug/info from the frontend were
+        // lost.
         EnvFilter::new(if cfg!(debug_assertions) {
             "warn,tauri_app_lib=debug,frontend=debug,status_backend=debug"
         } else {
@@ -107,8 +102,8 @@ pub fn init() {
                 .try_init();
         }
         None => {
-            // Файл недоступен (нет прав, только для чтения) — не падаем:
-            // приложение должно работать, stderr остаётся.
+            // The file is unavailable (no permissions, read-only): do not fail —
+            // the application must still run, and stderr remains.
             let _ = tracing_subscriber::registry()
                 .with(console)
                 .with(filter)
@@ -117,19 +112,23 @@ pub fn init() {
     }
 }
 
-/// Досбрасывает очередь на диск. Вызывать при выходе из приложения.
+/// Flushes the queue to disk. Call it when the application exits.
 pub fn shutdown() {
     if let Some(guard) = GUARD.get()
         && let Ok(mut slot) = guard.lock()
     {
-        // `take` уничтожает guard, его `Drop` вычитывает очередь.
+        // `take` destroys the guard, and its `Drop` drains the queue.
         slot.take();
     }
 }
 
-/// Каталог логов: `<data_local_dir>/<APP_IDENTIFIER>/logs`.
+/// Log directory: `<data directory>/logs`.
+///
+/// The data directory comes from `appdirs`: the profile lives there, and it also
+/// honours `STAURI_DATA_DIR`. Otherwise logs from a clean copy would land in the
+/// main directory and mix with real ones.
 pub fn log_dir() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|base| base.join(APP_IDENTIFIER).join("logs"))
+    crate::appdirs::data_dir().map(|base| base.join(APP_IDENTIFIER).join("logs"))
 }
 
 fn file_writer() -> Option<NonBlocking> {
@@ -149,14 +148,14 @@ fn file_writer() -> Option<NonBlocking> {
     Some(writer)
 }
 
-// ===========================================================================
-// ВЫЧИЩЕНИЕ СЕКРЕТОВ
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Secret scrubbing
+// ---------------------------------------------------------------------------
 
-/// Приёмник, который правит строку перед записью.
+/// Sink that rewrites a line before writing it.
 ///
-/// Копит байты до перевода строки: ключ не должен проскочить только потому,
-/// что `write` разбил его на два куска.
+/// Bytes are accumulated up to a newline: a key must not slip through just
+/// because a single `write` split it in two.
 pub struct RedactingWriter<W> {
     inner: W,
     pending: Vec<u8>,
@@ -200,7 +199,7 @@ impl<W: Write> Write for RedactingWriter<W> {
     }
 }
 
-/// Обёртка, превращающая любой [`MakeWriter`] в вычищающий.
+/// Wrapper turning any [`MakeWriter`] into a redacting one.
 struct Redacting<M> {
     inner: M,
 }
@@ -222,10 +221,10 @@ where
     }
 }
 
-/// Имена полей и параметров, значение которых в лог попадать не должно.
+/// Field and parameter names whose value must not reach the log.
 ///
-/// Сравнение идёт по нормализованному виду: нижний регистр без `_` и `-`,
-/// поэтому `apiKey`, `api_key` и `API-KEY` — одно и то же.
+/// Compared in normalised form: lowercase without `_` and `-`, so `apiKey`,
+/// `api_key` and `API-KEY` are the same.
 const SECRET_NAMES: &[&str] = &[
     "key",
     "apikey",
@@ -249,11 +248,11 @@ fn is_secret_name(name: &str) -> bool {
     SECRET_NAMES.contains(&normalized.as_str())
 }
 
-/// Вычищает секреты из строки лога.
+/// Scrubs secrets from a log line.
 ///
-/// Две независимые проверки, потому что источники разные:
-/// * URL — `https://<host>/v2/<ключ>`, `?apikey=...`, `user:pass@host`;
-/// * JSON — `"authToken":"..."` из вывода status-backend.
+/// Two independent checks, because the sources differ:
+/// * URL — `https://<host>/v2/<key>`, `?apikey=...`, `user:pass@host`;
+/// * JSON — `"authToken":"..."` from status-backend output.
 pub fn redact(input: &str) -> String {
     redact_json_fields(&redact_urls(input))
 }
@@ -285,7 +284,7 @@ fn find_scheme(input: &str) -> Option<usize> {
     SCHEMES.iter().filter_map(|scheme| input.find(scheme)).min()
 }
 
-/// Граница URL: пробел, кавычка, скобка или разделитель предложения.
+/// Boundary of a URL: whitespace, a quote, a bracket or a sentence separator.
 fn url_end(input: &str) -> usize {
     input
         .char_indices()
@@ -343,10 +342,10 @@ fn redact_path(path: &str) -> String {
     parts.join("/")
 }
 
-/// Ключ в пути URL.
+/// A key in a URL path.
 ///
-/// Alchemy и Infura кладут его сразу за `v2`/`v3`. Остальные провайдеры
-/// (QuickNode и подобные) — просто длинным токеном в первом сегменте пути.
+/// Alchemy and Infura put it right after `v2`/`v3`. Other providers (QuickNode
+/// and the like) use a long token as the first path segment instead.
 fn looks_like_secret_segment(segment: &str, previous: &str) -> bool {
     if segment.is_empty() {
         return false;
@@ -406,8 +405,8 @@ fn redact_json_fields(input: &str) -> String {
         if is_string_value && is_secret_name(&key) {
             match read_json_string(input, value_start) {
                 Some((_, after_value)) => {
-                    // Сохраняем исходное написание ключа и пробелы вокруг
-                    // двоеточия, заменяя только значение.
+                    // Keep the original spelling of the key and the spaces
+                    // around the colon, replacing only the value.
                     out.push_str(&input[i..value_start]);
                     out.push_str("\"***\"");
                     i = after_value;
@@ -428,11 +427,10 @@ fn redact_json_fields(input: &str) -> String {
     out
 }
 
-/// Читает JSON-строку с позиции `start` (там должна быть `"`).
+/// Reads a JSON string starting at `start` (which must be a `"`).
 ///
-/// Возвращает сырое содержимое и индекс сразу за закрывающей кавычкой.
-/// Кавычка считается закрывающей, только если перед ней нечётное число
-/// обратных слэшей.
+/// Returns the raw contents and the index just past the closing quote. A quote
+/// closes the string only when an odd number of backslashes precedes it.
 fn read_json_string(input: &str, start: usize) -> Option<(String, usize)> {
     let bytes = input.as_bytes();
     if bytes.get(start) != Some(&b'"') {
@@ -546,8 +544,8 @@ mod tests {
         let mut out: Vec<u8> = Vec::new();
         {
             let mut writer = RedactingWriter::new(&mut out);
-            // Ключ разрезан ровно посередине: построчная буферизация должна
-            // склеить его обратно до вычищения.
+            // The key is split exactly in the middle: line buffering must glue it
+            // back together before scrubbing.
             writer
                 .write_all(b"url https://eth-mainnet.g.alchemy.com/v2/abc")
                 .unwrap();

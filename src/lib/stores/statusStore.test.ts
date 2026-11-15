@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { statusState, setNetworkInfo, setAccounts, resetState, processSignal } from './statusStore.svelte';
 import { startMessenger } from '$lib/status/api';
 
-// Мокаем API, чтобы processSignal не делал реальных запросов
+// Mocks the API so processSignal makes no real requests.
 vi.mock('$lib/status/api', () => ({
   startMessenger: vi.fn().mockResolvedValue({}),
   logout: vi.fn().mockResolvedValue({})
@@ -63,27 +63,25 @@ describe('statusStore', () => {
 
   describe('resetState', () => {
     it('должен сбрасывать все поля к дефолтным значениям', () => {
-      // Устанавливаем кастомные значения
+      // Custom values are set first, then reset below.
       setNetworkInfo('sepolia', 'https://rpc.sepolia.org', 'status.test', true, 11155111);
       setAccounts([{ 'key-uid': 'uid-1' }]);
       statusState.isConnected = true;
-      statusState.isConnecting = true; // <-- Добавлено
+      statusState.isConnecting = true; // also reset by resetState
       statusState.isLoggedIn = true;
       statusState.backendPort = 12345;
       statusState.backendDataDir = '/tmp/test';
       statusState.accountKeyUid = 'uid-1';
       statusState.errorMsg = 'Some error';
 
-      // Сбрасываем
+      // Reset.
       resetState();
 
-      // Проверяем сброс
-      expect(statusState.networkName).toBe('mainnet'); // networkName не сбрасывается в resetState, но мы его не меняли — он остался от setNetworkInfo
-      // ВАЖНО: в текущей реализации resetState не трогает networkName, поэтому он останется 'sepolia'.
-      // Если хотите сбрасывать и его, добавьте в resetState.
+      // Check the reset.
+      expect(statusState.networkName).toBe('mainnet'); // resetState sets it back to mainnet
       expect(statusState.accounts).toHaveLength(0);
       expect(statusState.isConnected).toBe(false);
-      expect(statusState.isConnecting).toBe(false); // <-- Проверка
+      expect(statusState.isConnecting).toBe(false); // resetState clears isConnecting too
       expect(statusState.isLoggedIn).toBe(false);
       expect(statusState.backendPort).toBeNull();
       expect(statusState.backendDataDir).toBe('');
@@ -94,9 +92,9 @@ describe('statusStore', () => {
 
   describe('processSignal', () => {
     it('должен обрабатывать сигнал node.login, не запуская messenger', () => {
-      // Messenger стартует из connectionStore после configureWalletRpc:
-      // RPC-клиенты кэшируются по chainID, и запуск раньше прописки
-      // провайдеров оставил бы их с мёртвыми URL.
+      // The messenger starts from connectionStore after configureWalletRpc: RPC clients are cached
+      // per chainID, and starting it before the providers are set would leave them pointing at
+      // dead URLs.
       statusState.backendPort = 12345;
 
       const loginSignal = JSON.stringify({

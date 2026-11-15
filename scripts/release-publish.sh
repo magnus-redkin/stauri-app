@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# release-publish.sh — шаг 4 релиза: публикация draft-релиза.
+# release-publish.sh — release step 4: publish the draft release.
 #
-# Использование (из stauri-app/):
-#   ./scripts/release-publish.sh 0.4.0-beta     # только проверки (по умолчанию)
-#   ./scripts/release-publish.sh 0.4.0-beta --publish  # отправить тег и снять draft
+# Usage (from stauri-app/):
+#   ./scripts/release-publish.sh 0.4.0-beta             # checks only (default)
+#   ./scripts/release-publish.sh 0.4.0-beta --publish   # push the tag, lift the draft
 #
-# Без --publish скрипт ничего не меняет на GitHub и в remote.
+# Without --publish the script changes nothing on GitHub or on the remote.
 #
-# Что делает с --publish:
-#   1. Отправляет тег v<VERSION> на origin (без force).
-#   2. Снимает draft: релиз становится виден всем.
+# With --publish:
+#   1. Push tag v<VERSION> to origin (never forced).
+#   2. Lift the draft: the release becomes visible to everyone.
 #
-# Предусловия (проверяются всегда):
-#   - релиз v<VERSION> существует и это draft;
-#   - в draft есть все ассеты: AppImage, .sha256, .sig, latest.json, APK;
-#   - локальный тег v<VERSION> указывает на код приложения из HEAD;
-#   - тега v<VERSION> ещё нет на origin (или он уже указывает на тот же коммит);
-#   - дерево чистое.
+# Preconditions (always checked):
+#   - release v<VERSION> exists and is a draft;
+#   - the draft holds every asset: AppImage, .sha256, .sig, latest.json, APK;
+#   - local tag v<VERSION> points at the application code in HEAD;
+#   - tag v<VERSION> is not on origin yet (or already points at the same commit);
+#   - the tree is clean.
 
 set -euo pipefail
 
@@ -48,7 +48,7 @@ ok()   { echo "  ✓ $1"; }
 
 echo "=== Публикация $TAG ==="
 
-# 1. Draft и ассеты.
+# 1. Draft and assets.
 echo "[1/3] Draft и ассеты"
 DRAFT_JSON="$(gh release view "$TAG" --json isDraft,assets 2>/dev/null || true)"
 if [[ -z "$DRAFT_JSON" ]]; then
@@ -75,7 +75,7 @@ else
   fi
 fi
 
-# 2. Тег и код.
+# 2. Tag and code.
 echo "[2/3] Тег и код"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   TAG_SHA="$(git rev-parse "$TAG^{commit}")"
@@ -105,7 +105,7 @@ else
   fail "на origin тег $TAG указывает на другой коммит — не перезаписываем"
 fi
 
-# 3. Итог и действие.
+# 3. Result and action.
 echo "[3/3] Итог"
 if [[ "$FAIL" -ne 0 ]]; then
   echo
@@ -119,7 +119,7 @@ if [[ "$PUBLISH" -eq 0 ]]; then
   exit 0
 fi
 
-# Публикация. Сначала тег (чтобы ссылки из latest.json работали), затем снятие draft.
+# Publish. Tag first, so the urls in latest.json resolve, then lift the draft.
 echo
 echo "Публикация:"
 if [[ -z "$REMOTE_SHA" ]]; then

@@ -11,14 +11,14 @@
   let error = $state('');
   let step = $state<1 | 2>(1);
 
-  // Слова запрашиваются по одному через seed_word(index) и хранятся в
-  // shownWords для отображения. Пользователю фразу нужно записать, поэтому
-  // показать её неизбежно; цель этой схемы — не давать фразе покидать
-  // Rust-процесс целиком (в виде одной строки, которую легко утащить)
+  // Words are fetched one by one through seed_word(index) and kept in shownWords for
+  // display. The phrase has to be shown because the user must write it down; the point of
+  // this scheme is that it never leaves the Rust process as a single string that is easy to
+  // scrape.
   let shownWords = $state<{ index: number; word: string }[]>([]);
 
-  // Индексы и ответы для проверки. Ожидаемые слова в webview не попадают:
-  // сверку делает verify_seed_answer() на стороне Rust.
+  // Indices and answers for verification. The expected words never enter the webview: the
+  // comparison is done by verify_seed_answer() on the Rust side.
   let testIndices = $state<number[]>([]);
   let testAnswers = $state<string[]>(['', '', '', '']);
   let wordStatus = $state<(boolean | null)[]>([null, null, null, null]);
@@ -45,8 +45,8 @@
     loadWords();
   });
 
-  // Фраза стирается из памяти Rust при уходе с экрана, даже если компонент
-  // размонтирован аварийно (навигация, закрытие окна).
+  // The phrase is wiped from Rust memory when the screen is left, including when the
+  // component is unmounted abruptly (navigation, window close).
   onDestroy(() => {
     shownWords = [];
     testAnswers = ['', '', '', ''];
@@ -56,8 +56,8 @@
   const allCorrect = $derived(wordStatus.every((s) => s === true));
 
   async function copyPhrase() {
-    // Собираем текст только на момент копирования, чтобы он не жил
-    // в состоянии компонента.
+    // The text is assembled only at the moment of copying, so the joined phrase never lives
+    // in component state.
     const parts: string[] = [];
     for (const w of shownWords) parts.push(w.word);
     await navigator.clipboard.writeText(parts.join(' '));
@@ -82,7 +82,7 @@
       return;
     }
 
-    // Сверку выполняет Rust: слово-эталон в webview не попадает.
+    // The comparison is done by Rust: the reference word never reaches the webview.
     try {
       const res = await invoke<{ correct: boolean }>('verify_seed_answer', {
         index: testIndices[position],

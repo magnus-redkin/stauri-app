@@ -3,14 +3,14 @@ import { contactsState, loadContacts, selectContact, acceptRequest, resetContact
 import { statusState } from './statusStore.svelte';
 import { getContacts, acceptContactRequest } from '$lib/status/api';
 
-// Мокаем API
+// Mocks the API.
 vi.mock('$lib/status/api', () => ({
   getContacts: vi.fn(),
   acceptContactRequest: vi.fn(),
   setPendingRequestsCount: vi.fn(),
 }));
 
-// Мокаем стор (setPendingRequestsCount)
+// Mocks the store (`setPendingRequestsCount`).
 vi.mock('./statusStore.svelte', () => ({
   statusState: { backendPort: 12345 },
   setPendingRequestsCount: vi.fn(),
@@ -53,7 +53,7 @@ describe('contactsStore', () => {
     await acceptRequest('0x123');
 
     expect(acceptContactRequest).toHaveBeenCalledWith(12345, '0x123');
-    expect(getContacts).toHaveBeenCalled(); // Перезагрузка после принятия
+    expect(getContacts).toHaveBeenCalled(); // Reload after accepting
   });
 
   it('не должен загружать контакты, если loaded=true и force=false', async () => {

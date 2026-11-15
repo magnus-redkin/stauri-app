@@ -30,13 +30,13 @@ describe('MainEntryScreen Component', () => {
       }
     });
 
-    // ProfileLoginBlock (с кнопкой Log In) не должен отрендериться
+    // ProfileLoginBlock (with the Log In button) must not render.
     expect(screen.queryByText('Log In')).not.toBeInTheDocument();
 
-    // CreateProfileBlock (с заголовком Create new profile) должен быть
+    // CreateProfileBlock (headed "Create new profile") must be present.
     expect(screen.getByText('Create new profile')).toBeInTheDocument();
 
-    // Кнопка "+ Create new profile" не должна быть видна
+    // The "+ Create new profile" button must not be visible.
     expect(screen.queryByText(/\+ Create new profile/i)).not.toBeInTheDocument();
   });
 
@@ -55,13 +55,13 @@ describe('MainEntryScreen Component', () => {
       }
     });
 
-    // ProfileLoginBlock рендерит кнопку "Log In"
+    // ProfileLoginBlock renders the "Log In" button.
     expect(screen.getByText('Log In')).toBeInTheDocument();
 
-    // Кнопка "+ Create new profile" должна быть
+    // The "+ Create new profile" button must be present.
     expect(screen.getByText(/\+ Create new profile/i)).toBeInTheDocument();
 
-    // CreateProfileBlock (с заголовком "Create new profile" как h3) не должен быть виден
+    // CreateProfileBlock (with "Create new profile" as its h3) must not be visible.
     expect(screen.queryByText('Create new profile')).not.toBeInTheDocument();
   });
 
@@ -80,17 +80,17 @@ describe('MainEntryScreen Component', () => {
       }
     });
 
-    // Изначально CreateProfileBlock нет
+    // CreateProfileBlock is absent at first.
     expect(screen.queryByText('Create new profile')).not.toBeInTheDocument();
 
-    // Кликаем на "+ Create new profile"
+    // Click "+ Create new profile".
     const createButton = screen.getByText(/\+ Create new profile/i);
     await fireEvent.click(createButton);
 
-    // Теперь CreateProfileBlock должен появиться
+    // CreateProfileBlock must appear now.
     expect(screen.getByText('Create new profile')).toBeInTheDocument();
 
-    // ProfileLoginBlock не исчезает
+    // ProfileLoginBlock does not disappear.
     expect(screen.getByText('Log In')).toBeInTheDocument();
   });
 

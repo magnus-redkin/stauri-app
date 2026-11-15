@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# release-linux.sh — шаг 2 релиза: AppImage для Linux в draft-релиз.
+# release-linux.sh — release step 2: the Linux AppImage into a draft release.
 #
-# Использование (из stauri-app/):
-#   ./scripts/release-linux.sh 0.4.0-beta            # собрать и загрузить
-#   ./scripts/release-linux.sh 0.4.0-beta --check    # только проверки
+# Usage (from stauri-app/):
+#   ./scripts/release-linux.sh 0.4.0-beta            # build and upload
+#   ./scripts/release-linux.sh 0.4.0-beta --check    # checks only
 #
-# Предусловия:
-#   - тег v<VERSION> стоит на HEAD (его ставит release-create.sh);
-#   - draft-релиз v<VERSION> существует на GitHub;
-#   - дерево чистое;
-#   - задан пароль ключа подписи (keyring / env), см. release.sh.
+# Preconditions:
+#   - tag v<VERSION> is on HEAD (created by release-create.sh);
+#   - draft release v<VERSION> exists on GitHub;
+#   - the tree is clean;
+#   - the signing key password is available (keyring or env), see release.sh.
 #
-# Что делает:
-#   1. Проверяет предусловия.
-#   2. Запускает release.sh с RELEASE_NO_TAG=1: сборка, .sha256, .sig, latest.json.
-#      Тег не ставит: он уже стоит (release.sh откажется его трогать).
-#   3. Загружает AppImage, .sha256, .sig и latest.json в draft (--clobber:
-#      повторный запуск заменяет ассеты, а не падает).
-#   4. Показывает список ассетов релиза.
+# Steps:
+#   1. Verify the preconditions.
+#   2. Run release.sh with RELEASE_NO_TAG=1: build, .sha256, .sig, latest.json.
+#      It does not tag; the tag already exists and release.sh refuses to move it.
+#   3. Upload the AppImage, .sha256, .sig and latest.json to the draft
+#      (--clobber makes a re-run replace assets instead of failing).
+#   4. Print the release asset list.
 #
-# Публикацию (снятие draft) этот скрипт не делает — это шаг 4.
+# Publishing (lifting the draft) is step 4, not this script.
 
 set -euo pipefail
 
@@ -51,12 +51,12 @@ ok()   { echo "  ✓ $1"; }
 
 echo "=== Linux-артефакты для $TAG ==="
 
-# 1. Предусловия.
+# 1. Preconditions.
 echo "[1/4] Предусловия"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   TAG_SHA="$(git rev-parse "$TAG^{commit}")"
-  # Собираем код приложения, поэтому сравниваем его, а не весь HEAD:
-  # коммиты с правками скриптов релиза не меняют сборку.
+  # Compare the application code, not all of HEAD: commits touching the release
+  # scripts do not change the build.
   APP_PATHS=(src src-tauri package.json pnpm-lock.yaml)
   if [[ -z "$(git diff --name-only "$TAG_SHA" HEAD -- "${APP_PATHS[@]}")" ]]; then
     ok "тег $TAG ($(git rev-parse --short "$TAG_SHA")): код приложения совпадает с HEAD"
@@ -93,10 +93,10 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-# 2. Сборка. release.sh делает всю работу; тег не трогает, APK не собирает.
+# 2. Build. release.sh does the work; it neither tags nor builds the APK.
 echo
 echo "[2/4] Сборка AppImage (release.sh, RELEASE_NO_TAG=1)"
-# release.sh требует путь к ключу в переменной; по умолчанию — стандартный ключ Tauri.
+# release.sh requires the key path in a variable; the default is Tauri's standard key.
 export TAURI_SIGNING_PRIVATE_KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/stauri.key}"
 RELEASE_NO_TAG=1 RELEASE_SKIP_ANDROID=1 ./scripts/release.sh "$VERSION"
 
@@ -111,13 +111,13 @@ for f in "$APPIMAGE" "$SHA_FILE" "$SIG_FILE" "$MANIFEST"; do
   fi
 done
 
-# 3. Загрузка в draft.
+# 3. Upload to the draft.
 echo
 echo "[3/4] Загрузка в draft $TAG"
 gh release upload "$TAG" "$APPIMAGE" "$SHA_FILE" "$SIG_FILE" "$MANIFEST" --clobber
 echo "  загружено: $(basename "$APPIMAGE"), .sha256, .sig, latest.json"
 
-# 4. Итог.
+# 4. Result.
 echo
 echo "[4/4] Ассеты релиза"
 gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name)  \(.size) байт"'

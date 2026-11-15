@@ -1,22 +1,28 @@
 /**
- * Правила записи в канал АКК (docs/ru/akk_scheme.md §7, channelKind.ts).
+ * Posting rules for AKK channels (see `channelKind.ts`).
  *
- * Записи (сообщения без `responseTo`) и комментарии (ответы с `responseTo`) —
- * разные права. status-go видит только `canPost` и не различает их, поэтому
- * правило «записи — только автор» проверяется в интерфейсе.
+ * Entries (messages without `responseTo`) and comments (replies carrying
+ * `responseTo`) are governed by different rules. status-go only exposes
+ * `canPost` and does not tell them apart, so "entries are written by the author
+ * only" is enforced in the interface.
  */
 
 import { KIND_RECORDS_BY_AUTHOR_ONLY, type ChannelKind } from './channelKind';
 
-/** `CommunityMember_ROLE_OWNER`: автор канала. */
+/** `CommunityMember_ROLE_OWNER`: the channel author. */
 export const ROLE_OWNER = 1;
 
 /**
- * Может ли пользователь написать запись в канал такого типа.
+ * Whether the user may post an entry to a channel of this kind.
  *
- * - тип требует «только автор» (news, request) — запись только у владельца;
- * - тип без такого ограничения (issues) — запись у всех, кому разрешено писать;
- * - `kind` не передан (1-1 чат) — правило канала не применяется, решает `canPost`.
+ * @param kind - Channel kind, or `undefined` for a direct message.
+ * @param memberRole - Current user's role in the community.
+ * @returns `false` when the kind restricts entries to the owner and the user is
+ * not the owner.
+ * @remarks
+ * Kinds such as `news` and `request` allow entries for the owner only; `issues`
+ * allows them for anyone allowed to post. Without a kind (a 1-1 chat) the
+ * channel rule does not apply and `canPost` decides.
  */
 export function canRecord(kind: ChannelKind | undefined, memberRole: number | undefined): boolean {
   if (!kind) return true;
@@ -25,10 +31,13 @@ export function canRecord(kind: ChannelKind | undefined, memberRole: number | un
 }
 
 /**
- * Может ли пользователь комментировать.
+ * Whether the user may comment.
  *
- * Комментарий доступен всем, кому status-go разрешает писать в канал
- * (`canPost`). Отдельного права на комментарий нет.
+ * @param canPost - `canPost` from status-go for the channel.
+ * @returns `false` only when status-go explicitly denies posting.
+ * @remarks
+ * There is no separate comment right: anyone allowed to post in the channel may
+ * comment. An absent `canPost` is treated as permission.
  */
 export function canComment(canPost: boolean | undefined): boolean {
   return canPost !== false;

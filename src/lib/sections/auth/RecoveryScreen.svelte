@@ -14,7 +14,7 @@
     onLogin: () => void;
   } = $props();
 
-  // Шаг: 1 = ввод слов, 2 = ввод пароля
+  // Step 1 enters the words, step 2 enters the password.
   let step = $state(1);
   let words = $state(Array(12).fill(""));
   let password = $state("");
@@ -23,23 +23,20 @@
     setTimeout(() => firstWordInput?.focus(), 50);
   });
 
-  // Обработка вставки (Ctrl+V) в первое поле
   function handlePaste(e: ClipboardEvent) {
     const text = e.clipboardData?.getData('text') || '';
     const parts = text.trim().split(/\s+/);
 
     if (parts.length >= 12) {
       e.preventDefault();
-      // Заполняем все 12 полей
       for (let i = 0; i < 12; i++) {
         words[i] = parts[i] || '';
       }
     }
-    // Если меньше 12, даем браузеру вставить как обычно в одно поле
   }
 
   function nextStep() {
-    // Проверяем, что все 12 слов заполнены
+    // Advance only when all twelve words are filled.
     if (words.every(w => w.trim().length > 0)) {
       step = 2;
     } else {
@@ -49,7 +46,6 @@
 </script>
 
 <div class="flex flex-col items-center justify-center min-h-screen gap-6 p-4 bg-background">
-  <!-- Кнопка Назад -->
   <button
     onclick={onBack}
     class="self-start text-sm text-muted-foreground hover:underline flex items-center gap-1"
@@ -58,7 +54,6 @@
   </button>
 
   {#if step === 1}
-    <!-- ШАГ 1: Ввод 12 слов -->
     <h1 class="text-3xl font-bold text-foreground">{i18n.t('Log in by Recovery Phrase')}</h1>
     <p class="text-sm text-muted-foreground">{i18n.t('Enter your 12 words in the correct order.')}</p>
 
@@ -94,7 +89,6 @@
     </button>
 
   {:else}
-    <!-- ШАГ 2: Ввод пароля -->
     <h1 class="text-3xl font-bold text-foreground">{i18n.t('Set New Password')}</h1>
     <p class="text-sm text-muted-foreground">{i18n.t('This password will encrypt your local database.')}</p>
 

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# release-android.sh — шаг 3 релиза: подписанный APK в draft-релиз.
+# release-android.sh — release step 3: signed APK into the draft release.
 #
-# Использование (из stauri-app/):
-#   ./scripts/release-android.sh 0.4.0-beta     # собрать и загрузить
-#   ./scripts/release-android.sh 0.4.0-beta --check    # только предусловия
+# Usage (from stauri-app/):
+#   ./scripts/release-android.sh 0.4.0-beta            # build and upload
+#   ./scripts/release-android.sh 0.4.0-beta --check    # preconditions only
 #
-# Предусловия: тег v<VERSION> на коде приложения, draft существует, дерево чистое,
-# keystore и его пароль доступны (см. release.sh, шаг 7a).
+# Preconditions: tag v<VERSION> on the application code, the draft exists, the
+# tree is clean, keystore and its password are available (see release.sh, step 7a).
 #
-# Что делает:
-#   1. Проверяет предусловия.
-#   2. Вызывает шаг 7a из release.sh (он собирает APK, подписывает и проверяет
-#      подпись apksigner). Версия versionName/versionCode ставится там же.
-#   3. Загружает APK в draft (--clobber).
+# Steps:
+#   1. Verify the preconditions.
+#   2. Call step 7a of release.sh, which builds the APK, signs it and verifies the
+#      signature with apksigner. versionName/versionCode are set there too.
+#   3. Upload the APK to the draft (--clobber).
 #
-# Публикацию не делает — это шаг 4.
+# Does not publish; that is step 4.
 
 set -euo pipefail
 
@@ -46,7 +46,7 @@ ok()   { echo "  ✓ $1"; }
 
 echo "=== Android APK для $TAG ==="
 
-# 1. Предусловия.
+# 1. Preconditions.
 echo "[1/3] Предусловия"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   TAG_SHA="$(git rev-parse "$TAG^{commit}")"
@@ -92,16 +92,17 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-# 2. Сборка APK. Шаг 7a из release.sh: сборка, подпись, versionName/versionCode.
-# ANDROID_HOME: на этой машине SDK в ~/Android/sdk (строчными буквами).
+# 2. APK build. Step 7a of release.sh: build, sign, versionName/versionCode.
+# ANDROID_HOME defaults to ~/Android/sdk (lowercase), the SDK location on this
+# machine.
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/sdk}"
 export NDK_HOME="${NDK_HOME:-$ANDROID_HOME/ndk/27.2.12479018}"
 echo
 echo "[2/3] Сборка APK (release.sh, только шаг 7a)"
 echo "  ANDROID_HOME=$ANDROID_HOME"
 
-# Запускаем только Android-шаг: остальное release.sh для AppImage не нужно.
-# Для этого отдельный путь: release.sh с RELEASE_ONLY_ANDROID=1 пропускает всё, кроме 7a.
+# Run the Android step only: none of the AppImage work is needed. release.sh
+# takes that path with RELEASE_ONLY_ANDROID=1, skipping everything but 7a.
 RELEASE_ONLY_ANDROID=1 ./scripts/release.sh "$VERSION"
 
 APK="$ROOT/src-tauri/target/release/bundle/apk/stauri-app_${VERSION}_aarch64.apk"
@@ -110,7 +111,7 @@ if [[ ! -f "$APK" ]]; then
   exit 1
 fi
 
-# 3. Загрузка в draft.
+# 3. Upload to the draft.
 echo
 echo "[3/3] Загрузка в draft $TAG"
 gh release upload "$TAG" "$APK" --clobber

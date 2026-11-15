@@ -1,31 +1,28 @@
-//! Аутентифицирующий прокси к status-backend.
+//! Authenticating proxy in front of status-backend.
 //!
-//! ## Зачем
+//! `status-backend` (cmd/status-backend/server/server.go) has no
+//! authentication: any process on the machine can connect to its 127.0.0.1 port
+//! and call, for example, `settings_getSettings` (which returns the seed phrase)
+//! or `wallet_*` (which moves funds). The `CheckOrigin` check in the WebSocket
+//! handler returns `true`, so it does not stop foreign web pages either.
 //!
-//! `status-backend` (cmd/status-backend/server/server.go) не имеет
-//! аутентификации: любой процесс на машине может подключиться к его порту
-//! на 127.0.0.1 и вызвать, например, `settings_getSettings` (отдаёт
-//! seed-фразу) или `wallet_*` (перевод средств). Проверка `CheckOrigin`
-//! в WebSocket-обработчике возвращает `true`, то есть не защищает и от
-//! сторонних веб-страниц. Доступа к странице из браузера на localhost.
+//! Loopback is not isolated between users: another user of the machine can also
+//! connect to `127.0.0.1:<port>`.
 //!
-//! Loopback не изолирован между пользователями: другой пользователь машины
-//! тоже может подключиться к 127.0.0.1:<port>.
+//! ## What it does
 //!
-//! ## Что делает
+//! It listens on its own port, requires an `X-Stauri-Token` header holding a
+//! secret generated at startup, and forwards traffic to the real backend port
+//! only after the check. Both plain HTTP and WebSocket work: once the first
+//! request is checked, the connection is copied in both directions, so the
+//! upgrade passes through transparently.
 //!
-//! Слушает свой порт, требует заголовок `X-Stauri-Token` с секретом,
-//! сгенерированным при старте, и только после проверки пересылает трафик
-//! к настоящему порту бэкенда. Работает и для обычного HTTP, и для
-//! WebSocket: после проверки первого запроса соединение просто копируется
-//! в обе стороны, поэтому upgrade проходит прозрачно.
+//! ## Residual risk
 //!
-//! ## Остаточный риск
-//!
-//! Токен передаётся во фронтенд, чтобы тот мог добавлять заголовок. Значит,
-//! при XSS в webview токен доступен. Это осознанный компромисс: главная
-//! цель — закрыть доступ *другим локальным процессам*, а при XSS у
-//! атакующего и без того есть доступ к Tauri-командам.
+//! The token is handed to the frontend so it can add the header, which means an
+//! XSS in the webview exposes it. This is an accepted trade-off: the main goal
+//! is to shut out *other local processes*, and under XSS the attacker already has
+//! access to the Tauri commands.
 
 use std::sync::{Arc, Mutex};
 
@@ -36,13 +33,13 @@ use tracing::{debug, error, info};
 
 use crate::error::{AppError, AppResult};
 
-/// Имя заголовка с токеном.
+/// Name of the token header.
 pub const TOKEN_HEADER: &str = "x-stauri-token";
 
-/// Сколько максимум читаем до конца заголовков.
+/// Upper bound on how much is read before the end of the headers.
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 
-/// Токен живёт всё время работы приложения.
+/// The token lasts for the lifetime of the application.
 static TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
 #[derive(Default)]
@@ -52,7 +49,10 @@ pub struct AuthProxyState {
     task: Mutex<Option<JoinHandle<()>>>,
 }
 
-/// Генерирует токен из /dev/urandom.
+/// Generates a 64-character hex token from /dev/urandom.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when `/dev/urandom` cannot be opened or read.
 fn generate_token() -> AppResult<String> {
     let mut buf = [0u8; 32];
     let mut f = std::fs::File::open("/dev/urandom")
@@ -67,7 +67,11 @@ fn generate_token() -> AppResult<String> {
     Ok(out)
 }
 
-/// Возвращает текущий токен, создавая его при первом обращении.
+/// Returns the current token, creating it on first use.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the token lock is poisoned or the token
+/// cannot be generated.
 pub fn token() -> AppResult<String> {
     let mut guard = TOKEN.lock().map_err(|_| AppError::poisoned())?;
     if let Some(t) = guard.as_ref() {
@@ -78,12 +82,17 @@ pub fn token() -> AppResult<String> {
     Ok(t)
 }
 
-/// Запускает прокси к указанному порту бэкенда.
+/// Starts the proxy towards the given backend port.
 ///
-/// Повторный вызов с тем же апстримом возвращает уже занятый порт.
+/// A repeated call with the same upstream returns the port already in use.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the listener cannot be bound, its
+/// address cannot be resolved, or a lock is poisoned, and any error from
+/// [`token`].
 pub async fn start(state: &AuthProxyState, upstream_port: u16) -> AppResult<u16> {
-    // Обновляем апстрим даже если слушатель уже поднят: бэкенд может
-    // перезапуститься на другом порту.
+    // The upstream is updated even when the listener is already up: the backend
+    // can restart on a different port.
     {
         let mut up = state.upstream.lock().map_err(|_| AppError::poisoned())?;
         *up = Some(upstream_port);
@@ -93,7 +102,7 @@ pub async fn start(state: &AuthProxyState, upstream_port: u16) -> AppResult<u16>
         return Ok(port);
     }
 
-    // Токен нужен до первого запроса.
+    // The token must exist before the first request.
     let _ = token()?;
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -130,7 +139,7 @@ pub async fn start(state: &AuthProxyState, upstream_port: u16) -> AppResult<u16>
     Ok(port)
 }
 
-/// Останавливает прокси.
+/// Stops the proxy.
 pub fn stop(state: &AuthProxyState) {
     if let Ok(mut guard) = state.task.lock()
         && let Some(task) = guard.take()
@@ -142,10 +151,16 @@ pub fn stop(state: &AuthProxyState) {
     }
 }
 
-/// Проверяет токен и пересылает соединение к бэкенду.
+/// Checks the token and forwards the connection to the backend.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the headers exceed
+/// [`MAX_HEADER_BYTES`] or a lock is poisoned, [`crate::error::ErrorKind::Io`] when the
+/// client cannot be read, and [`crate::error::ErrorKind::Backend`] when the backend cannot be
+/// reached.
 async fn handle_conn(mut client: TcpStream, upstream: Arc<Mutex<Option<u16>>>) -> AppResult<()> {
-    // Читаем заголовки, но не тело: тело может быть большим, а нам нужно
-    // только проверить токен. Дальше байты пойдут как есть.
+    // Read the headers but not the body: the body can be large and only the token
+    // matters here. Past this point the bytes flow through unchanged.
     let mut head = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
 
@@ -162,7 +177,8 @@ async fn handle_conn(mut client: TcpStream, upstream: Arc<Mutex<Option<u16>>>) -
             .await
             .map_err(|e| AppError::io(e.to_string()))?;
         if n == 0 {
-            // Соединение закрыто до конца заголовков — отвечать некому.
+            // The connection closed before the end of the headers: there is no
+            // one to answer.
             return Ok(());
         }
         head.extend_from_slice(&chunk[..n]);
@@ -181,8 +197,8 @@ async fn handle_conn(mut client: TcpStream, upstream: Arc<Mutex<Option<u16>>>) -
         return Ok(());
     }
 
-    // Мьютекс отпускаем до await: MutexGuard не Send, а функция вызывается
-    // из tokio::spawn.
+    // The mutex is released before the await: a MutexGuard is not Send, and this
+    // function runs from tokio::spawn.
     let target_port = {
         let up = upstream.lock().map_err(|_| AppError::poisoned())?;
         *up
@@ -196,8 +212,8 @@ async fn handle_conn(mut client: TcpStream, upstream: Arc<Mutex<Option<u16>>>) -
         .await
         .map_err(|e| AppError::backend(format!("auth proxy: cannot reach backend: {e}")))?;
 
-    // Пересылаем уже прочитанные байты бэкенду, удалив заголовок токена:
-    // бэкенд о нём знать не должен.
+    // Forward the bytes already read to the backend, with the token header
+    // removed: the backend should not know about it.
     let forwarded_head = strip_token_header(&request_head);
     server
         .write_all(forwarded_head.as_bytes())
@@ -208,13 +224,13 @@ async fn handle_conn(mut client: TcpStream, upstream: Arc<Mutex<Option<u16>>>) -
         .await
         .map_err(|e| AppError::io(e.to_string()))?;
 
-    // Дальше — прозрачный двунаправленный поток: покрывает и keep-alive,
-    // и WebSocket-фреймы после upgrade.
+    // From here on it is a transparent two-way stream, which covers both
+    // keep-alive and WebSocket frames after the upgrade.
     let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
     Ok(())
 }
 
-/// Сравнение без раннего выхода, чтобы не утекало время сравнения.
+/// Comparison without an early exit, so timing does not leak.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -226,11 +242,11 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Разбирает заголовки запроса в нижнем регистре.
+/// Parses request headers into a lowercase-keyed map.
 fn parse_headers(head: &str) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     let mut lines = head.split("\r\n");
-    lines.next(); // строка запроса
+    lines.next(); // request line
     for line in lines {
         if line.is_empty() {
             continue;
@@ -242,7 +258,7 @@ fn parse_headers(head: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-/// Убирает строку заголовка токена из запроса.
+/// Removes the token header line from a request.
 fn strip_token_header(head: &str) -> String {
     let mut out = String::with_capacity(head.len());
     for line in head.split_inclusive("\r\n") {
@@ -322,18 +338,18 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Сквозные тесты
+    // End-to-end tests
     //
-    // Юнит-тесты выше проверяют разбор строк. Здесь проверяется то, ради
-    // чего прокси существует: без токена запрос не доходит до бэкенда, с
-    // токеном — доходит и получает ответ, а заголовок токена до бэкенда
-    // не доезжает.
+    // The unit tests above check string parsing. These check what the proxy
+    // exists for: without a token a request does not reach the backend, with a
+    // token it does and gets an answer, and the token header never arrives at
+    // the backend.
     // ---------------------------------------------------------------------
 
-    /// Поднимает фальшивый бэкенд и считает дошедшие до него запросы.
+    /// Starts a fake backend and counts the requests that reach it.
     ///
-    /// Возвращает порт и счётчик: по нему проверяется, что отклонённый
-    /// прокси запрос до бэкенда НЕ дошёл.
+    /// Returns the port and the counter, which shows that a request rejected by
+    /// the proxy did NOT reach the backend.
     async fn fake_backend() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -366,7 +382,7 @@ mod tests {
                     }
 
                     let request = String::from_utf8_lossy(&buf).to_string();
-                    // Заголовок токена не должен доходить до бэкенда.
+                    // The token header must not reach the backend.
                     if !request.to_ascii_lowercase().contains(TOKEN_HEADER) {
                         hits.fetch_add(1, Ordering::SeqCst);
                     }
@@ -386,7 +402,8 @@ mod tests {
         (port, hits)
     }
 
-    /// С правильным токеном запрос проходит и ответ возвращается клиенту.
+    /// With the correct token the request passes and the answer comes back to
+    /// the client.
     #[tokio::test]
     async fn valid_token_is_forwarded_to_backend() {
         let (backend_port, _hits) = fake_backend().await;
@@ -409,7 +426,7 @@ mod tests {
         stop(&state);
     }
 
-    /// Без токена — 403, и до бэкенда ничего не доходит.
+    /// Without a token the answer is 403 and nothing reaches the backend.
     #[tokio::test]
     async fn missing_token_is_rejected_and_backend_untouched() {
         let (backend_port, hits) = fake_backend().await;
@@ -434,7 +451,7 @@ mod tests {
         stop(&state);
     }
 
-    /// Неверный токен — тоже 403.
+    /// A wrong token is also answered with 403.
     #[tokio::test]
     async fn wrong_token_is_rejected() {
         let (backend_port, hits) = fake_backend().await;
@@ -456,10 +473,10 @@ mod tests {
         stop(&state);
     }
 
-    /// Заголовок токена не пересылается бэкенду.
+    /// The token header is not forwarded to the backend.
     ///
-    /// Проверяется отдельно от счётчика в fake_backend: там же ловится
-    /// и провал, поэтому нужен явный случай с успешным запросом.
+    /// Checked separately from the counter in `fake_backend`, which also catches
+    /// a failure, so an explicit case with a successful request is needed.
     #[tokio::test]
     async fn token_header_is_stripped_before_forwarding() {
         let head = "POST /x HTTP/1.1\r\nX-Stauri-Token: secret\r\nHost: h\r\n\r\n";
@@ -470,7 +487,7 @@ mod tests {
         assert!(stripped.contains("Host: h\r\n"));
     }
 
-    /// Разные токены различаются посимвольно, а не только по длине.
+    /// Different tokens differ per character, not only in length.
     #[test]
     fn token_comparison_rejects_prefix() {
         let expected = "a".repeat(64);
@@ -479,7 +496,7 @@ mod tests {
         wrong.push('b');
 
         assert!(!constant_time_eq(wrong.as_bytes(), expected.as_bytes()));
-        // Совпадающий префикс не должен давать положительный результат.
+        // A matching prefix must not produce a positive result.
         assert!(!constant_time_eq(
             &expected.as_bytes()[..63],
             expected.as_bytes()

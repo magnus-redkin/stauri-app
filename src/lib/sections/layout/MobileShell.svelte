@@ -1,10 +1,11 @@
 <script lang="ts">
   /**
-   * Мобильная оболочка (AD/AT): одна панель, без понятий LP/RP.
+   * Mobile shell: a single pane, with no left/right panel split.
    *
-   * Клик по пункту нижнего меню открывает раздел и сбрасывает его историю.
-   * Стрелки ← / → появляются только когда внутри раздела есть переходы: история
-   * ведётся по разделу, а не по всему приложению. Нижнее меню видно всегда.
+   * Tapping an item of the bottom menu opens the section and resets that section's own
+   * history. The ← / → buttons appear only when the current section has steps to go back or
+   * forward to: history is tracked per section, not across the whole app. The bottom menu is
+   * always visible.
    */
   import type { Snippet } from 'svelte';
   import { ArrowLeft, ArrowRight, Home, User, MessageCircle, Wallet, Blocks, Store } from 'lucide-svelte';
@@ -21,19 +22,19 @@
   }: {
     activeSection: string;
     onSelect?: (id: string) => void;
-    /** Содержимое текущего раздела (одна панель). */
+    /** Content of the current section (the single pane). */
     content: Snippet;
     title?: string;
-    /** Иконки справа в титульной строке (Chat: 4, Wallet: reload и edit). */
+    /** Icons at the right of the title bar (Chat: 4, Wallet: reload and edit). */
     actions?: Snippet;
     /**
-     * История переходов внутри раздела. Раздел сам кладёт шаги через `push`
-     * и возвращает назад через `back`. Здесь только отображение стрелок.
+     * Navigation history inside the section. The section pushes steps through `push` and
+     * walks back through `back`; this component only renders the arrows.
      */
     history: { canBack: boolean; canForward: boolean; back: () => void; forward: () => void };
   } = $props();
 
-  // Порядок из спецификации: Home, Profile, Chat, Wallet, dApps, Market.
+  // Order from the specification: Home, Profile, Chat, Wallet, dApps, Market.
   const menu = [
     { id: 'home', icon: Home, label: 'Home' },
     { id: 'profile', icon: User, label: 'Profile' },
@@ -49,8 +50,10 @@
   }
 
   /**
-   * Диагностика safe-area (временная, до релиза убрать).
-   * Замеряет, отдаёт ли WebView значения env(safe-area-inset-*), и пишет в трассу.
+   * Temporary safe-area diagnostic, to be removed before release.
+   *
+   * Measures whether the WebView reports env(safe-area-inset-*) values and writes the result
+   * to the trace.
    */
   let probe: HTMLDivElement | null = $state(null);
   onMount(() => {
@@ -68,10 +71,11 @@
 </script>
 
 <div class="flex flex-col h-[100dvh] min-h-0 overflow-hidden bg-background">
-  <!-- Диагностика safe-area: невидимый замер, см. скрипт. -->
+  <!-- Safe-area diagnostic: an invisible measurement, see the script. -->
   <div bind:this={probe} aria-hidden="true" class="absolute inset-0 pointer-events-none invisible" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"></div>
-  <!-- Титульная строка: [←][→] [название раздела] [иконки справа].
-       pt-[20px] — отступ под служебную строку Android (часы, сеть, батарея). -->
+  <!-- Title bar: [←][→] [section name] [icons on the right]. The top padding never drops
+       below the height of the Android status bar (clock, network, battery), even when the
+       WebView reports no safe-area inset. -->
   <header class="shrink-0 flex items-center gap-2 px-3 pt-[max(20px,env(safe-area-inset-top))] pb-2 border-b border-border bg-secondary">
     {#if history.canBack}
       <button
@@ -107,8 +111,8 @@
     {@render content()}
   </div>
 
-  <!-- Нижнее меню разделов: видно всегда -->
-  <!-- Нижнее меню разделов: видно всегда. pb-[20px] — отступ над системными кнопками Android. -->
+  <!-- Bottom section menu, always visible. Same rule at the bottom: the padding never drops
+       below the height of the Android system buttons. -->
   <nav class="shrink-0 flex items-stretch justify-around border-t border-border bg-secondary pb-[max(25px,env(safe-area-inset-bottom))]">
     {#each menu as item (item.id)}
       <button

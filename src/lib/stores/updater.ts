@@ -1,53 +1,57 @@
 /**
- * Проверка и установка обновлений.
+ * Update check and install.
  *
- * ## Почему проверка идёт в Rust, а не в JS
+ * The check runs through app commands rather than the JS
+ * `@tauri-apps/plugin-updater` API: the latter executes in the webview and needs
+ * the `updater:default` permission, which grants page-level access. Only the
+ * two thin commands are exposed here; the endpoint and the install order stay in
+ * Rust. The webview is the most exposed part of the app, so the fewer
+ * privileges it holds, the smaller the consequences of an XSS.
  *
- * JS-API `@tauri-apps/plugin-updater` (`check()`) делает всё в webview и
- * требует permission `updater:default`, то есть доступ из страницы. Здесь
- * используются только команды приложения: permission в capabilities не
- * выдаётся, а адрес сервера и порядок установки живут в Rust. Причина та же,
- * что у `auth_proxy` и `seed`: webview — самое уязвимое место, и чем меньше
- * прав у него есть, тем меньше последствия XSS.
+ * @remarks
+ * The endpoint is `releases/latest/download/latest.json` on GitHub. GitHub does
+ * not serve `releases/latest` for prereleases, so a prerelease build is never
+ * offered as an update; only a full release is picked up.
  *
- * ## Почему обновление ставится отдельной кнопкой
- *
- * Подмена самого приложения — самый ценный сценарий атаки. Подпись закрывает
- * подмену файла, но не подмену «когда»: установка по нажатию пользователя
- * оставляет ему решение, а молчаливая автозамена ломает доверие к программе,
- * которая держит ключи.
+ * Installing is a separate user action by design. Signing prevents a swapped
+ * binary but not a swapped moment: an explicit click leaves the decision with
+ * the user, while a silent auto-update would undermine trust in an app that
+ * holds keys.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { debug } from '$lib/utils/log';
 
 export interface UpdateInfo {
-  /** Версия, которую предлагает сервер. */
+  /** Version offered by the server. */
   version: string;
-  /** Текущая версия приложения. */
+  /** Currently running app version. */
   currentVersion: string;
-  /** Заметки к релизу (Markdown), если сервер их отдал. */
+  /** Release notes (Markdown), when the server provided them. */
   notes: string | null;
-  /** Дата публикации, ISO 8601. */
+  /** Publication date, ISO 8601. */
   date: string | null;
 }
 
 export interface UpdateCheckResult {
-  /** `null` — обновлений нет. */
+  /** `null` when no update is available. */
   update: UpdateInfo | null;
   /**
-   * Почему проверка не дала ответа. Отдельно от `update: null`: «сервер
-   * недоступен» и «обновлений нет» для пользователя разные вещи, и только
-   * первое заслуживает упоминания в интерфейсе.
+   * Why the check produced no answer. Kept apart from `update: null`: "server
+   * unreachable" and "already up to date" mean different things to the user,
+   * and only the first deserves a mention in the UI.
    */
   error: string | null;
 }
 
 /**
- * Спрашивает сервер, есть ли новая версия.
+ * Asks the server whether a newer version exists.
  *
- * Никогда не бросает: обновление — не критическая операция, и упавшая
- * проверка не должна влиять на запуск приложения.
+ * Never throws: updates are not critical, and a failed check must not affect
+ * application startup.
+ *
+ * @returns The available update, or `null` with an `error` explaining why the
+ * check gave no answer.
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   try {
@@ -60,27 +64,25 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
 }
 
 /**
- * Скачивает и устанавливает обновление.
+ * Downloads and installs the update.
  *
- * На Linux заголовок исполняемого файла подменяется на месте, поэтому
- * запущенный процесс продолжает работать со старым кодом до перезапуска.
- * Возвращает `true`, если применено и нужен перезапуск.
+ * @remarks
+ * On Linux the executable is replaced in place, so the running process keeps
+ * the old code until it restarts. A restart is required for the new version to
+ * take effect.
  */
 export async function installUpdate(): Promise<void> {
   await invoke('install_update');
 }
 
 /**
- * Перезапускает приложение.
+ * Restarts the application.
  *
- * На Linux после установки подменяется файл на диске, а запущенный процесс
- * продолжает работать со старым кодом. Перезапуск идёт через Rust: он
- * проводит `RunEvent::Exit`, где останавливаются sidecar и оба прокси.
- * Из webview это не сделать — `location.reload()` перезагрузил бы только
- * страницу, а не процесс.
- *
- * Управление не возвращается: процесс завершается. Ошибку не ловим и не
- * показываем — если перезапуск не удался, окно просто останется открытым.
+ * @remarks
+ * The restart goes through Rust so that `RunEvent::Exit` runs and both the
+ * sidecar and the proxies are stopped; `location.reload()` from the webview
+ * would only reload the page, not the process. Control does not return. A
+ * failed restart leaves the window open, and the error is not surfaced.
  */
 export async function restartApp(): Promise<void> {
   await invoke('restart_app');

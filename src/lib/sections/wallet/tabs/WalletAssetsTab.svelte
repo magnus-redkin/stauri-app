@@ -32,15 +32,15 @@
     if (!symbol) return null;
     const upper = symbol.toUpperCase();
     if (SYMBOL_ICONS[upper]) return SYMBOL_ICONS[upper];
-    // Поиск по подстроке (USDC.e → USDC)
+    // Substring match, so a bridged variant such as USDC.e gets the USDC icon.
     for (const k of Object.keys(SYMBOL_ICONS)) {
       if (upper.includes(k)) return SYMBOL_ICONS[k];
     }
     return null;
   }
 
-  // Состав групп (`EVM`, `BSC`, отдельная сеть) живёт в `utils/assetGroups`:
-  // там же объяснено, почему тестовые сети нельзя складывать с mainnet.
+  // Group composition (`EVM`, `BSC`, a standalone network) lives in `utils/assetGroups`,
+  // where the reason test networks cannot be merged with mainnet is explained too.
 
   const CHAIN_PRIORITY: Record<number, number> = {
     1: 0,
@@ -68,6 +68,8 @@
 
   function tokenIconUrl(chainId: number, tokenAddress: string): string | null {
     const chainSlug = TRUSTWALLET_CHAIN[chainId];
+    // The zero address is how the backend reports the native coin; it has a chain logo,
+    // not an asset path.
     if (tokenAddress === '0x0000000000000000000000000000000000000000') {
       return NATIVE_ICONS[chainId] ?? null;
     }
@@ -75,8 +77,8 @@
     return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainSlug}/assets/${tokenAddress}/logo.png`;
   }
 
-  // Кэш иконок, а не реактивное состояние: обновляется вручную через
-  // scheduleSaveCache() и не участвует в графе реактивности Svelte.
+  // Icon cache, deliberately not reactive state: it is updated by hand through
+  // scheduleSaveCache() and takes no part in Svelte's dependency graph.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const iconCache = new Map<string, string>();
   if (typeof localStorage !== 'undefined') {
@@ -130,25 +132,23 @@
   }
 
   /**
-   * Группировка вынесена в `$lib/utils/assetGroups`.
+   * Groups balances into asset rows.
    *
-   * Здесь она жила inline и складывала все неизвестные сети в одну группу
-   * `OTHER`. В mainnet это было незаметно, а в testnet давало ровно 4 строки
-   * вместо записей по каждой сети: пять тестовых ETH суммировались в один.
-   * Логика, которая решает, что считать одним активом, должна быть покрыта
-   * тестами — на код внутри компонента их не напишешь.
+   * The grouping itself lives in `$lib/utils/assetGroups` so that it can be unit-tested:
+   * deciding what counts as one asset is logic, and logic inside a component cannot be
+   * covered by tests.
    */
   const groupedBalances = $derived(groupAssets(walletState.balances));
 
   /**
-   * Иконка для строки.
+   * Icon URL for each row.
    *
-   * У одного символа в разных сетях разные адреса контракта, поэтому иконку
-   * выбираем один раз: по сети с наибольшим приоритетом (mainnet раньше
-   * тестовых).
+   * One symbol can have a different contract address on every chain, so the icon is picked
+   * once per group: from the highest-priority chain that holds the token (mainnet before
+   * test networks).
    */
   const groupIconUrls = $derived.by(() => {
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- локальная карта на время вызова
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local map, lives for one call
     const icons = new Map<string, string>();
     for (const g of groupedBalances) {
       let bestPriority = Infinity;
@@ -190,11 +190,10 @@
   });
 
   /**
-   * Имя сети для подписи под строкой.
+   * Network name for the caption under a row.
    *
-   * Раньше печатался номер (`Chains: 11155111`) — человек не должен помнить
-   * идентификаторы сетей. Неизвестную сеть показываем номером: лучше
-   * номер, чем ничего.
+   * An unknown network falls back to its numeric id: a number is better than nothing, and
+   * requiring the reader to know chain ids is worse than showing one.
    */
   function chainName(chainId: number): string {
     return CHAIN_NAMES[chainId] ?? String(chainId);

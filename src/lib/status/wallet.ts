@@ -1,35 +1,31 @@
 /**
- * Граница status-go для кошелька и ENS.
+ * status-go boundary for the wallet and ENS.
  *
- * ## Зачем отдельный модуль
+ * Stauri takes only networking and the wallet from status-go and moves
+ * everything else out. When status-go goes away, this file and its callers
+ * change, not the whole frontend. `api.ts` keeps re-exports for existing callers;
+ * new code imports from here.
  *
- * Общая цель Stauri — брать из status-go только сеть и кошелёк, а всё
- * остальное выносить; при переходе на Logos status-go уходит совсем. Когда
- * это случится, менять придётся этот файл и его вызовы, а не весь фронтенд.
- * Раньше кошелёчные обёртки лежали вперемешку в `api.ts` рядом с жизненным
- * циклом бэкенда — граница была размыта.
- *
- * `api.ts` сохраняет реэкспорт ради существующих вызовов; новому коду
- * следует импортировать отсюда.
- *
- * ## Номера `id` в JSON-RPC
- *
- * Номера не обязаны быть уникальными между запросами: `statusFetch` работает
- * по одному HTTP-вызову на запрос, ответ приходит в том же соединении.
- * Нумерация внутри файла оставлена сквозной для читаемости логов.
+ * @remarks
+ * JSON-RPC `id` values need not be unique across requests: `statusFetch` makes one
+ * HTTP call per request and receives the response on that same connection.
+ * Numbering stays sequential within the file only to keep logs readable.
  */
 
 import { statusFetch } from './http';
 
 // ===========================================================================
-// ЖИЗНЕННЫЙ ЦИКЛ
+// LIFECYCLE
 // ===========================================================================
 
 /**
- * Запускает сервис кошелька.
+ * Starts the wallet service.
  *
- * Вызывать один раз за сессию, а не на каждом опросе балансов: повторные
- * вызовы ничего не дают, но стоят времени.
+ * @param port - Auth proxy port.
+ * @returns The backend's response.
+ * @remarks
+ * Call once per session rather than on every balance poll: repeated calls achieve
+ * nothing and cost time.
  */
 export async function startWallet(port: number): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -41,16 +37,19 @@ export async function startWallet(port: number): Promise<any> {
 }
 
 // ===========================================================================
-// АККАУНТЫ, БАЛАНСЫ, ТОКЕНЫ
+// ACCOUNTS, BALANCES, TOKENS
 // ===========================================================================
 
 /**
- * Аккаунты профиля.
+ * Accounts of the profile.
  *
- * Нужны, чтобы узнать адреса, по которым бэкенд реально считает балансы:
- * контроллер берёт их из `keypairs_accounts` с фильтром `chat = 0` (см.
- * internal/db/multiaccounts/accounts/database.go, `GetWalletAddresses`).
- * Поле `chat = true` — это адрес для чатов, у него нет кошелька.
+ * @param port - Auth proxy port.
+ * @returns Account records from status-go.
+ * @remarks
+ * These records give the addresses the backend actually computes balances for:
+ * the controller takes them from `keypairs_accounts` with the filter `chat = 0`
+ * (internal/db/multiaccounts/accounts/database.go, `GetWalletAddresses`). The
+ * `chat = true` account is the chat address and has no wallet.
  */
 export async function getAccounts(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
@@ -63,18 +62,19 @@ export async function getAccounts(port: number): Promise<any[]> {
 }
 
 /**
- * Балансы из кэша бэкенда.
+ * Balances from the backend cache.
  *
- * ## Почему `forceRefresh` бесполезен
- *
- * Параметр принимается, но в `pkg/services/wallet/api.go` (`FetchOrGetCachedWalletBalances`)
- * игнорируется: метод читает кэш, который наполняет фоновый
- * `MultistandardBalanceController`. Поэтому баланс после перевода не
- * обновится мгновенно, сколько бы раз мы ни спросили — нужен повторный
- * опрос по таймеру.
- *
- * Формат результата: `{ "0xAddr": [ { tokenAddress, tokenChainId,
- * rawBalance, hasError } ] }`.
+ * @param port - Auth proxy port.
+ * @param addresses - Wallet addresses to read.
+ * @param forceRefresh - Ignored by status-go; kept for callers that still pass it.
+ * @returns Balance map: `{ "0xAddr": [ { tokenAddress, tokenChainId, rawBalance,
+ * hasError } ] }`.
+ * @remarks
+ * `forceRefresh` is accepted but ignored in `pkg/services/wallet/api.go`
+ * (`FetchOrGetCachedWalletBalances`): the method reads the cache filled by the
+ * background `MultistandardBalanceController`. A balance therefore does not
+ * update right after a transfer, no matter how often it is requested; polling on
+ * a timer is required. Use `restartWalletReloadTimer` to trigger a refetch.
  */
 export async function getBalances(
   port: number,
@@ -90,14 +90,16 @@ export async function getBalances(
 }
 
 /**
- * Метаданные токенов (symbol, decimals, name) для активных сетей.
+ * Token metadata (symbol, decimals, name) for the active networks.
  *
- * `StorageToken` из `getBalances` НЕ содержит `symbol` и `decimals` — только
- * адрес, chainId, rawBalance и hasError. Без этого вызова баланс невозможно
- * ни подписать, ни перевести в человеческие единицы, ни показать в списке.
- *
- * Ответ большой (~4.6 МБ, ~17 700 токенов), поэтому в `walletStore` он
- * запрашивается один раз за сессию и кэшируется.
+ * @param port - Auth proxy port.
+ * @returns Token records.
+ * @remarks
+ * A `StorageToken` from `getBalances` has no `symbol` or `decimals`, only address,
+ * chainId, rawBalance and hasError. Without this call a balance cannot be
+ * labelled, converted to human units or shown in a list. The response is large
+ * (~4.6 MB, ~17 700 tokens), so `walletStore` fetches it once per session and
+ * caches it.
  */
 export async function getTokensForActiveNetworksMode(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
@@ -110,10 +112,13 @@ export async function getTokensForActiveNetworksMode(port: number): Promise<any[
 }
 
 /**
- * Настройки профиля.
+ * Profile settings.
  *
- * Содержат `mnemonic` — seed-фразу. Тело ответа не логируется
- * (`statusFetch`), но класть этот объект в стор или в лог нельзя.
+ * @param port - Auth proxy port.
+ * @returns Settings object.
+ * @remarks
+ * The object contains `mnemonic`, the seed phrase. `statusFetch` does not log
+ * response bodies, but this object must never be put into a store or a log.
  */
 export async function getSettings(port: number): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -125,12 +130,16 @@ export async function getSettings(port: number): Promise<any> {
 }
 
 /**
- * Сохраняет настройку профиля.
+ * Saves a profile setting.
  *
- * `key` — «react-имя» поля, как его ждёт status-go, вместе со знаком вопроса
- * для булевых: `test-networks-enabled?` (см. `internal/db/multiaccounts/settings/columns.go`).
- * Обычное имя поля (`test_networks_enabled`) здесь не подойдёт — метод ищет
- * поле по react-имени.
+ * @param port - Auth proxy port.
+ * @param key - "React name" of the field, with a question mark for booleans.
+ * @param value - New value.
+ * @returns The backend's response.
+ * @remarks
+ * status-go looks the field up by its react name, such as
+ * `test-networks-enabled?` (internal/db/multiaccounts/settings/columns.go). The
+ * plain field name (`test_networks_enabled`) does not work here.
  */
 export async function saveSetting(
   port: number,
@@ -146,30 +155,29 @@ export async function saveSetting(
 }
 
 /**
- * Включает или выключает показ тестовых сетей.
+ * Turns the display of test networks on or off.
  *
- * ## Почему это отдельный вызов, а не следствие выбора сети
+ * @param port - Auth proxy port.
+ * @param enabled - Whether test networks are active.
+ * @returns The backend's response.
+ * @remarks
+ * This is a separate flag, not a consequence of the network choice. Stauri's
+ * `STAURI_NETWORK` is a Rust setting: which network is primary, which waku fleet
+ * and which data directory. status-go knows nothing about it and has its own
+ * `test-networks-enabled?` flag, which `networks.GetActiveNetworks()` uses to
+ * filter networks: `false` activates mainnet networks, `true` the test ones.
+ * While the flag is unset, a profile started as "sepolia" computes balances on
+ * mainnet networks (1, 10, 56, 8453, 42161) and shows zeros.
  *
- * Выбор сети в Stauri (`STAURI_NETWORK`) — это конфиг Rust: какая сеть
- * считается основной, какой waku-fleet и какой каталог данных. Он ничего не
- * говорит самому status-go. У status-go есть собственный флаг
- * `test-networks-enabled?`, и `networks.GetActiveNetworks()` фильтрует сети по
- * нему: при `false` активны mainnet-сети, при `true` — тестовые.
+ * Enabling the flag emits `EventActiveNetworksChanged`, after which the balance
+ * controller refetches networks. RPC clients are cached per chainId, so providers
+ * for the new networks must be registered again — the caller does that after
+ * switching.
  *
- * Пока флаг не выставлен, профиль, запущенный как «sepolia», считает балансы
- * по mainnet-сетям (1, 10, 56, 8453, 42161) и показывает нули — ровно то,
- * что видел пользователь при первом запуске в Sepolia.
- *
- * Включение флага уведомляет `EventActiveNetworksChanged`, после чего
- * контроллер балансов перезапрашивает сети. Но RPC-клиенты кэшируются по
- * chainID, поэтому провайдеров для новых сетей нужно прописать заново —
- * вызывающий код делает это после переключения.
- *
- * ## Почему нельзя вызвать до входа
- *
- * `settings_*` регистрируется в `initServices`, то есть после старта ноды, а
- * нода стартует внутри `LoginAccount`. До входа вызов вернёт «method not
- * found» — так же, как `networks_*`.
+ * The call cannot be made before login: `settings_*` is registered in
+ * `initServices`, which runs after the node starts, and the node starts inside
+ * `LoginAccount`. Before that the call answers "method not found", as does
+ * `networks_*`.
  */
 export async function setTestNetworksEnabled(
   port: number,
@@ -179,12 +187,14 @@ export async function setTestNetworksEnabled(
 }
 
 /**
- * Текущее значение флага тестовых сетей.
+ * Current value of the test networks flag.
  *
- * Читаем весь объект настроек и берём одно поле: отдельного геттера для
- * этого флага в status-go нет. Объект содержит seed-фразу (`mnemonic`),
- * поэтому его нельзя ни логировать, ни класть в стор — только вернуть
- * нужное поле и забыть.
+ * @param port - Auth proxy port.
+ * @returns Whether test networks are enabled.
+ * @remarks
+ * Reads the whole settings object and takes one field, because status-go has no
+ * dedicated getter for this flag. The object carries the seed phrase, so it must
+ * not be logged or stored.
  */
 export async function getTestNetworksEnabled(port: number): Promise<boolean> {
   const settings = await getSettings(port);
@@ -192,11 +202,15 @@ export async function getTestNetworksEnabled(port: number): Promise<boolean> {
 }
 
 /**
- * Приводит режим сетей к нужному и сообщает, менялся ли он.
+ * Brings the network mode to the requested value.
  *
- * Возвращает `true`, если флаг пришлось переписать: в этом случае набор
- * активных сетей изменился, и RPC-клиенты бэкенда собраны под прежний —
- * ноду нужно перезапустить, иначе балансы придут не по тем сетям.
+ * @param port - Auth proxy port.
+ * @param enabled - Whether test networks should be active.
+ * @returns `true` when the flag had to be rewritten.
+ * @remarks
+ * A `true` result means the set of active networks changed while the backend's
+ * RPC clients were built for the previous one: the node must be restarted, or
+ * balances will come from the wrong networks.
  */
 export async function ensureTestNetworkMode(
   port: number,
@@ -209,10 +223,15 @@ export async function ensureTestNetworkMode(
 }
 
 /**
- * Разбор адреса получателя: возвращает ENS-имя для адреса.
+ * Resolves an address into its ENS name and details.
  *
- * Используется на шаге проверки отправки, чтобы человек увидел «0x…» вместе
- * с именем, если оно есть, — это последняя возможность заметить подмену.
+ * @param port - Auth proxy port.
+ * @param chainId - Chain to resolve on.
+ * @param address - Address to look up.
+ * @returns Address details, including the ENS name when there is one.
+ * @remarks
+ * Used on the send confirmation step so the user sees `0x…` together with a name
+ * if one exists — the last chance to notice a substituted address.
  */
 export async function getAddressDetails(
   port: number,
@@ -228,22 +247,20 @@ export async function getAddressDetails(
 }
 
 /**
- * Запускает полный перезапрос балансов.
+ * Triggers a full refetch of balances.
  *
- * ## Почему это единственный работающий способ обновить
+ * @param port - Auth proxy port.
+ * @returns The backend's response.
+ * @remarks
+ * This is the only working way to refresh balances, since `getBalances` ignores
+ * `forceRefresh`. `pkg/services/wallet/api.go` documents it above
+ * `FetchOrGetCachedWalletBalances`: the only outlier that needs a forced refresh
+ * is the user-triggered one, handled by `RestartWalletReloadTimer`. This method
+ * calls `multistandardBalanceController.TriggerFullFetch()`.
  *
- * `getBalances` принимает `forceRefresh`, но игнорирует его — так и написано
- * в `pkg/services/wallet/api.go` над `FetchOrGetCachedWalletBalances`:
- *
- * > The client doesn't really need to force balance refreshes ... The only
- * > outlier is the user-triggered refresh, which is handled in API method
- * > RestartWalletReloadTimer
- *
- * Этот метод и есть та самая «кнопка обновить»: он дёргает
- * `multistandardBalanceController.TriggerFullFetch()`. Запрос асинхронный —
- * ответ приходит сразу, а числа появляются в кэше через несколько секунд,
- * поэтому вызывающий код должен перечитать балансы не один раз, а спустя
- * паузу.
+ * The fetch is asynchronous: the response comes back immediately and the numbers
+ * appear in the cache a few seconds later, so callers must re-read balances after
+ * a delay rather than once.
  */
 export async function restartWalletReloadTimer(port: number): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
@@ -255,25 +272,30 @@ export async function restartWalletReloadTimer(port: number): Promise<any> {
 }
 
 // ===========================================================================
-// ОТПРАВКА
+// SENDING
 // ===========================================================================
 //
-// Путь перевода в status-go трёхшаговый и требует пароль (см.
-// `docs/ru/architecture.md` §5.4):
+// A transfer is a three-step path in status-go and needs the password:
 //
 //   buildTransaction(chainID, sendTxArgs) → { messageToSign, txArgs }
-//   signMessage(messageToSign, from, password) → подпись
+//   signMessage(messageToSign, from, password) → signature
 //   sendTransactionWithSignature(chainID, "WalletTransfer", txArgs, sig) → hash
 //
-// ## Почему эти три вызова не должны зваться из компонентов
-//
-// `wallet_signMessage` подписывает произвольные 32 байта ключом кошелька и
-// не знает, что это за байты. Если пароль и последовательность шагов живут
-// в webview, любая XSS получает универсальную машинку подписи. Поэтому вся
-// отправка уходит в Rust одной командой (`send_transfer`), а эти обёртки
-// оставлены для тестов и для отладки через консоль — не для UI.
+// These three calls must not be made from components. `wallet_signMessage` signs
+// arbitrary 32 bytes with the wallet key and does not know what they mean, so if
+// the password and the sequence lived in the webview, any XSS would get a
+// universal signing machine. All sending therefore goes through one Rust command
+// (`send_transfer`), and these wrappers exist for tests and console debugging, not
+// for the interface.
 
-/** Собирает транзакцию и возвращает хэш, который надо подписать. */
+/**
+ * Builds a transaction and returns the hash that must be signed.
+ *
+ * @param port - Auth proxy port.
+ * @param chainId - Chain the transaction targets.
+ * @param sendTxArgsJson - Transaction arguments as a JSON string.
+ * @returns The backend's build result, including `messageToSign` and `txArgs`.
+ */
 export async function buildTransaction(
   port: number,
   chainId: number,
@@ -287,7 +309,18 @@ export async function buildTransaction(
   });
 }
 
-/** Подписывает 32 байта ключом аккаунта. Требует пароль. */
+/**
+ * Signs 32 bytes with the account key.
+ *
+ * @param port - Auth proxy port.
+ * @param message - Hash to sign.
+ * @param address - Wallet address whose key signs.
+ * @param password - Profile password.
+ * @returns The signature.
+ * @remarks
+ * Requires the password; see the module comment for why this is not exposed to the
+ * interface.
+ */
 export async function signMessage(
   port: number,
   message: string,
@@ -302,7 +335,20 @@ export async function signMessage(
   });
 }
 
-/** Отправляет подписанную транзакцию в сеть. */
+/**
+ * Sends a signed transaction to the network.
+ *
+ * @param port - Auth proxy port.
+ * @param chainId - Chain to send on.
+ * @param txType - Transaction type.
+ * @param sendTxArgsJson - Transaction arguments as a JSON string.
+ * @param signature - Signature produced by `signMessage`.
+ * @returns The backend's response.
+ * @remarks
+ * `wallet_signMessage` returns the signature with a `0x` prefix, and
+ * `sendTransactionWithSignature` accepts only bare hex, so the prefix must be
+ * stripped before calling. The Rust transfer command does this.
+ */
 export async function sendTransactionWithSignature(
   port: number,
   chainId: number,
@@ -318,7 +364,7 @@ export async function sendTransactionWithSignature(
   });
 }
 
-/** Транзакции, ожидающие подтверждения. Для статуса на экране. */
+/** Transactions waiting for confirmation, for the status indicator on screen. */
 export async function getPendingTransactions(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -329,7 +375,7 @@ export async function getPendingTransactions(port: number): Promise<any[]> {
   return res.result || [];
 }
 
-/** Рекомендованные комиссии сети (в gwei). */
+/** Network-suggested fees, in gwei. */
 export async function getSuggestedFees(port: number, chainId: number): Promise<any> {
   return await statusFetch(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -340,13 +386,13 @@ export async function getSuggestedFees(port: number, chainId: number): Promise<a
 }
 
 // ===========================================================================
-// ON-RAMP (покупка)
+// ON-RAMP (BUYING)
 // ===========================================================================
 //
-// Платёж идёт на стороне провайдера, Stauri только передаёт адрес и
-// открывает ссылку внешним обработчиком.
+// The payment happens on the provider's side; Stauri only passes the address and
+// opens the link in an external handler.
 
-/** Доступные провайдеры покупки. В testnet обычно пусто. */
+/** Available purchase providers, usually empty on testnet. */
 export async function getCryptoOnRamps(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -357,7 +403,7 @@ export async function getCryptoOnRamps(port: number): Promise<any[]> {
   return res.result || [];
 }
 
-/** Ссылка на провайдера с подставленным адресом получения. */
+/** Provider link with the receiving address filled in. */
 export async function getCryptoOnRampUrl(
   port: number,
   providerId: string,
@@ -373,13 +419,13 @@ export async function getCryptoOnRampUrl(
 }
 
 // ===========================================================================
-// СЕТИ И RPC-ПРОВАЙДЕРЫ
+// NETWORKS AND RPC PROVIDERS
 // ===========================================================================
 //
-// Это не кошелёк в чистом смысле, но живёт рядом: сети настраивает
-// `rpcConfig.ts` при подключении, и без этих вызовов балансы не придут.
+// Not wallet code strictly speaking, but it lives next to it: networks are set up
+// by `rpcConfig.ts` on connect, and without these calls no balances arrive.
 
-/** Сети, известные бэкенду, с их RPC-провайдерами. */
+/** Networks known to the backend, with their RPC providers. */
 export async function getFlatEthereumChains(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -391,13 +437,19 @@ export async function getFlatEthereumChains(port: number): Promise<any[]> {
 }
 
 /**
- * Добавляет пользовательский RPC-провайдер к сети.
+ * Adds a user RPC provider to a network.
  *
- * Встроенные провайдеры status-go (direct-grove) больше не резолвятся, а
- * direct-infura упирается в таймаут — в итоге все балансы приходят с
- * `hasError = true`. Свой проверенный endpoint (через локальный форвардер)
- * чинит это. Бэкенд дописывает пользовательских провайдеров рядом со
- * встроенными и использует их первыми, поэтому вызывать это безопасно.
+ * @param port - Auth proxy port.
+ * @param chainId - Chain to configure.
+ * @param name - Provider name, shown in status-go settings.
+ * @param url - Endpoint URL.
+ * @returns The backend's response.
+ * @remarks
+ * Without this, balances arrive with `hasError = true`: status-go's built-in
+ * providers no longer resolve (direct-grove) or time out (direct-infura). A
+ * verified endpoint of our own, routed through the local forwarder, fixes that.
+ * The backend appends user providers next to the built-in ones and prefers them,
+ * so calling this is safe.
  */
 export async function setChainUserRpcProvider(
   port: number,
@@ -434,13 +486,12 @@ export async function setChainUserRpcProvider(
 // ENS
 // ===========================================================================
 //
-// Служба ENS зарегистрирована в RPC-сервере под пространством имён `ens`
-// (pkg/services/ens/service.go). Регистрация имени здесь НЕ делается:
-// она идёт только Router-путём (`SendType: ENSRegister`), потому что на
-// mainnet оплата в SNT, а на testnet — в STT. См. `src-tauri/src/ens.rs`
-// и `docs/ru/architecture.md` §5.4.
+// The ENS service is registered on the RPC server under the `ens` namespace
+// (pkg/services/ens/service.go). Registering a name is NOT done here: it goes only
+// through the Router path (`SendType: ENSRegister`), because payment on mainnet is
+// in SNT and on testnet in STT. See `src-tauri/src/ens.rs`.
 
-/** Имена ENS этого профиля. */
+/** ENS names of this profile. */
 export async function getEnsUsernames(port: number): Promise<any[]> {
   const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -452,19 +503,22 @@ export async function getEnsUsernames(port: number): Promise<any[]> {
 }
 
 /**
- * Записывает имя в профиль (и синхронизирует его на привязанные устройства).
+ * Records an ENS name on the profile and syncs it to linked devices.
  *
- * ## Почему это нужно после регистрации
+ * @param port - Auth proxy port.
+ * @param chainId - Chain the name belongs to.
+ * @param username - Full name, including the `.eth` suffix.
+ * @returns Nothing.
+ * @remarks
+ * Registration is a blockchain transaction, and the profile knows nothing about
+ * it. `ens_getEnsUsernames` reads status-go's own `ens_usernames` table rather than
+ * the contract, so without `ens_add` a freshly registered name is absent from that
+ * table and appears nowhere.
  *
- * Регистрация — транзакция в блокчейне; профиль о ней ничего не знает.
- * `ens_getEnsUsernames` читает **свою** таблицу `ens_usernames`, а не
- * контракт, поэтому без `ens_add` только что зарегистрированное имя там
- * отсутствует и нигде не показывается.
- *
- * `ens_add` сверяет `ValidateUsername` (полная форма, суффикс `.eth`
- * обязателен) и отдаёт запись через `SyncEnsNamesWithDispatchMessage` —
- * сообщение уходит в чат синхронизации, но получает ли его кто-то, зависит
- * от наличия привязанных устройств. Для одного профиля это безвредно.
+ * `ens_add` runs `ValidateUsername` (full form, `.eth` suffix required) and
+ * dispatches the record with `SyncEnsNamesWithDispatchMessage`: the message goes
+ * to the sync chat, and whether anyone receives it depends on linked devices.
+ * Harmless for a single profile.
  */
 export async function addEnsUsername(port: number, chainId: number, username: string): Promise<void> {
   await statusFetch(port, 'CallRPC', {
@@ -476,10 +530,14 @@ export async function addEnsUsername(port: number, chainId: number, username: st
 }
 
 /**
- * Имя ENS для адреса.
+ * ENS name of an address.
  *
- * Возвращает пустую строку, если имени нет, — это не ошибка, а обычный
- * случай: у большинства адресов имени нет.
+ * @param port - Auth proxy port.
+ * @param chainId - Chain to resolve on.
+ * @param address - Address to look up.
+ * @returns The name, or an empty string when the address has none.
+ * @remarks
+ * An empty result is not an error: most addresses have no name.
  */
 export async function ensGetName(
   port: number,
@@ -496,10 +554,15 @@ export async function ensGetName(
 }
 
 /**
- * Адрес, на который указывает имя ENS.
+ * Address an ENS name points to.
  *
- * Нужен в поле получателя: человек вводит `vitalik.eth`, отправляем на
- * адрес. Ответ `null`/пустой — имени нет.
+ * @param port - Auth proxy port.
+ * @param chainId - Chain to resolve on.
+ * @param username - Name such as `vitalik.eth`.
+ * @returns The address, or an empty string when the name does not exist.
+ * @remarks
+ * Used in the recipient field: the user types a name and the transfer goes to the
+ * address behind it.
  */
 export async function ensAddressOf(
   port: number,
@@ -515,7 +578,7 @@ export async function ensAddressOf(
   return res.result || '';
 }
 
-/** Цена регистрации имени. */
+/** Registration price of a name. */
 export async function ensPrice(port: number, chainId: number): Promise<string> {
   const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
     jsonrpc: '2.0',
@@ -526,7 +589,7 @@ export async function ensPrice(port: number, chainId: number): Promise<string> {
   return res.result || '';
 }
 
-/** Когда истекает имя (RFC3339). Пусто — имя не зарегистрировано. */
+/** When the name expires (RFC3339). Empty when the name is not registered. */
 export async function ensExpireAt(
   port: number,
   chainId: number,
@@ -542,27 +605,28 @@ export async function ensExpireAt(
 }
 
 // ===========================================================================
-// ЦЕНЫ
+// PRICES
 // ===========================================================================
 
 /**
- * Цены токенов в одной валюте.
+ * Token prices in one currency.
  *
- * ## Почему ключ строится иначе, чем в остальном коде
+ * @param port - Auth proxy port.
+ * @param tokenKeys - Keys in status-go form, `chainId-address`.
+ * @param currency - Currency code.
+ * @returns Flat map of token key to price; tokens without a price are omitted.
+ * @remarks
+ * The key format matters. `walletStore` uses `chainId:address`, while status-go
+ * expects `chainId-address` (`TokenKey` in
+ * `pkg/services/wallet/token/tokenlist/model.go`). A key with a colon is not
+ * recognised and the price silently comes back empty.
  *
- * Здесь `walletStore` использует `chainId:адрес`, а status-go —
- * `chainId-адрес` (`TokenKey` в `pkg/services/wallet/token/tokenlist/model.go`:
- * `fmt.Sprintf("%d-%s", chainID, strings.ToLower(address.Hex()))`). Ключ с
- * двоеточием бэкенд просто не узнает, и цена молча придёт пустой.
+ * Test networks yield no prices: CoinGecko does not list their tokens, and
+ * `mapTokensToIds` drops everything that is not `IsMainnet()`. An empty response
+ * for Sepolia is normal.
  *
- * ## Почему тестовые сети не дают цен
- *
- * Коингеко не перечисляет токены тестовых сетей, а `mapTokensToIds`
- * отбрасывает всё, что не `IsMainnet()`. Для Sepolia ответ будет пустым —
- * это норма, а не ошибка.
- *
- * Возвращает плоскую карту: ключ → цена. Вложенность по валютам наружу не
- * нужна, пока валюта одна.
+ * A zero price is kept (a token without a market), while an absent key means "no
+ * price"; the two are not conflated.
  */
 export async function getTokenPrices(
   port: number,
@@ -586,8 +650,8 @@ export async function getTokenPrices(
   const flat: Record<string, number> = {};
   for (const [key, byCurrency] of Object.entries(raw)) {
     const value = byCurrency?.[currency];
-    // Ноль — тоже значение (токен без рынка), но отсутствие ключа означает
-    // «цены нет», и путать эти случаи незачем.
+    // Zero is a value too (a token with no market), but an absent key means "no
+    // price", and the two should not be conflated.
     if (typeof value === 'number' && Number.isFinite(value)) flat[key] = value;
   }
   return flat;

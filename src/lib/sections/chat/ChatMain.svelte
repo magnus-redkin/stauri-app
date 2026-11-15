@@ -32,7 +32,7 @@
 
   let messages = $state<any[]>([]);
 
-  /** Нода отдаёт сообщения от новых к старым; в ленте нужно сверху вниз. */
+  /** The node returns messages newest first; the feed renders top to bottom. */
   const byTime = (a: any, b: any) =>
     (Number(a.clock ?? 0) || Number(a.whisperTimestamp ?? 0)) -
     (Number(b.clock ?? 0) || Number(b.whisperTimestamp ?? 0));
@@ -40,30 +40,34 @@
     messages = [...list].sort(byTime);
   }
 
-  /** Системные события, которые в личном чате не выводим: заявка уже видна карточкой. */
+  /** System events hidden in a direct chat: the request is already shown as a card. */
   const HIDDEN_CONTENT = new Set([15, 16]); // MUTUAL_EVENT_SENT, MUTUAL_EVENT_ACCEPTED
   const CONTACT_REQUEST = 11;
 
-  /** Личный чат: без системных событий, по времени. */
+  /** Direct chat messages in time order, without system events. */
   const directMessages = $derived(
     messages.filter((m) => !HIDDEN_CONTENT.has(Number(m.contentType)))
   );
 
-  /** Конец ленты: к нему прокручиваем при открытии и новых сообщениях. */
+  /** Scrolls to the end of the feed, used on open and on new messages. */
   function scrollToEnd() {
     queueMicrotask(() => document.getElementById('chat-end')?.scrollIntoView({ block: 'end' }));
   }
   let inputText = $state('');
 
-  /** Запись, чьи комментарии открыты на отдельной странице. `null` — лента. */
+  /** Post whose comments are open on a separate page. `null` means the feed. */
   let openPostId = $state<string | null>(null);
 
-  /** Заявки на вступление, которые ждут решения автора. */
+  /** Join requests awaiting the author's decision. */
   let joinRequests = $state<PendingJoinRequest[]>([]);
 
   /**
-   * Заявки нужны только автору канала — тому, кто может их решать.
-   * Загружаем при смене чата; ошибка даёт пустой список (см. akk.ts).
+   * Loads pending join requests for the selected channel.
+   *
+   * @remarks
+   * Requests are only relevant to the channel author, the one who can decide them.
+   * They are reloaded when the chat changes; a failure yields an empty list (see
+   * akk.ts).
    */
   $effect(() => {
     const chat = chatsState.selected;
@@ -79,7 +83,12 @@
     pendingJoinRequests(port, chat.communityId).then((list) => (joinRequests = list));
   });
 
-  /** Решение по заявке: принять или отклонить, затем перечитать список. */
+  /**
+   * Accepts or declines a join request, then reloads the pending list.
+   *
+   * @param request - The pending join request to decide on.
+   * @param accept - `true` to accept, `false` to decline.
+   */
   async function decide(request: PendingJoinRequest, accept: boolean) {
     const port = statusState.backendPort;
     if (!port || !chatsState.selected?.communityId) return;
@@ -97,19 +106,20 @@
   }
   let isLoading = $state(false);
 
-  /** Открыто ли меню «⋯» у канала. Меню открывается по кнопке, а не правым кликом. */
+  /** Whether the channel "⋯" menu is open. It opens by button, not by right click. */
   let menuOpen = $state(false);
   let menuNotice = $state('');
 
-  /** Запись, у которой открыто меню «⋯». */
+  /** Post whose "⋯" menu is open. */
   let postMenuId = $state<string | null>(null);
 
   /**
-   * Ссылка на запись.
+   * Copies a link to the channel.
    *
-   * В status-go ссылки на отдельное сообщение нет (`DeepLink` знает только
-   * канал), поэтому ссылка ведёт на канал целиком. SIM откроет канал, а
-   * запись в Stauri можно найти по тексту. Это сознательное ограничение.
+   * @remarks
+   * status-go has no per-message link (`DeepLink` only knows channels), so the
+   * link points to the channel as a whole: SIM opens the channel, and the post can
+   * be found in Stauri by its text. This limitation is deliberate.
    */
   async function copyPostLink() {
     postMenuId = null;
@@ -128,11 +138,12 @@
   }
 
   /**
-   * Копирует ссылку-приглашение на канал.
+   * Copies the channel invite link.
    *
-   * Ссылка строится из UUID канала и ключа сообщества (`channelInviteLink`).
-   * Ключ сообщества — тот же, что в `communityId`: у канала АКК сообщество
-   * одно и служебное, поэтому его ключ и есть ключ «канала».
+   * The link is built from the channel UUID and the community key
+   * (`channelInviteLink`). The community key is the same one as in `communityId`:
+   * an AKK channel lives in a single service community, so that community's key is
+   * effectively the channel key.
    */
   async function copyInvite() {
     menuOpen = false;
@@ -153,12 +164,12 @@
   let isAccepting = $state(false);
 
   /**
-   * Раскрытые записи ленты.
+   * Keys of feed posts that are currently expanded.
    *
-   * `SvelteSet` реактивен сам, поэтому не оборачивается в `$state` и не
-   * переприсваивается — переприсваивание потеряло бы подписки. Состояние
-   * живёт в компоненте и не сохраняется: это «посмотреть сейчас», а не
-   * настройка.
+   * @remarks
+   * `SvelteSet` is reactive on its own, so it is neither wrapped in `$state` nor
+   * reassigned: reassigning would drop the subscriptions. This state lives in the
+   * component and is not persisted; it is a "view for now", not a preference.
    */
   const expandedItems = new SvelteSet<string>();
 
@@ -168,48 +179,53 @@
   }
 
   /**
-   * Открывает адрес системным обработчиком.
+   * Opens a URL with the system handler.
    *
-   * Не `<a target="_blank">`: в WebKitGTK внутри Tauri-окна такой переход
-   * часто не делает ничего, потому что webview не обязан открывать окна.
-   * И не `plugin-shell.open`: он требует разрешения `shell:allow-open` в
-   * capabilities, а такое разрешение дало бы любой XSS в интерфейсе право
-   * запускать чужие программы. Команда `open_external` проверяет схему в
-   * Rust и там же пробует открыть Telegram-ссылку в самом Telegram.
+   * @param url - The URL to open.
+   *
+   * @remarks
+   * Neither `<a target="_blank">` nor `plugin-shell.open` is used: WebKitGTK inside
+   * a Tauri window often does nothing for such a navigation, because the webview
+   * is not obliged to open windows, and `plugin-shell.open` would need the
+   * `shell:allow-open` capability, which would let any XSS in the UI launch
+   * arbitrary programs. The `open_external` command validates the scheme in Rust
+   * and tries to open a Telegram link in Telegram itself.
    */
   async function openExternal(url: string) {
     try {
       await invoke('open_external', { url });
     } catch (e) {
-      // Не наш контент: ошибка открытия не должна ломать ленту. Адрес
-      // показан рядом целиком, его можно открыть руками.
+      // Foreign content: a failed open must not break the feed. The full address
+      // is shown next to it and can be opened manually.
       error('[chat] failed to open link', e);
     }
   }
 
   /**
-   * Записи канала и комментарии к ним — из одного и того же списка.
+   * Channel posts, without the comments that answer them.
    *
-   * ## Почему разделение на клиенте
-   *
-   * Комментарий — обычное сообщение с непустым `responseTo`, лежащее в той
-   * же таблице с тем же `local_chat_id`. `MessageByChatID` фильтрует
-   * `response_to` только через `thread_id`, а этот фильтр отключён при
-   * выключенных threads:
+   * @remarks
+   * Posts and comments come from the same list. A comment is an ordinary message
+   * with a non-empty `responseTo`, stored in the same table under the same
+   * `local_chat_id`. `MessageByChatID` filters `response_to` only through
+   * `thread_id`, and that filter is off while threads are disabled:
    *
    * > If threads are disabled, then we are backwards compatible and messages
    * > in threads are treated as normal messages, so we don't filter them out.
    *
-   * Проверено живьём (docs/ru/akk_scheme.md §12): ответ приходит в общем
-   * списке. Поэтому без разделения здесь комментарии висели бы в ленте как
-   * обычные сообщения.
+   * Verified live (docs/ru/akk_scheme.md §12): the reply arrives in the common
+   * list. Without this split, comments would hang in the feed as ordinary posts.
    */
   const posts = $derived(messages.filter((m) => !isReply(m)));
 
-  /** Комментарии, сгруппированные по id родительской записи. */
+  /**
+   * Comments grouped by the id of their parent post.
+   *
+   * @remarks
+   * A `SvelteMap` rather than `Map`: the map is read from the template, and a plain
+   * `Map` is not tracked by Svelte reactivity (`prefer-svelte-reactivity`).
+   */
   const repliesByParent = $derived.by(() => {
-    // `SvelteMap`, а не `Map`: множество читается в шаблоне, и обычная Map
-    // не отслеживается реактивностью Svelte (`prefer-svelte-reactivity`).
     const map = new SvelteMap<string, any[]>();
     for (const msg of messages) {
       if (!isReply(msg)) continue;
@@ -222,21 +238,18 @@
   });
 
   /**
-   * Можно ли писать в выбранный чат.
+   * Whether the selected chat accepts comments (anyone allowed to post may comment).
    *
-   * Внешний источник только читается: писать некуда, и поле ввода
-   * отсутствует вовсе, а не отключено без объяснения
-   * (docs/ru/providers_and_dapps.md §9.2).
+   * @remarks
+   * An external source is read-only: there is nowhere to post, so the input is absent
+   * rather than disabled without explanation (docs/ru/providers_and_dapps.md §9.2).
    *
-   * `canPost === false` — канал сообщества, куда мы не можем писать. Это
-   * ровно случай просматриваемого сообщества (spectate): сообщения уже
-   * читаются, но `Community.CanPost` для неучастника возвращает `false`.
-   * Без этой проверки в просмотре показывалось бы поле ввода, а отправка
-   * падала бы на сервере.
-   */
-  /**
-   * Можно ли комментировать в выбранный чат (всем, кому разрешено писать).
-   * Записи в канале — отдельное право: см. `canRecordHere`.
+   * `canPost === false` means a community channel that this account cannot post in.
+   * That is exactly the spectated community case: messages are readable, but
+   * `Community.CanPost` returns `false` for a non-member. Without this check a browse
+   * view would show the input and sending would fail on the server.
+   *
+   * Writing a post is a separate right; see `canRecordHere`.
    */
   const canWrite = $derived(
     !!chatsState.selected &&
@@ -246,10 +259,11 @@
   );
 
   /**
-   * Можно ли написать новую запись в канал.
+   * Whether a new post can be written in the channel.
    *
-   * В 1-1 чатах записи пишут обе стороны, поэтому правило только для каналов.
-   * В канале записи пишет только автор (`canPostRecord`).
+   * Both sides write posts in a one-to-one chat, so the rule only applies to
+   * channels. In a channel only the author writes posts, except for the `issues`
+   * kind where every member may (`canRecord`).
    */
   const canRecordHere = $derived(
     canWrite &&
@@ -259,15 +273,16 @@
       )
   );
 
-  /** Сообщество выбранного канала — нужно для отправки сообщения. */
+  /** Community of the selected channel, needed to send a message. */
   const communityId = $derived(chatsState.selected?.communityId || '');
 
   /**
-   * Подписка, если выбран внешний источник.
+   * The subscription backing the selected external source, or `null`.
    *
-   * Внешний чат не существует в бэкенде: его id — `feed:<url>`, а содержимое
-   * лежит в `feedsState`. Поэтому сообщения берём не из `messages`, а прямо
-   * из подписки, и загрузка истории ниже для него не запускается.
+   * An external chat does not exist in the backend: its id is `feed:<url>` and its
+   * content lives in `feedsState`. Messages are therefore taken straight from the
+   * subscription instead of `messages`, and the history load below does not run for
+   * it.
    */
   const feed = $derived.by(() => {
     const chat = chatsState.selected;
@@ -276,9 +291,8 @@
     return feedsState.subscriptions.get(url) ?? null;
   });
 
-  // Загружаем историю при смене чата
-  // Диагностика ввода: при выборе чата пишем, какие условия открывают или
-  // закрывают форму ответа. Только чтение, побочных записей нет.
+  // Input diagnostics: on chat selection logs which conditions open or close the
+  // composer. Read-only, no side effects.
   $effect(() => {
     const chat = chatsState.selected;
     if (!chat) return;
@@ -292,11 +306,13 @@
     });
   });
 
-  // Загружаем историю при смене чата
   /**
-   * Открытая переписка обновляется сама раз в 10 с. Сообщение, пришедшее до
-   * того, как чат открыт или опрос списка его увидел, иначе не попало бы в
-   * экран: сравнивать с базой опроса тут не на что. Запрос к одному чату дешёвый.
+   * Polls the open conversation every 10 s.
+   *
+   * @remarks
+   * A message that arrived before the chat was opened, or before the list poll
+   * noticed it, would otherwise never reach this screen: there is no poll baseline
+   * to compare against here. Requesting a single chat is cheap.
    */
   $effect(() => {
     const chat = chatsState.selected;
@@ -341,13 +357,12 @@
   });
 
   /**
-   * Обновление открытой ленты по сигналу `messages.new`.
+   * Reloads the open feed when the `messages.new` signal fires.
    *
-   * Раньше история грузилась только при смене чата, поэтому новый ответ из
-   * другого клиента появлялся в счётчике списка, но не в открытой ленте.
-   * Здесь перечитываем историю без очистки и без индикатора загрузки, чтобы
-   * лента не мигала. `untrack` вокруг записи в `messages` обязателен: иначе
-   * эффект, читающий и пишущий `messages`, перезапускал бы сам себя.
+   * @remarks
+   * The reload skips the clearing step and the loading indicator so the feed does
+   * not flicker. `untrack` around the write to `messages` is required: otherwise an
+   * effect that both reads and writes `messages` would retrigger itself.
    */
   $effect(() => {
     const signal = statusState.lastMessageSignal;
@@ -355,9 +370,9 @@
     const port = statusState.backendPort;
     if (signal === 0 || !chat || chat.type === 'external' || chat.isPendingRequest || !port) return;
 
-    // Перечитываем, только если сообщение пришло именно в открытый чат.
-    // Сигналы из остальных чатов приходят постоянно (каналы, которых нет в
-    // списке), и без этой проверки открытая лента перечитывалась бы на каждый.
+    // Reload only when the message landed in the open chat. Signals from other
+    // chats arrive constantly (channels absent from the list), so without this check
+    // the open feed would be reloaded for every one of them.
     if (!statusState.pendingChatIds.has(chat.id)) return;
 
     untrack(() => {
@@ -380,22 +395,15 @@
   });
 
   /**
-   * Своё ли это сообщение.
+   * Display name of a message author.
    *
-   * Бэкенд не пишет `from: 'me'` — там публичный ключ отправителя. Поэтому
-   * сравниваем с `statusState.publicKey`. Запасной признак — `outgoingStatus`:
-   * status-go заполняет его только у исходящих (`sending`/`sent`/`delivered`),
-   * и это единственный надёжный признак до того, как ключ профиля загружен.
+   * @param msg - Message whose author is needed.
+   * @returns "You" for own messages, otherwise the contact name when known, or the
+   * shortened key.
    *
-   * Раньше после отправки сообщение добавлялось локально с `from: 'me'`, а
-   * после перезагрузки истории приходило с ключом и отрисовывалось как чужое —
-   * справа, а потом слева.
-   */
-  /**
-   * Имя автора сообщения для отображения.
-   *
-   * Своё сообщение подписываем «Вы». Чужое — по контакту, если он есть, иначе
-   * коротким ключом: контакт нам не обязан быть знаком.
+   * @remarks
+   * A foreign author is not necessarily a contact, so an unknown key is rendered
+   * shortened rather than omitted.
    */
   function authorNameOf(msg: any): string {
     if (isOwn(msg)) return i18n.t('You');
@@ -404,6 +412,18 @@
     return msg.from ? `${msg.from.slice(0, 10)}…` : i18n.t('Unknown');
   }
 
+  /**
+   * Whether a message was sent by this account.
+   *
+   * @param msg - Message to test.
+   * @returns `true` when the message is outgoing.
+   *
+   * The backend never writes `from: 'me'`; it puts the sender's public key there, so
+   * the key is compared with `statusState.publicKey`. A fallback signal is
+   * `outgoingStatus`: status-go fills it only on outgoing messages
+   * (`sending`/`sent`/`delivered`), which is the only reliable sign before the
+   * profile key has loaded.
+   */
   function isOwn(msg: any): boolean {
     if (!msg) return false;
     if (msg.from === 'me') return true;
@@ -426,9 +446,9 @@
         ''
       );
       scenarioLog('reply-sync', 'sent', { chat: short(chat.id) });
-      // Бэкенд возвращает в `result.messages` и новое сообщение, и родителя.
-      // Для обычной записи просто добавляем оптимистичную копию: ответ
-      // подтянется при следующей загрузке истории.
+      // The backend returns both the new message and its parent in
+      // `result.messages`. For a regular post just append an optimistic copy; a
+      // reply is picked up by the next history load.
       const sent = (res?.result?.messages || []).find(
         (m: any) => !isReply(m) && m.text === text
       );
@@ -479,7 +499,6 @@
   {:else if chatsState.rightPanel === 'contacts' || !chatsState.selected}
     <ContactsSearchPanel />
   {:else}
-    <!-- Заголовок -->
     <div class="p-4 border-b border-border flex items-center gap-2">
       <span class="font-bold text-primary truncate">{chatsState.selected.name}</span>
       {#if chatsState.selected.type === 'community' && chatsState.selected.communityId}
@@ -494,6 +513,11 @@
             ⋯
           </button>
           {#if menuOpen}
+     <!--
+          A Stauri channel is technically a status-go community, so Status Desktop
+          shows it as a community named after the channel with a single `#general`
+          channel inside. The menu explains this mismatch instead of hiding it.
+        -->
      <div role="menu" class="absolute right-0 top-full mt-1 z-10 min-w-[12rem] rounded-md border border-border bg-card shadow-md py-1 text-sm">
        <p class="px-3 pb-2 pt-1 text-xs text-muted-foreground max-w-[16rem]">
          {i18n.t('In Status Desktop this channel shows as community')} «{chatsState.selected.communityName || chatsState.selected.name}» {i18n.t('with channel')} #general
@@ -546,7 +570,6 @@
     {/if}
 
     {#if chatsState.selected.isPendingRequest}
-      <!-- Экран запроса -->
       <div class="flex-1 flex flex-col items-center justify-center p-6 gap-6">
         <div class="w-16 h-16 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-3xl">!</div>
         <p class="text-center text-sm text-muted-foreground">"{chatsState.selected.lastMessage}"</p>
@@ -561,20 +584,19 @@
       </div>
     {:else if chatsState.selected.type === 'external'}
       <!--
-        Внешняя лента. Отдельная ветка, потому что сообщений в бэкенде у неё
-        нет: элементы приходят из RSS/Atom и лежат в `feedsState`.
+        External feed. A separate branch because the backend holds no messages for
+        it: items come from RSS/Atom and live in `feedsState`.
 
-        Текст свёрнут через `line-clamp`, а не обрезан в данных: сокращение —
-        вёрстка, поэтому клик по записи показывает её целиком, без повторной
-        загрузки. Разметку источника в `{@html}` не пускаем (docs §9.5).
+        Text is collapsed with `line-clamp`, not truncated in the data: shortening is
+        layout, so clicking an item shows it whole without refetching. Source markup
+        is never passed to `{@html}` (docs §9.5).
       -->
       <!--
-        `min-h-0` обязателен: внутри `flex flex-col` потомок по умолчанию
-        имеет `min-height: auto` и не сжимается, поэтому список рос бы за
-        пределы панели вместо прокрутки. Отступы — на внутреннем `div`:
-        прокручиваемая область в ScrollArea занимает `size-full` от корня,
-        и `p-4` на самом ScrollArea съедал бы высоту (тот же отказ, что был
-        в панели dApp).
+        `min-h-0` is required: inside `flex flex-col` a child defaults to
+        `min-height: auto` and does not shrink, so the list would grow past the panel
+        instead of scrolling. Padding sits on the inner `div`: the scrollable area in
+        ScrollArea takes `size-full` from the root, so `p-4` on ScrollArea itself
+        would eat the height.
       -->
       <ScrollArea class="flex-1 min-h-0">
         <div class="p-4">
@@ -592,9 +614,9 @@
               <div class="p-3 rounded-md bg-secondary/40">
                 {#if item.summary}
                   <!--
-                    Свёрнутая запись — кнопка: клик раскрывает текст. Ссылка
-                    внутри кнопки недопустима, поэтому ниже, под текстом,
-                    стоит отдельная кнопка-источник.
+                    A collapsed item is a button: clicking expands the text. A link
+                    inside a button is invalid, so the source button sits separately
+                    below the text.
                   -->
                   <button
                     onclick={() => toggleItem(key)}
@@ -623,11 +645,10 @@
                   {/if}
                   {#if item.url}
                     <!--
-                      Источник открывается командой Rust, а не переходом:
-                      `target="_blank"` внутри Tauri-окна в WebKitGTK часто
-                      не делает ничего. Полный адрес в `title` — чтобы его
-                      можно было прочитать и скопировать, если обработчик
-                      не найдётся.
+                      The source opens through a Rust command rather than a
+                      navigation: `target="_blank"` inside a Tauri window in
+                      WebKitGTK often does nothing. The full address is kept in `title`
+                      so it can be read and copied when no handler is found.
                     -->
                     <button
                       onclick={() => openExternal(item.url!)}
@@ -655,7 +676,7 @@
         onSent={(sent) => (messages = [...messages, sent])}
       />
     {:else}
-      <!-- История. Та же причина `min-h-0` и отступов на внутреннем `div`. -->
+      <!-- Message history. Same reason for `min-h-0` and padding on the inner `div`. -->
       <ScrollArea class="flex-1 min-h-0">
         <div class="p-4">
         {#if isLoading}
@@ -664,13 +685,14 @@
           <p class="text-muted-foreground text-sm italic">{i18n.t('No messages yet.')}</p>
         {:else if chatsState.selected.type === 'direct'}
           <!--
-            Личный чат: пузыри. Свои — слева, собеседника — справа.
-            Ширина пузыря — 3/4 колонки, фон чуть светлее или темнее колонки.
+            Direct chat bubbles. Own messages on the left, the other party's on the
+            right. A bubble is 3/4 of the column wide, with a background slightly
+            lighter or darker than the column.
           -->
           <div class="flex flex-col gap-2">
             {#each directMessages as msg (msg.id)}
               {#if Number(msg.contentType) === CONTACT_REQUEST}
-                <!-- Заявка в контакты: имя, текст заявки и галочка, когда принята. -->
+                <!-- Contact request: name, request text, and a check mark once accepted. -->
                 <div class="w-3/4 mx-auto rounded-lg px-3 py-2 border border-border bg-card text-sm">
                   <div class="flex items-center gap-2 mb-1">
                     <span class="text-xs font-semibold text-muted-foreground">{i18n.t('Request')}</span>
@@ -697,7 +719,6 @@
             {#each posts as post (post.id)}
               {@const replies = repliesByParent.get(post.id) || []}
               <div class="space-y-1">
-                <!-- Запись канала -->
   {#if chatsState.selected.type === 'community'}
     <div class="relative flex justify-end">
       <button
@@ -729,12 +750,11 @@
   </button>
 
                 <!--
-                  Комментарии под записью.
+                  Comments under a post.
 
-                  Показываем факт, а не число: серверного счётчика нет, а
-                  считать по загруженной странице значило бы врать («7
-                  комментариев» может означать «7 из загруженных»).
-                  См. docs/ru/akk_scheme.md §9.3.
+                  The header shows whether comments exist, not how many: there is no
+                  server-side counter, and counting over the loaded page would lie
+                  ("7 comments" may mean "7 loaded"). See docs/ru/akk_scheme.md §9.3.
                 -->
                 {#if replies.length > 0}
                   <div class="pl-4 space-y-1">
@@ -755,7 +775,7 @@
         </div>
       </ScrollArea>
 
-      <!-- Ввод ленты. На странице комментариев свой ввод. -->
+      <!-- Feed input. The comments page has an input of its own. -->
       {#if canRecordHere && !openPostId}
         <div class="p-4 border-t border-border flex gap-2">
           <input

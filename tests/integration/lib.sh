@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# lib.sh — общий код интеграционных тестов (chat, channel, wallet, contact).
+# lib.sh — shared code for the integration tests (chat, channel, wallet, contact).
 #
-# Подключается из тестов: `source "$(dirname "$0")/lib.sh"`.
-# Работает с настоящим status-backend: нужна сеть (Waku-флот) и время на доставку.
+# Sourced from the tests: `source "$(dirname "$0")/lib.sh"`.
+# Runs against a real status-backend: needs network (a Waku fleet) and time for
+# delivery.
 #
-# Переменные окружения:
-#   BASE_PORT  — первый порт нод (нода i слушает BASE_PORT+i), по умолчанию 34500
-#   TIMEOUT    — ожидание доставки, сек (по умолчанию 120)
-#   PASSWORD   — пароль всех тестовых профилей
-#   KEEP=1     — не удалять рабочий каталог с логами нод после прогона
+# Environment:
+#   BASE_PORT  — first node port (node i listens on BASE_PORT+i), default 34500
+#   TIMEOUT    — delivery wait, seconds (default 120)
+#   PASSWORD   — password of every test profile
+#   KEEP=1     — keep the working directory with node logs after the run
 
 set -uo pipefail
 
@@ -19,7 +20,7 @@ LIBS="$ROOT/src-tauri/binaries"
 BASE_PORT="${BASE_PORT:-34500}"
 TIMEOUT="${TIMEOUT:-120}"
 PASSWORD="${PASSWORD:-integration-pass-123}"
-RUN="$(date +%H%M%S)"   # уникальный суффикс: тексты и имена каналов не совпадут с прошлым прогоном
+RUN="$(date +%H%M%S)"   # unique suffix: texts and channel names cannot collide with a previous run
 
 WORK="$(mktemp -d)"
 PIDS=()
@@ -37,8 +38,8 @@ step() { echo; echo "=== $* ==="; }
 ok()   { echo "  ✓ $*"; PASSED=$((PASSED + 1)); }
 fail() { echo "  ✗ $*" >&2; echo "FAILED"; exit 1; }
 
-# call <port> <method> [params-json] — CallRPC; печатает result как JSON.
-# RPC-ошибка → ненулевой код и текст ошибки в stderr.
+# call <port> <method> [params-json] — CallRPC; prints the result as JSON.
+# An RPC error yields a non-zero exit and the error text on stderr.
 call() {
   local port="$1" method="$2" params="${3:-[]}"
   curl -s -m 60 -X POST "http://127.0.0.1:$port/statusgo/CallRPC" \
@@ -53,14 +54,14 @@ print(json.dumps(d.get("result"), ensure_ascii=False))
 '
 }
 
-# direct <port> <endpoint> <json-body> — прямой эндпоинт (InitializeApplication и т. п.).
+# direct <port> <endpoint> <json-body> — a direct endpoint (InitializeApplication etc.).
 direct() {
   curl -s -m 120 -X POST "http://127.0.0.1:$1/statusgo/$2" \
     -H 'Content-Type: application/json' -d "$3"
 }
 
-# pick <json> <python-expr> — выражение над переменной r (результат).
-# Пример: pick "$res" "r.get('public-key')"
+# pick <json> <python-expr> — evaluates an expression over the variable r (the result).
+# Example: pick "$res" "r.get('public-key')"
 pick() {
   printf '%s' "$1" | python3 -c "
 import json, sys
@@ -69,11 +70,11 @@ print($2)
 "
 }
 
-# json_arg <python-expr-builds-object…> — собирает JSON из python-выражения.
-# Пример: json_arg "{'id': 'x', 'message': 'hi'}"
+# json_arg <python-expr-builds-object…> — builds JSON from a python expression.
+# Example: json_arg "{'id': 'x', 'message': 'hi'}"
 json_arg() { python3 -c "import json; print(json.dumps($1))"; }
 
-# wait_until <сек> <команда…> — повторяет команду, пока она не вернёт 0.
+# wait_until <sec> <command…> — repeats the command until it exits 0.
 wait_until() {
   local limit="$1"; shift
   local end=$((SECONDS + limit))
@@ -84,7 +85,7 @@ wait_until() {
   return 1
 }
 
-# start_node <port> <dir> — запускает status-backend и ждёт ответа.
+# start_node <port> <dir> — starts status-backend and waits for it to answer.
 start_node() {
   local port="$1" dir="$2"
   mkdir -p "$dir"
@@ -93,14 +94,18 @@ start_node() {
   wait_until 30 node_answers "$port" || fail "нода на порту $port не поднялась (лог: $dir/node.out)"
 }
 
-# node_answers <порт> — нода отвечает по HTTP (метод не важен: до входа RPC-методы
-# мессенджера ещё недоступны и возвращают ошибку).
+# node_answers <port> — the node answers over HTTP (the method does not matter:
+# before login the messenger RPC methods are unavailable and return an error).
 node_answers() {
   [[ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$1/statusgo/CallRPC" \
     -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"settings_getSettings","params":[]}')" == "200" ]]
 }
 
-# new_profile <имя> <порт> — нода + новый профиль + вход + запуск мессенджера.
+# new_profile <name> <port> — node, fresh profile, login, messenger start.
+#
+# Every run creates a new profile in its own empty data directory: a rerun then
+# starts from a clean backend, and accounts, contacts or chats left by an earlier
+# run cannot leak into the assertions.
 new_profile() {
   local name="$1" port="$2" dir="$WORK/$1"
   start_node "$port" "$dir"
@@ -127,22 +132,23 @@ print(r.get("error") or "")' "$res")"
   wait_until 60 call "$port" wakuext_chats || fail "мессенджер $name не запустился"
 }
 
-# settings_key_ready <порт> — профиль вошёл: в настройках появился key-uid.
+# settings_key_ready <port> — the profile has logged in: settings now carry a key-uid.
 settings_key_ready() {
   [[ -n "$(call "$1" settings_getSettings | python3 -c 'import json,sys;print(json.load(sys.stdin).get("key-uid") or "")')" ]]
 }
 
-# pubkey <порт> — публичный ключ ноды (0x-hex, 04…).
+# pubkey <port> — the node's public key (0x-hex, 04…).
 pubkey() { call "$1" settings_getSettings | python3 -c 'import json,sys;print(json.load(sys.stdin).get("public-key") or "")'; }
 
-# compressed_key <порт> — ключ в формате zQ3… (для «Invite a contact»).
+# compressed_key <port> — the key in zQ3… form (what "Invite a contact" uses).
 compressed_key() { call "$1" settings_getSettings | python3 -c 'import json,sys;print(json.load(sys.stdin).get("compressedKey") or "")'; }
 
-# first_address <порт> — первый кошельковый адрес профиля.
+# first_address <port> — the profile's first wallet address.
 #
-# Именно кошельковый: `accounts_getAccounts` отдаёт первым chat-аккаунт
-# (`Chat: true`), а такой status-go исключает из подписей
-# (`generateCommunityRequestsForSigning`), и заявка на вступление уходит пустой.
+# It must be the wallet account: `accounts_getAccounts` lists the chat account
+# (`chat: true`) first, and status-go skips that one when generating signing
+# requests (`generateCommunityRequestsForSigning`), so a join request built from
+# it goes out empty.
 first_address() {
   call "$1" accounts_getAccounts | python3 -c '
 import json, sys
@@ -151,7 +157,7 @@ wallet = [a for a in accounts if a.get("wallet") and not a.get("chat")]
 print((wallet or accounts)[0]["address"] if accounts else "")'
 }
 
-# add_contact <порт-отправитель> <порт-получатель> — заявка и принятие, затем mutual на обеих сторонах.
+# add_contact <sender-port> <receiver-port> — request and acceptance, then mutual on both sides.
 add_contact() {
   local from="$1" to="$2"
   local key; key="$(compressed_key "$to")"
@@ -175,12 +181,12 @@ sys.exit(0 if c else 1)"; }
   ok "контакт: $from ↔ $to (mutual)"
 }
 
-# texts_visible <порт> <chatId> <текст…> — все тексты есть в ленте чата.
+# texts_visible <port> <chatId> <text…> — all the texts are present in the chat timeline.
 texts_visible() {
   local port="$1" chat="$2"; shift 2
   local params; params="$(json_arg "['$chat', '', 50]")"
   local res; res="$(call "$port" wakuext_chatMessages "$params")" || return 1
-  # JSON передаём аргументом, а не по stdin: heredoc у python3 занял бы stdin.
+  # Pass JSON as an argument, not on stdin: a heredoc into python3 would take over stdin.
   python3 -c '
 import json, sys
 data = json.loads(sys.argv[1])
@@ -190,7 +196,7 @@ sys.exit(0 if all(w in texts for w in wanted) else 1)
 ' "$res" "$@"
 }
 
-# send <порт> <chatId> <текст> [communityId] [responseTo] — отправка; печатает id сообщения.
+# send <port> <chatId> <text> [communityId] [responseTo] — sends; prints the message id.
 send() {
   local port="$1" chat="$2" text="$3" community="${4:-}" reply="${5:-}"
   local body
@@ -203,17 +209,18 @@ print(msgs[0]["id"] if msgs else "")
 '
 }
 
-# report_summary — итог прогона.
+# report_summary — the run's tally.
 report_summary() {
   echo
   echo "=== ИТОГ: пройдено проверок: $PASSED ==="
 }
 
 # ---------------------------------------------------------------------------
-# КАНАЛЫ (АКК: сообщество с одним каналом, см. docs/ru/akk_scheme.md)
+# CHANNELS (a Stauri channel is a community with a single channel, see docs/ru/akk_scheme.md)
 # ---------------------------------------------------------------------------
 
-# Kind → access: news открыт всем, request/issues — по заявке (channelKind.ts).
+# kind_access — kind → access: news is open to all, request/issues go by request
+# (channelKind.ts).
 kind_access() {
   case "$1" in
     news) echo 1 ;;      # CommunityPermissions_AUTO_ACCEPT
@@ -221,8 +228,8 @@ kind_access() {
   esac
 }
 
-# create_channel <порт> <имя> <kind> — создаёт сообщество с одним каналом.
-# Печатает "<communityId> <chatId>" (chatId включает префикс сообщества).
+# create_channel <port> <name> <kind> — creates a community with a single channel.
+# Prints "<communityId> <chatId>" (the chatId carries the community prefix).
 create_channel() {
   local port="$1" name="$2" kind="$3"
   local desc="[$kind] integration-$RUN"
@@ -241,8 +248,8 @@ print(c.get("id", ""), ch.get("id", ""))
 '
 }
 
-# join_channel <порт-участника> <communityId> — вступает: подпись адреса + заявка.
-# Пароль берётся из PASSWORD (в тесте он известен, в приложении его вводит человек).
+# join_channel <participant-port> <communityId> — joins: address signature plus request.
+# The password comes from PASSWORD (the test knows it; in the application a person types it).
 join_channel() {
   local port="$1" cid="$2"
   local me addr
@@ -250,7 +257,7 @@ join_channel() {
   addr="$(first_address "$port")"
   [[ -n "$addr" ]] || { echo "нет адреса у профиля" >&2; return 1; }
 
-  # Сообщество должно быть известно локально, иначе подпись и заявка не найдут его.
+  # The community must be known locally, or signing and the request cannot find it.
   call "$port" wakuext_fetchCommunity "[$(json_arg "{'communityKey': '$cid', 'tryDatabase': True, 'waitForResponse': True}")]" >/dev/null 2>&1 || true
 
   local to_sign; to_sign="$(call "$port" wakuext_generateJoiningCommunityRequestsForSigning \
@@ -275,7 +282,7 @@ print(json.dumps([p for p in params if p.get("data")]))' "$PASSWORD")
   call "$port" wakuext_requestToJoinCommunity "[$req]" >/dev/null || return 1
 }
 
-# channel_ids <порт> <communityId> — "<communityId> <chatId>", если каналы видны.
+# channel_ids <port> <communityId> — "<communityId> <chatId>" when channels are visible.
 channel_ids() {
   call "$1" wakuext_communities | python3 -c '
 import json, sys
@@ -288,7 +295,7 @@ for c in json.load(sys.stdin) or []:
 sys.exit(1)' "$2"
 }
 
-# is_joined <порт> <communityId> — сообщество считается вступленным.
+# is_joined <port> <communityId> — the community counts as joined.
 is_joined() {
   call "$1" wakuext_communities | python3 -c '
 import json, sys
@@ -299,7 +306,7 @@ for c in json.load(sys.stdin) or []:
 sys.exit(1)' "$2"
 }
 
-# accept_pending <порт-владельца> <communityId> — принимает все заявки на вступление.
+# accept_pending <owner-port> <communityId> — accepts every pending join request.
 accept_pending() {
   local port="$1" cid="$2" ids
   ids="$(call "$port" wakuext_pendingRequestsToJoinForCommunity "[$(json_arg "'$cid'")]" \
@@ -311,9 +318,9 @@ accept_pending() {
   done
 }
 
-# wait_joined <порт> <communityId> <порт-владельца> — ждёт доступа.
-# Для news (auto-accept) владелец принимает сам; для request/issues — здесь же
-# владелец принимает заявку, как это делает человек в приложении.
+# wait_joined <port> <communityId> <owner-port> — waits for access.
+# For news (auto-accept) acceptance is automatic; for request/issues the owner
+# accepts the request here, as a person would in the application.
 wait_joined() {
   local port="$1" cid="$2" owner_port="$3"
   local end=$((SECONDS + TIMEOUT))

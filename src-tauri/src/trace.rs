@@ -1,7 +1,8 @@
-//! Тестовая печать моста в файл `bridge-trace.log` (каталог данных приложения).
+//! Bridge trace written to `bridge-trace.log` in the application data directory.
 //!
-//! Нужна, чтобы проверять вход по шагам без чтения `logcat` и скриншотов: каждый
-//! вызов `status_call` дописывает строку. Ошибка записи никогда не ломает вызов.
+//! It allows checking sign-in step by step without reading `logcat` or taking
+//! screenshots: every `status_call` appends a line. A write failure never breaks
+//! the call.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -9,20 +10,25 @@ use std::sync::OnceLock;
 
 static TRACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Задаёт каталог данных приложения; файл создаётся при первой записи.
+/// Sets the application data directory; the file itself is created on the first
+/// write.
 pub fn set_dir(dir: PathBuf) {
     let _ = TRACE_PATH.set(dir.join("bridge-trace.log"));
 }
 
-/// Подробная трасса включается переменной окружения `STAURI_DEBUG_TRACE=1`
-/// (перед запуском приложения). Тогда ответы пишутся до 4000 символов вместо 200.
+/// Whether verbose tracing is on, read once from `STAURI_DEBUG_TRACE=1` before
+/// the application starts.
+///
+/// When enabled, responses are written up to 4000 characters instead of 200.
 pub fn debug_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("STAURI_DEBUG_TRACE").map(|v| v == "1").unwrap_or(false))
 }
 
-/// Дописывает одну строку с меткой времени. Тела запросов/ответов сюда не
-/// пишем целиком: только endpoint, длину и первые 200 символов ответа.
+/// Appends one line with a timestamp.
+///
+/// Request and response bodies are never written in full: only the endpoint, its
+/// length and the first 200 characters of the response.
 pub fn line(text: &str) {
     let Some(path) = TRACE_PATH.get() else { return };
     let stamp = std::time::SystemTime::now()

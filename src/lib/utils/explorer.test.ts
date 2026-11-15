@@ -5,9 +5,8 @@ const HASH = '0x73a222f38c1029ceedf8c3f1af94572ad3ff88abcdef0123456789abcdef0123
 
 describe('explorerTxUrl', () => {
   it('ведёт на обозреватель той сети, где прошла транзакция', () => {
-    // Главная проверка: раньше для любой тестовой сети подставлялся
-    // `sepolia.etherscan.io`, и ссылка на Base Sepolia не находила
-    // транзакцию, хотя перевод прошёл.
+    // Each test network has its own explorer host; a shared Etherscan testnet
+    // host would not find a Base Sepolia transaction that did go through.
     expect(explorerTxUrl(11155111, HASH)).toBe(
       `https://eth-sepolia.blockscout.com/tx/${HASH}`
     );
@@ -33,8 +32,8 @@ describe('explorerTxUrl', () => {
   });
 
   it('не ссылается на Etherscan, который не открывается без VPN', () => {
-    // Регрессия: `sepolia.etherscan.io` висит до таймаута, и пользователь
-    // видел белую страницу вместо подтверждённой транзакции.
+    // `sepolia.etherscan.io` hangs until timeout, leaving a blank page instead of
+    // a confirmed transaction.
     for (const chainId of [1, 10, 56, 97, 8453, 42161, 84532, 421614, 11155111, 11155420, 560048]) {
       const url = explorerTxUrl(chainId, HASH);
       expect(url, `chain ${chainId}`).not.toBeNull();
@@ -43,7 +42,7 @@ describe('explorerTxUrl', () => {
   });
 
   it('не даёт ссылку для неизвестной сети', () => {
-    // Лучше никакой ссылки, чем заведомо нерабочая.
+    // No link is better than a dead one.
     expect(explorerTxUrl(999999, HASH)).toBeNull();
   });
 

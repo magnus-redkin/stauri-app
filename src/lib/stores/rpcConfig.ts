@@ -1,8 +1,8 @@
 /**
- * Настройка RPC-провайдеров для status-go.
+ * RPC provider setup for status-go.
  *
- * Вынесено из `connectionStore`: это чистая логика конфигурации, она не
- * участвует в реактивном состоянии соединения (нет `$state`, нет сокета).
+ * Pure configuration logic: it holds no reactive connection state, no `$state`
+ * and no socket.
  */
 
 import { statusState } from './statusStore.svelte';
@@ -18,73 +18,83 @@ import {
 import { PUBLIC_RPC, USER_PROVIDER_NAME, rpcUrlForChain } from '$lib/config/keys';
 
 /**
- * `wroteProviders` — пришлось ли что-то записывать. Это признак того, что
- * RPC-клиент мог быть собран не с теми URL: status-go создаёт и кэширует
- * клиентов при старте ноды, а провайдеры мы пишем уже после. См. `login()`
- * в connectionStore.
+ * Result of a provider setup pass.
+ *
+ * `wroteProviders` says whether anything had to be written. It is a signal that
+ * the RPC client may have been built against the wrong URLs: status-go creates
+ * and caches clients on node start, while providers are written afterwards. See
+ * `login` in `connection.svelte`.
  */
 export type ConfigureResult = { wroteProviders: boolean };
 
 /**
- * Прописывает рабочий RPC-провайдер каждой активной сети.
+ * Writes a working RPC provider for every active network.
  *
- * Встроенные провайдеры status-go непригодны: direct-grove указывает на
- * eth.rpc.grove.city, который больше не резолвится, а direct-infura упирается
- * в таймаут. Кроме того, прямой вызов провайдера из status-go залипает на
- * мёртвых TCP-соединениях из его пула (см. src-tauri/src/rpc_proxy.rs),
- * поэтому провайдер указывает не на сеть, а на локальный форвардер:
- *   http://127.0.0.1:<port>/<chainId>
+ * The built-in status-go providers are unusable: direct-grove points at
+ * eth.rpc.grove.city, which no longer resolves, and direct-infura times out.
+ * A direct provider call from status-go also sticks on dead TCP connections
+ * from its pool (see `src-tauri/src/rpc_proxy.rs`), so the provider points at a
+ * local forwarder instead of the network: `http://127.0.0.1:<port>/<chainId>`.
  *
- * Вызывать нужно ПОСЛЕ login и ДО первого обращения к кошельку: RPC-клиенты
- * кэшируются по chainID в internal/rpc/client.go и не инвалидируются при
- * смене провайдеров, поэтому добавление после первого запроса не подействует
- * до перезапуска ноды.
+ * @param port - Port of the authenticating proxy. Defaults to the current
+ * backend port.
+ * @returns Whether any provider had to be written.
+ * @remarks
+ * Must be called after login and before the first wallet access: RPC clients
+ * are cached by chainID in `internal/rpc/client.go` and are not invalidated
+ * when providers change, so a write after the first request has no effect
+ * until the node restarts.
+ *
+ * `networks_setChainUserRpcProviders` only accepts a provider with
+ * `type: "user"`; status-go appends it alongside the built-in ones and picks it
+ * first. For mainnet status-go ignores this provider and keeps its built-in
+ * endpoints.
  */
 export async function configureWalletRpc(
   port: number | null = statusState.backendPort
 ): Promise<ConfigureResult> {
   if (!port) return { wroteProviders: false };
 
-  // 1. Форвардер поднимаем ПЕРВЫМ и без участия status-go.
-  // Его API (networks_*) регистрируется только в initServices, то есть после
-  // старта ноды, поэтому до логина вызов сетей упадёт. Форвардер же — это
-  // команда Tauri, она доступна всегда, и порт должен приниматься раньше,
-  // чем status-go создаст RPC-клиенты: адрес провайдера уже лежит в БД
-  // прошлым запуском, и клиент может обратиться к нему сразу.
+  // 1. Start the forwarder FIRST, without status-go. Its API registers only in
+  // initServices, i.e. after node start, so network calls fail before login.
+  // The forwarder is a Tauri command available at any time, and its port must be
+  // accepted before status-go builds its RPC clients: the provider address is
+  // already in the DB from a previous run, so a client can reach it immediately.
   let proxyPort: number;
   let proxySecret: string | null = null;
   try {
-    // Таблица передаётся сразу с запуском: провайдер с прошлого запуска уже
-    // указывает на этот порт, и первый же запрос приходит раньше, чем успела
-    // бы выполниться отдельная команда set_rpc_upstreams.
+    // The table is passed at start: a provider left from the previous run
+    // already points at this port, and the first request arrives before a
+    // separate set_rpc_upstreams command could run.
     proxyPort = await startRpcProxy(PUBLIC_RPC);
-    // Секрет нужен для пути провайдера: в форвардер ходит status-go, а
-    // заголовок с токеном нода послать не может. Без секрета любой процесс
-    // на машине (и любой сайт в WebView dApp) получил бы доступ к RPC.
+    // The secret is part of the provider path: status-go calls the forwarder
+    // and the node cannot send its auth token as a header, so without the
+    // secret any process on the machine (and any site in a dApp WebView) would
+    // reach the RPC.
     proxySecret = await getRpcProxySecret();
     debug(`[configureWalletRpc] rpc proxy on 127.0.0.1:${proxyPort}`);
   } catch (e: any) {
-    // Порт форвардера фиксирован, потому что на него уже указывают провайдеры
-    // в БД status-go. Если он занят, работать «напрямую» нельзя: клиент ноды
-    // всё равно пойдёт на старый адрес и попадёт в чужой процесс либо получит
-    // отказ. Сообщаем пользователю причину, а не деградируем молча.
+    // The forwarder port is fixed because providers in the status-go DB already
+    // point at it. If the port is taken, there is no "direct" fallback: the node
+    // client would still hit the old address and reach another process or be
+    // refused. Report the reason instead of degrading silently.
     const reason = formatError(e);
     statusState.errorMsg = reason;
     console.error('[configureWalletRpc] rpc proxy failed:', reason);
     proxyPort = 0;
   }
 
-  // 2. Уточняем URL по активным сетям из status-go, если он уже поднят.
+  // 2. Refine URLs from the active networks in status-go, if the node is up.
   let chains: any[];
   try {
     chains = await getFlatEthereumChains(port);
   } catch (e) {
-    // До старта ноды сервис сетей ещё не зарегистрирован — это не ошибка,
-    // форвардер уже работает со статической таблицей.
+    // Before node start the networks service is not registered yet. That is not
+    // an error — the forwarder already runs with the static table.
     debug('[configureWalletRpc] networks API not ready yet:', e);
-    // Провайдеров мы не видели и ничего не писали: судить о том, правильно ли
-    // собран RPC-клиент, по этому вызову нельзя. Перезапуск ноды здесь
-    // бессмысленен — вызывающий код в этом случае просто пропускает его.
+    // No providers were seen and nothing was written, so nothing can be
+    // concluded about the RPC client. A node restart is pointless here; the
+    // caller simply skips it.
     return { wroteProviders: false };
   }
 
@@ -111,34 +121,35 @@ export async function configureWalletRpc(
 
   for (const chain of chains) {
     const chainId = Number(chain?.chainId);
-    // Имена полей — как в params.Network: enabled и isActive (не active!).
+    // Field names follow params.Network: enabled and isActive, not active.
     if (!chainId || !chain.enabled || !chain.isActive) continue;
 
     const direct = upstreams[chainId];
     if (!direct) continue;
 
-    // Через форвардер идём, если он поднялся; иначе — напрямую.
+    // Go through the forwarder when it started, otherwise use the URL directly.
     //
-    // Путь обязательно содержит секрет: форвардер отклоняет запросы без него
-    // (отвечает 404, чтобы не выдавать своего присутствия). В форвардер ходит
-    // status-go, а не наш фронтенд, поэтому секрет в URL, а не в заголовке.
+    // The path must contain the secret: the forwarder rejects requests without
+    // it (answering 404 so as not to reveal its presence). status-go, not the
+    // frontend, calls the forwarder, so the secret lives in the URL rather than
+    // a header.
     const url =
       proxyPort && proxySecret
         ? `http://127.0.0.1:${proxyPort}/${proxySecret}/${chainId}`
         : direct;
 
     if (proxyPort && !proxySecret) {
-      // Секрета нет, а форвардер поднялся — это несогласованное состояние:
-      // идти напрямую нельзя, клиент ноды всё равно смотрит на наш порт.
+      // No secret but the forwarder started: an inconsistent state, and going
+      // direct is not an option because the node client still targets our port.
       console.error(
         '[configureWalletRpc] rpc proxy started without a secret; providers not updated'
       );
       continue;
     }
 
-    // Сверяемся по URL, а не только по имени: провайдер мог остаться от
-    // прошлой конфигурации (например, с мёртвым на этой машине Alchemy),
-    // и тогда его нужно перезаписать.
+    // Compare by URL, not only by name: a provider may be left over from an
+    // earlier configuration (for example one pointing at a dead Alchemy host on
+    // this machine), and then it must be overwritten.
     const existing = (chain.rpcProviders || []).find(
       (p: any) => p.type === 'user' && p.name === USER_PROVIDER_NAME
     );

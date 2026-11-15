@@ -296,5 +296,14 @@
   "Search": "Search",
   "Contact request sent": "Contact request sent",
   "In Status Desktop this channel shows as community": "In Status Desktop this channel shows as community",
-  "with channel": "with channel"
+  "with channel": "with channel",
+  "At least": "At least",
+  "characters": "characters",
+  "Lowercase Latin letter": "Lowercase Latin letter",
+  "Uppercase Latin letter": "Uppercase Latin letter",
+  "Digit": "Digit",
+  "Symbol": "Symbol",
+  "Enter a password": "Enter a password",
+  "Passwords do not match": "Passwords do not match",
+  "Password must contain at least 8 characters, uppercase and lowercase Latin letters, a digit and a symbol": "Password must contain at least 8 characters, uppercase and lowercase Latin letters, a digit and a symbol"
 }

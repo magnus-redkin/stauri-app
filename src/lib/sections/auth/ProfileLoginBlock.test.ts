@@ -11,7 +11,7 @@ describe('ProfileLoginBlock Component', () => {
     resetState();
     vi.clearAllMocks();
 
-    // Подготавливаем тестовые данные аккаунтов
+    // Test accounts for the login list.
     setAccounts([
       { 'key-uid': '0x1234567890abcdef1234567890abcdef', displayName: 'Account 1' },
       { 'key-uid': '0xabcdef1234567890abcdef1234567890', displayName: 'Account 2' }
@@ -27,11 +27,11 @@ describe('ProfileLoginBlock Component', () => {
       }
     });
 
-    // Проверяем, что select существует
+    // The select exists.
     const selectElement = screen.getByRole('combobox');
     expect(selectElement).toBeInTheDocument();
 
-    // Проверяем, что опции отрендерились (обрезаем до 16 символов, как в коде)
+    // Options are rendered, trimmed to 16 characters as the component does.
     expect(screen.getByText('0x1234567890abcd...')).toBeInTheDocument();
     expect(screen.getByText('0xabcdef12345678...')).toBeInTheDocument();
   });
@@ -40,24 +40,88 @@ describe('ProfileLoginBlock Component', () => {
     render(ProfileLoginBlock, {
       props: {
         selectedAccountKeyUid: '0x1234567890abcdef1234567890abcdef',
-        password: 'mysecretpassword',
+        password: 'Stauri#2026',
         onLogin: mockOnLogin
       }
     });
 
-    // Находим кнопку по тексту (учитывая i18n, предполагаем, что i18n.t('Log In') возвращает 'Log In' или аналогичное.
-    // Если i18n возвращает ключ, используйте screen.getByText('Log In') или соответствующий ключ)
+    // Find the button by text; the i18n lookup resolves to the English label in tests.
     const loginButton = screen.getByRole('button', { name: /log in|войти/i });
 
-    // Симулируем клик
     await fireEvent.click(loginButton);
 
-    // Проверяем, что колбэк был вызван
+    expect(mockOnLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('не пускает со слабым паролем и объясняет причину', async () => {
+    render(ProfileLoginBlock, {
+      props: {
+        selectedAccountKeyUid: '0x1234567890abcdef1234567890abcdef',
+        password: 'qwer',
+        onLogin: mockOnLogin
+      }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /log in|войти/i }));
+
+    expect(mockOnLogin).not.toHaveBeenCalled();
+    expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
+  });
+
+  it('не пускает с пустым паролем', async () => {
+    render(ProfileLoginBlock, {
+      props: {
+        selectedAccountKeyUid: '0x1234567890abcdef1234567890abcdef',
+        password: '',
+        onLogin: mockOnLogin
+      }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /log in|войти/i }));
+
+    expect(mockOnLogin).not.toHaveBeenCalled();
+    expect(screen.getByText(/enter a password/i)).toBeInTheDocument();
+  });
+
+  it('Enter проверяет пароль так же, как кнопка', async () => {
+    render(ProfileLoginBlock, {
+      props: {
+        selectedAccountKeyUid: '0x1234567890abcdef1234567890abcdef',
+        password: 'password',
+        onLogin: mockOnLogin
+      }
+    });
+
+    await fireEvent.keyDown(screen.getByPlaceholderText(/password/i), { key: 'Enter' });
+
+    expect(mockOnLogin).not.toHaveBeenCalled();
+    expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
+  });
+
+  it('после исправления пароля ошибка исчезает и вход проходит', async () => {
+    render(ProfileLoginBlock, {
+      props: {
+        selectedAccountKeyUid: '0x1234567890abcdef1234567890abcdef',
+        password: 'qwer',
+        onLogin: mockOnLogin
+      }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /log in|войти/i }));
+    expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
+
+    // Editing the field clears the hint.
+    await fireEvent.input(screen.getByPlaceholderText(/password/i), {
+      target: { value: 'Stauri#2026' }
+    });
+    expect(screen.queryByText(/at least 8 characters/i)).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: /log in|войти/i }));
     expect(mockOnLogin).toHaveBeenCalledTimes(1);
   });
 
   it('должен корректно работать с пустым списком аккаунтов', () => {
-    setAccounts([]); // Очищаем аккаунты
+    setAccounts([]);
 
     render(ProfileLoginBlock, {
       props: {
@@ -69,7 +133,7 @@ describe('ProfileLoginBlock Component', () => {
 
     const selectElement = screen.getByRole('combobox');
     expect(selectElement).toBeInTheDocument();
-    // Опций быть не должно
+    // No options are expected.
     expect(selectElement.children.length).toBe(0);
   });
 });

@@ -1,44 +1,36 @@
 <script lang="ts">
   /**
-   * QR-код рисуется локально, без сетевого запроса.
+   * Renders a QR code locally, with no network request.
    *
-   * ## Почему не сервис картинок
+   * A remote image service would learn the wallet address and that its owner
+   * uses Stauri every time the Receive tab is opened, and a third-party host is
+   * not in the CSP (`svelte.config.js`) anyway, so the image would not load.
+   * Widening the security policy to allow such a host would trade a leak for a
+   * picture.
    *
-   * Раньше адрес кошелька уходил в `api.qrserver.com`, то есть при каждом
-   * открытии вкладки «Получить» кто-то посторонний узнавал, какой у
-   * пользователя адрес и что он пользуется Stauri. Адрес не секрет, но
-   * связка «адрес ↔ клиент» — уже сведения, которых отдавать незачем.
-   *
-   * Вторая, более заметная причина: этого хоста нет в CSP
-   * (`svelte.config.js`), поэтому картинка просто не загружалась — QR на
-   * экране отсутствовал. Разрешать хост в CSP ради этого было бы худшим
-   * решением: мы бы расширили политику безопасности ради утечки.
-   *
-   * ## Почему `qrcode` в devDependencies
-   *
-   * Библиотека нужна только на этапе сборки: Vite кладёт её код в бандл.
-   * Ошибка при этом будет не в рантайме, а при `build`, то есть сразу.
+   * `qrcode` is a devDependency because it is only needed at build time: Vite
+   * bundles its code, so a failure surfaces during `build` rather than at
+   * runtime.
    */
   import QRCode from 'qrcode';
 
   let { value, size = 192 }: { value: string; size?: number } = $props();
 
   /**
-   * Готовая картинка (data URI) или текст ошибки.
+   * The rendered image as a data URI, or the error text.
    *
-   * `data:` разрешён в CSP (`img-src`), поэтому результат показывается как
-   * обычный `<img>` без обращений наружу.
+   * `data:` is allowed by the CSP (`img-src`), so the result is shown as a plain
+   * `<img>` with no external request.
    */
   let dataUrl = $state('');
   let failed = $state('');
 
   /**
-   * Перерисовываем при изменении значения.
+   * Re-renders whenever the value changes.
    *
-   * Тип `image/png`, а не SVG: SVG-строка, вставленная как `src`, всё равно
-   * выполняется как документ, и хотя у нас нет пользовательской разметки,
-   * PNG снимает вопрос совсем. `margin: 0` — белая рамка не нужна, её даёт
-   * сам контейнер.
+   * The output is `image/png`, not SVG: an SVG string used as `src` still runs
+   * as a document, and although there is no user markup here, PNG removes the
+   * question. `margin: 0` drops the white border, which the container supplies.
    */
   $effect(() => {
     const text = value;
@@ -62,8 +54,8 @@
       })
       .catch((e) => {
         if (cancelled) return;
-        // Адрес показан рядом текстом и копируется, поэтому отказ рисования
-        // не мешает получить средства — сообщаем и живём дальше.
+        // The address is also shown as copyable text next to the code, so a
+        // failed render does not block receiving funds — report it and go on.
         dataUrl = '';
         failed = String(e);
         console.error('[qr] failed to render:', e);

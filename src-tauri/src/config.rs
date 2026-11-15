@@ -1,7 +1,7 @@
-//! Конфигурация сети: определение, загрузка и валидация.
+//! Network configuration: detection, loading and validation.
 //!
-//! Источники, в порядке приоритета: `STAURI_NETWORK`, `STAURI_CONFIG_PATH`,
-//! `~/.config/stauri/config.json`, встроенный дефолт (mainnet).
+//! Sources, in priority order: `STAURI_NETWORK`, `STAURI_CONFIG_PATH`,
+//! `~/.config/stauri/config.json`, then the built-in default (mainnet).
 
 use std::path::PathBuf;
 
@@ -75,7 +75,7 @@ pub fn default_rpc_url(network: &str) -> String {
     }
 }
 
-/// Белый список сетей: (имя, chain_id, waku_fleet).
+/// Whitelisted networks: (name, chain_id, waku_fleet).
 pub const NETWORKS: &[(&str, u64, &str)] = &[
     ("mainnet", 1, "status.prod"),
     ("sepolia", 11155111, "status.test"),
@@ -107,7 +107,11 @@ pub fn config_for_network(network: &str) -> AppResult<AppConfig> {
     })
 }
 
-/// Проверяет, что preset из файла входит в белый список.
+/// Checks that the preset from the file is whitelisted.
+///
+/// Returns a replacement default config when the preset is unknown, so callers
+/// fall back to mainnet instead of running with a network that has no entry in
+/// [`NETWORKS`].
 fn validate_preset(config: &AppConfig) -> Option<AppConfig> {
     if let Some(ref eth) = config.ethereum
         && let Some(ref preset) = eth.preset
@@ -123,7 +127,7 @@ fn validate_preset(config: &AppConfig) -> Option<AppConfig> {
 }
 
 pub fn load_config() -> AppConfig {
-    // 1. STAURI_NETWORK (только из белого списка)
+    // 1. STAURI_NETWORK (whitelist only)
     if let Ok(network) = std::env::var("STAURI_NETWORK") {
         match config_for_network(&network) {
             Ok(config) => return config,
@@ -152,7 +156,7 @@ pub fn load_config() -> AppConfig {
         }
     }
 
-    // 4. Дефолт (Mainnet)
+    // 4. Default (mainnet)
     AppConfig::default()
 }
 
@@ -218,8 +222,8 @@ mod tests {
         assert_eq!(config.rpc_url(), "https://ethereum-rpc.publicnode.com");
         assert_eq!(config.waku_fleet(), "status.prod");
         assert!(!config.is_testnet());
-        // data_dir_suffix всегда возвращает имя сети, включая mainnet:
-        // иначе каталоги mainnet и тестнетов смешиваются в одном месте.
+        // data_dir_suffix always returns the network name, mainnet included:
+        // otherwise mainnet and testnet directories would share one location.
         assert_eq!(config.data_dir_suffix(), PathBuf::from("mainnet"));
     }
 

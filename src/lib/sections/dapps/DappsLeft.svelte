@@ -1,13 +1,13 @@
 <script lang="ts">
   /**
-   * Левя панель раздела dApp — список внешних источников.
+   * Left panel of the dApps section: the list of external sources.
    *
-   * По `docs/ru/providers_and_dapps.md` здесь живут провайдеры: они отдают
-   * **данные**, не код. Пока два: каталог сообществ Status и лента по URL
-   * (RSS/Atom либо публичная страница Telegram-канала).
+   * Per `docs/ru/providers_and_dapps.md`, providers live here: they return **data**, not
+   * code. There are two so far — the Status community directory and a feed by URL (RSS or
+   * Atom, or the public page of a Telegram channel).
    *
-   * Отдельного раздела «Сообщества» больше нет: браузер каталога — это
-   * провайдер, а не основная сущность. Подключение по-прежнему выполняем мы.
+   * There is no separate "Communities" section: the directory browser is a provider, not a
+   * primary entity. Joining is still performed by the app itself.
    */
   import { i18n } from '$lib/i18n';
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';

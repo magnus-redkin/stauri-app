@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# contact.sh — приглашение в контакты на двух нодах.
+# contact.sh — a contact invitation between two nodes.
 #
 #   ./tests/integration/contact.sh
 #
-# Проверяет:
-#   1. Две ноды с разными каталогами и портами, в каждой новый профиль.
-#   2. A берёт свой compressedKey (как «Invite a contact»).
-#   3. B отправляет заявку на этот ключ (как Join by invite).
-#   4. A ждёт входящую заявку и принимает её.
-#   5. На обеих сторонах mutual=true.
+# Checks:
+#   1. Two nodes with separate directories and ports, a fresh profile in each.
+#   2. A takes its compressedKey (as "Invite a contact" does).
+#   3. B sends a request to that key (as Join by invite does).
+#   4. A waits for the incoming request and accepts it.
+#   5. mutual=true on both sides.
 #
-# Шаги 1–3 и 5 детерминированы. Шаг 4 зависит от доставки через Waku:
-# таймаут TIMEOUT, при неудаче — понятное сообщение, а не падение.
+# Steps 1–3 and 5 are deterministic. Step 4 depends on delivery through Waku: it
+# waits TIMEOUT and, on failure, reports a clear message instead of crashing.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -32,8 +32,8 @@ step "3. B отправляет заявку на ключ A, A принимае
 add_contact "$B_PORT" "$A_PORT"
 
 step "4. Проверка mutual на обеих сторонах"
-# add_contact уже проверил mutual; здесь дублируем отдельно, чтобы падение
-# на этом шаге читалось как проблема синка, а не отправки.
+# add_contact already checked mutual; this repeats it separately so that a
+# failure here reads as a sync problem rather than a sending one.
 KEY_A_HEX="$(pubkey "$A_PORT")"
 KEY_B_HEX="$(pubkey "$B_PORT")"
 is_mutual() { call "$1" wakuext_contacts | python3 -c "

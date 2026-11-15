@@ -1,3 +1,11 @@
+/**
+ * ESLint flat config for the SvelteKit + TypeScript frontend.
+ *
+ * The shared configs are layered in order (JS, TypeScript, Svelte), and two
+ * per-file blocks hand the Svelte parser its TypeScript parser underneath.
+ * console.log is rejected in src/ while warn and error are allowed, so
+ * diagnostics survive without debug noise.
+ */
 import js from '@eslint/js';
 import ts from 'typescript-eslint';
 import svelte from 'eslint-plugin-svelte';
@@ -21,7 +29,7 @@ export default [
     },
   },
   {
-    // Настройка парсера для Svelte-файлов (Svelte 5 + TypeScript)
+    // Parser setup for Svelte files (Svelte 5 + TypeScript)
     files: ['**/*.svelte'],
     languageOptions: {
       parser: svelteParser,
@@ -32,21 +40,21 @@ export default [
     },
   },
   {
-    // Настройка для файлов .svelte.ts (руны Svelte 5)
+    // Setup for .svelte.ts files (Svelte 5 runes)
     files: ['**/*.svelte.ts'],
     languageOptions: {
       parser: ts.parser,
     },
   },
   {
-    // Запрет console.log в исходном коде
+    // console.log is banned in source code
     files: ['src/**/*.{js,ts,svelte}'],
     rules: {
       'no-console': ['error', { allow: ['warn', 'error'] }],
     },
   },
   {
-    // Отключаем правило для компонентов shadcn (они используют <a href>)
+    // The rule is off for shadcn components, which use <a href>
     files: ['src/lib/components/ui/**/*.svelte'],
     rules: {
       'svelte/no-navigation-without-resolve': 'off',

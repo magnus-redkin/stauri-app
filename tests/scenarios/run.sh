@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# run.sh — метки начала и конца прогона сценария и сравнение трассировки.
+# run.sh — start and end markers for a scenario run, and trace comparison.
 #
-#   ./tests/scenarios/run.sh start chat_sd_sim   # метка START в лог SD (имя сценария)
-#   ... выполняете шаги сценария вручную ...
-#   ./tests/scenarios/run.sh end                 # метка END с тем же именем
-#   ./tests/scenarios/run.sh compare             # сверка лога и трассы с сценарием
-#   ./tests/scenarios/run.sh list                # доступные сценарии
+#   ./tests/scenarios/run.sh start chat_sd_sim   # START marker in the SD log (scenario name)
+#   ... perform the scenario steps by hand ...
+#   ./tests/scenarios/run.sh end                 # END marker with the same name
+#   ./tests/scenarios/run.sh compare             # compare log and trace with the scenario
+#   ./tests/scenarios/run.sh list                # available scenarios
 #
-# Метки пишутся строкой в лог SD (формат как у остальных строк лога, с меткой
-# времени в начале), поэтому compare.py сам находит имя сценария и окно прогона.
-# Сценарий SA-части берётся из трассы телефона по тому же окну времени.
+# Markers are written as a single log line (same format as the other SD log
+# lines, with a timestamp in front), so compare.py finds the scenario name and
+# the run window on its own. The SA part of the scenario is taken from the phone
+# trace over the same time window.
 
 set -euo pipefail
 
@@ -27,7 +28,7 @@ current_log() {
 }
 
 mark() {
-  # mark <START|END> <имя>
+  # mark <START|END> <name>
   local log now_iso now_unix
   log="$(current_log)"
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)"
@@ -48,7 +49,7 @@ case "$cmd" in
     echo "Выполняйте шаги из $name.md. Затем: $0 end"
     ;;
   end)
-    # Имя берём из последней метки START в логе.
+    # The name comes from the last START marker in the log.
     name="$(grep -o '\[test\] START [^ ]*' "$(current_log)" | tail -1 | awk '{print $3}')"
     if [[ -z "$name" ]]; then
       echo "нет метки START в логе — сначала: $0 start <сценарий>" >&2

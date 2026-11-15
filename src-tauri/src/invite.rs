@@ -1,9 +1,9 @@
-//! Разбор ссылок-приглашений Status.
+//! Parsing of Status invite links.
 //!
-//! ## Почему это в Rust, а не во фронтенде
+//! ## Why this lives in Rust
 //!
-//! Ссылка на канал (`status.app/cc/…`) несёт не UUID, а **brotli-сжатый
-//! protobuf** с описанием канала и сообщества:
+//! A channel link (`status.app/cc/…`) carries not a UUID but a
+//! **brotli-compressed protobuf** describing the channel and community:
 //!
 //! ```go
 //! // pkg/services/sharedurls/service.go
@@ -14,55 +14,59 @@
 //! }
 //! ```
 //!
-//! В webview brotli не декодируется: `DecompressionStream` в Chromium знает
-//! gzip и deflate, brotli в нём нет. Поэтому разбор — здесь.
+//! brotli cannot be decoded in the webview: Chromium's `DecompressionStream`
+//! knows gzip and deflate, not brotli. Parsing therefore happens here.
 //!
-//! Разбор ссылок есть и в самом `status-go` (`sharedurls.Service`), но не
-//! выставлен как RPC: в `pkg/services/ext/api.go` такого метода нет. Форк
-//! ради этого не нужен — формат простой и стабильный.
+//! `status-go` parses these links too (`sharedurls.Service`) but does not expose
+//! it as RPC: `pkg/services/ext/api.go` has no such method. A fork is not needed
+//! for that — the format is simple and stable.
 //!
-//! ## Форматы ссылок
+//! ## Link forms
 //!
 //! ```text
-//! status.app/c#<ключ>                 — сообщество, только ключ
-//! status.app/c/<brotli>#<ключ>        — сообщество, с описанием
-//! status.app/cc/<uuid>#<ключ>         — канал, по UUID
-//! status.app/cc/<brotli>#<ключ>       — канал, с описанием (этот модуль)
+//! status.app/c#<key>                 — community, key only
+//! status.app/c/<brotli>#<key>        — community, with description
+//! status.app/cc/<uuid>#<key>         — channel, by UUID
+//! status.app/cc/<brotli>#<key>       — channel, with description (this module)
 //! ```
 //!
-//! Пейлоад всегда начинается с байта длины: `0x1b` в base64 превращается в
-//! `G0…`, `0x1b` же — первый байт сжатого потока. Это не проверка формата, а
-//! наблюдение: сжатый поток для описания сообщества и канала начинается с
-//! `1b`, дальше идёт brotli.
+//! The payload always starts with a length byte: `0x1b` becomes `G0…` in base64,
+//! and `0x1b` is also the first byte of the compressed stream. This is an
+//! observation rather than a format check: the compressed stream for a community
+//! and for a channel description starts with `1b`, followed by brotli.
+//!
+//! A community link (`/c/`, without a second `c`) has no channel, so it is
+//! rejected rather than parsed.
 
 use base64::Engine;
 use serde::Serialize;
 
-/// Что удалось достать из ссылки.
+/// What could be extracted from a link.
 ///
-/// `channel_id` — `None`, если ссылка ведёт на сообщество целиком: канала в
-/// ней нет, и открывать нечего.
+/// `channel_id` is `None` when the link points at a whole community: there is no
+/// channel in it, so there is nothing to open.
 #[derive(Debug, Serialize)]
 pub struct InviteTarget {
-    /// UUID канала (`c42488f6-68cc-455c-a206-a820ecd388d0`).
+    /// Channel UUID (`c42488f6-68cc-455c-a206-a820ecd388d0`).
     pub channel_id: Option<String>,
-    /// Имя канала из описания — для отображения до загрузки истории.
+    /// Channel name from the description — shown before history loads.
     pub channel_name: Option<String>,
-    /// Имя сообщества из описания.
+    /// Community name from the description.
     pub community_name: Option<String>,
 }
 
-/// Разбирает `status.app/cc/…` и достаёт UUID канала.
+/// Parses a `status.app/cc/…` link and extracts the channel UUID.
 ///
-/// Возвращает `None` только если ссылка вообще не содержит `/cc/` — то есть
-/// канала в ней нет по определению. Нечитаемый пейлоад (битая база, чужой
-/// формат) даёт `Some` с `channel_id: None`: сообщество по ключу после `#`
-/// всё равно открывается, и падать из-за описания канала незачем.
+/// Returns `None` only when the link does not contain `/cc/` at all, that is,
+/// there is no channel in it by definition. An unreadable payload (broken
+/// base64, a foreign format) gives `Some` with `channel_id: None`: the community
+/// still opens by the key after `#`, so there is no reason to fail over the
+/// channel description.
 #[tauri::command]
 pub fn parse_invite_link(url: String) -> Option<InviteTarget> {
     let encoded = extract_cc_payload(&url)?;
 
-    // Вариант с готовым UUID: `status.app/cc/<uuid>#<ключ>`.
+    // Variant with a ready-made UUID: `status.app/cc/<uuid>#<key>`.
     if let Some(uuid) = as_channel_uuid(&encoded) {
         tracing::debug!(target: "invite", "channel link carries a bare uuid");
         return Some(InviteTarget {
@@ -98,14 +102,15 @@ pub fn parse_invite_link(url: String) -> Option<InviteTarget> {
     Some(parsed)
 }
 
-/// Достаёт часть между `/cc/` и `#` (или концом строки).
+/// Extracts the part between `/cc/` and `#` (or the end of the string).
 fn extract_cc_payload(url: &str) -> Option<String> {
     let (_, rest) = url.split_once("/cc/")?;
     let end = rest.find(['#', '?', '&']).unwrap_or(rest.len());
     Some(rest[..end].trim().to_string())
 }
 
-/// Похоже ли значение на UUID канала (`channelUUIDRegExp` в status-go).
+/// Checks whether a value looks like a channel UUID (`channelUUIDRegExp` in
+/// status-go).
 fn as_channel_uuid(value: &str) -> Option<String> {
     let lower = value.to_ascii_lowercase();
     let parts: Vec<&str> = lower.split('-').collect();
@@ -118,8 +123,8 @@ fn as_channel_uuid(value: &str) -> Option<String> {
             return None;
         }
     }
-    // Позиции версии и варианта, как в регулярке status-go: 3-я группа
-    // начинается с 0–5, 4-я — с 8/9/a/b.
+    // Version and variant positions, as in the status-go regexp: the 3rd group
+    // starts with 0–5, the 4th with 8/9/a/b.
     let version_ok = parts[2].starts_with(['0', '1', '2', '3', '4', '5']);
     let variant_ok = parts[3].starts_with(['8', '9', 'a', 'b']);
     if !version_ok || !variant_ok {
@@ -128,8 +133,10 @@ fn as_channel_uuid(value: &str) -> Option<String> {
     Some(lower)
 }
 
-/// base64url без padding-safe: status-go использует `base64.URLEncoding`,
-/// то есть с padding, но браузерные копии могут его терять.
+/// Decodes base64url, with or without padding.
+///
+/// status-go uses `base64.URLEncoding`, that is, with padding, but browser-side
+/// copies may drop it.
 fn decode_base64url(input: &str) -> Option<Vec<u8>> {
     let engine = base64::engine::general_purpose::URL_SAFE;
     engine.decode(input).ok().or_else(|| {
@@ -150,9 +157,9 @@ fn decompress_brotli(input: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Минимальный разбор protobuf: нужны только строковые поля.
+/// Minimal protobuf parsing: only string fields are needed.
 ///
-/// Структура (`protocol/protobuf/url_data.proto`):
+/// Structure (`protocol/protobuf/url_data.proto`):
 ///
 /// ```text
 /// URLData { bytes content = 1; }
@@ -161,9 +168,9 @@ fn decompress_brotli(input: &[u8]) -> Option<Vec<u8>> {
 /// Community { string display_name = 1; ... }
 /// ```
 ///
-/// Полноценный protobuf-парсер здесь избыточен: нужны два вложенных поля, а
-/// формат определены в spec и меняться не будет. Неизвестные поля
-/// пропускаются по wire-type, поэтому лишние данные не ломают разбор.
+/// A full protobuf parser would be overkill here: only two nested fields are
+/// needed, and the format is fixed in the spec. Unknown fields are skipped by
+/// wire type, so extra data does not break parsing.
 fn parse_channel_proto(data: &[u8]) -> InviteTarget {
     let mut target = InviteTarget {
         channel_id: None,
@@ -171,12 +178,12 @@ fn parse_channel_proto(data: &[u8]) -> InviteTarget {
         community_name: None,
     };
 
-    // Внешний уровень — URLData: поле 1 (content, bytes) содержит Channel.
+    // Outer level is URLData: field 1 (content, bytes) holds the Channel.
     let Some(content) = find_length_delimited(data, 1) else {
         return target;
     };
 
-    // Внутри Channel: 1 — display_name, 5 — community, 6 — uuid.
+    // Inside Channel: 1 is display_name, 5 community, 6 uuid.
     target.channel_name =
         find_length_delimited(content, 1).and_then(|b| String::from_utf8(b.to_vec()).ok());
     target.channel_id = find_length_delimited(content, 6)
@@ -189,10 +196,11 @@ fn parse_channel_proto(data: &[u8]) -> InviteTarget {
     target
 }
 
-/// Ищет первое поле с указанным номером и length-delimited wire-type (2).
+/// Finds the first field with the given number and the length-delimited wire
+/// type (2).
 ///
-/// Возвращает тело поля. Остальные поля пропускаются, чтобы порядок и
-/// наличие необязательных полей не влияли на результат.
+/// Returns the field body. Other fields are skipped so that ordering and the
+/// presence of optional fields do not affect the result.
 fn find_length_delimited(data: &[u8], field_number: u32) -> Option<&[u8]> {
     let mut pos = 0;
     while pos < data.len() {
@@ -203,7 +211,7 @@ fn find_length_delimited(data: &[u8], field_number: u32) -> Option<&[u8]> {
         let wire = key & 0x7;
 
         match wire {
-            // Varint: пропускаем значение.
+            // Varint: skip the value.
             0 => {
                 let (_, used) = read_varint(&data[pos..])?;
                 pos += used;
@@ -226,7 +234,7 @@ fn find_length_delimited(data: &[u8], field_number: u32) -> Option<&[u8]> {
             }
             // 32-bit.
             5 => pos += 4,
-            // Группы (3, 4) в новых схемах не используются.
+            // Groups (3, 4) are not used in new schemas.
             _ => return None,
         }
     }
@@ -250,7 +258,7 @@ fn read_varint(data: &[u8]) -> Option<(u64, usize)> {
 mod tests {
     use super::*;
 
-    /// Настоящая ссылка на канал из SIM (сообщество stauri-akk-test-1131).
+    /// A real channel link from SIM (community `stauri-akk-test-1131`).
     const CHANNEL_LINK: &str = "https://status.app/cc/G6MAAGRsbYhHPOGJ7cR__Ufp9yLSIjo5YP6-nX7QII88AC6PseEMUlyZ3X-6Wz9LVLJ_xqhNBov43gTuw87TtM3CZnyt35xJbP6-5u5YN7qtQqDjGDRu3QBCGNnfeEAePwMdZv7Dsh-MdZ3JnE0Z_diccsPwJJCGbQMuhA00xRJog2LXdphhOBg=#zQ3shuaXi1bQ6iVowkgm6eUtt5PPToUUpifePDvereeupioks";
 
     #[test]
@@ -283,14 +291,14 @@ mod tests {
 
     #[test]
     fn rejects_community_link() {
-        // /c/ — сообщество целиком, канала в ссылке нет.
+        // /c/ is a whole community; the link contains no channel.
         let target = parse_invite_link("https://status.app/c/G0UAAGTcHPB7#zQ3shabc".to_string());
         assert!(target.is_none());
     }
 
     #[test]
     fn survives_garbage_payload() {
-        // Не ошибка подключения: сообщество всё равно откроется по ключу.
+        // Not a connection error: the community still opens by the key.
         let target =
             parse_invite_link("https://status.app/cc/!!!not-base64!!!#zQ3shabc".to_string());
         assert!(target.is_some());

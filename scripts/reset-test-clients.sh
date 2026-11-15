@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# reset-test-clients.sh — очистка тестовых клиентов для чистого прогона.
+# reset-test-clients.sh — wipes the test clients for a clean run.
 #
-#   SIM — Status Desktop (каталог данных по умолчанию: data_for_sim)
-#   SA  — Stauri Android (телефон, pm clear)
-#   SD  — Stauri Desktop (каталоги данных приложения)
+#   SIM — Status Desktop (default data directory: data_for_sim)
+#   SA  — Stauri Android (phone, pm clear)
+#   SD  — Stauri Desktop (application data directories)
 #
-# Использование (из stauri-app/):
-#   ./scripts/reset-test-clients.sh              # очистить все три
-#   ./scripts/reset-test-clients.sh SA SD        # только выбранные
-#   ./scripts/reset-test-clients.sh --dry-run    # только показать, что будет сделано
+# Usage (from stauri-app/):
+#   ./scripts/reset-test-clients.sh              # wipe all three
+#   ./scripts/reset-test-clients.sh SA SD        # only the selected ones
+#   ./scripts/reset-test-clients.sh --dry-run    # only show what would be done
 #
-# Переопределить каталог SIM: SIM_DIR=/путь ./scripts/reset-test-clients.sh SIM
+# Override the SIM directory: SIM_DIR=/path ./scripts/reset-test-clients.sh SIM
 #
-# ВНИМАНИЕ: удаление необратимо, архивации нет. Очищается всё: профили, ключи,
-# контакты, чаты, логи. Для проверки перед запуском используйте --dry-run.
+# WARNING: deletion is irreversible, nothing is archived. Everything goes:
+# profiles, keys, contacts, chats, logs. Use --dry-run to check beforehand.
 
 set -euo pipefail
 
@@ -39,7 +39,7 @@ has() { local t; for t in "${TARGETS[@]}"; do [[ "$t" == "$1" ]] && return 0; do
 say()  { echo "  $*"; }
 head_() { echo; echo "=== $* ==="; }
 
-# Остановить процессы клиента перед удалением его данных.
+# stop_procs — stops the client's processes before its data is deleted.
 stop_procs() {
   local pattern="$1" label="$2"
   local pids; pids="$(pgrep -f "$pattern" || true)"

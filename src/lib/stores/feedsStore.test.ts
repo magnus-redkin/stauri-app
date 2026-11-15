@@ -7,9 +7,9 @@ import {
   loadFeeds,
 } from './feedsStore.svelte';
 
-// Стор трогает `localStorage` только в `loadFeeds`/`persist`; чистые
-// функции ниже от него не зависят, но модуль импортирует `invoke` — его
-// отсутствие в happy-dom не мешает, пока команды не вызываются.
+// The store touches `localStorage` only in `loadFeeds`/`persist`; the pure functions below do not
+// depend on it. The module imports `invoke`, though, and its absence under happy-dom does not
+// matter as long as no command is called.
 const invokeMock = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 
@@ -38,8 +38,8 @@ describe('rewriteRsshub', () => {
   });
 
   it('не трогает хост, который лишь заканчивается на rsshub.app', () => {
-    // `evil-rsshub.app` не должен считаться RSSHub: сравнение идёт по
-    // точному имени хоста, а не по суффиксу.
+    // `evil-rsshub.app` must not count as RSSHub: the comparison is by exact host name, not by
+    // suffix.
     const lookalike = 'https://evil-rsshub.app/telegram/channel/x';
     expect(rewriteRsshub(lookalike)).toBe(lookalike);
   });
@@ -62,8 +62,8 @@ describe('normalizeFeedUrl', () => {
   });
 
   it('превращает @name в маршрут RSSHub на зеркале', () => {
-    // Не `t.me/s/name`: готовую HTML-страницу разбирать хрупко, а маршрут
-    // RSSHub отдаёт настоящий RSS для любого канала.
+    // Not `t.me/s/name`: the ready HTML page is fragile to parse, while the RSSHub route returns
+    // real RSS for any channel.
     expect(normalizeFeedUrl('@status')).toBe(
       `https://${RSSHUB_MIRROR}/telegram/channel/status`
     );
@@ -76,9 +76,8 @@ describe('normalizeFeedUrl', () => {
   });
 
   it('превращает полную ссылку t.me/name в маршрут RSSHub', () => {
-    // Пользователь копирует адрес канала из браузера целиком — это самый
-    // частый способ, и раньше такой ввод уходил на `t.me/s/`, то есть
-    // разбирался как HTML.
+    // Users copy the whole channel address from a browser, which is the most common case; such
+    // input must reach RSSHub rather than `t.me/s/`, where it would be parsed as HTML.
     expect(normalizeFeedUrl('https://t.me/eveningprophet')).toBe(
       `https://${RSSHUB_MIRROR}/telegram/channel/eveningprophet`
     );
@@ -88,7 +87,7 @@ describe('normalizeFeedUrl', () => {
   });
 
   it('не путает t.me с чужим хостом', () => {
-    // `t.me.evil.com` не должен считаться Telegram.
+    // `t.me.evil.com` must not count as Telegram.
     const other = 'https://t.me.evil.com/feed';
     expect(normalizeFeedUrl(other)).toBe(other);
   });
@@ -101,20 +100,19 @@ describe('normalizeFeedUrl', () => {
 });
 
 /**
- * Чтение хранилища.
+ * Storage reads.
  *
- * Главное, что здесь проверяется, — миграция: записи версии 1 содержат
- * отрывок с «…» внутри строки, поэтому их нужно перечитать с сервера. Без
- * этого пользователь после обновления видел бы старый обрезанный текст и
- * решил, что раскрытие по клику не работает.
+ * The main thing checked here is migration: version 1 records hold a snippet with "…" inside the
+ * string, so they must be refetched. Without that the user would see the old truncated text after
+ * an upgrade and conclude that expanding on click is broken.
  */
 describe('loadFeeds', () => {
   beforeEach(() => {
     invokeMock.mockReset();
     localStorage.clear();
     feedsState.subscriptions.clear();
-    // Флаг стоит после первого вызова в жизни модуля, поэтому сбрасываем
-    // его вручную: иначе каждый следующий тест получал бы пустой стор.
+    // The flag is set after the module's first call, so reset it by hand: otherwise every later
+    // test would get an empty store.
     feedsState.loaded = false;
   });
 
@@ -140,11 +138,11 @@ describe('loadFeeds', () => {
 
     loadFeeds();
 
-    // Сразу после чтения — сохранённое; это состояние видно до обновления.
+    // Right after the read comes the stored state; that is what is visible before the refresh.
     expect(feedsState.subscriptions.get('https://example.com/feed')?.title).toBe('Old');
 
-    // Обновление идёт фоном: ждём, пока цепочка отработает целиком, иначе
-    // её вызов `invoke` попадёт в следующий тест и тот «увидит» лишний вызов.
+    // The refresh runs in the background: wait for the whole chain to finish, or its `invoke` call
+    // lands in the next test and that test "sees" an extra call.
     await new Promise((r) => setTimeout(r, 0));
 
     expect(invokeMock).toHaveBeenCalledWith('fetch_feed', {
@@ -175,8 +173,8 @@ describe('loadFeeds', () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(feedsState.subscriptions.get('https://example.com/feed')?.title).toBe('Fresh');
-    // `invoke` используется ещё и логированием (`log_frontend`), поэтому
-    // проверяем именно вызовы загрузки ленты, а не факт вызова вообще.
+    // `invoke` is also used by logging (`log_frontend`), so check the feed-loading calls
+    // specifically rather than any call at all.
     expect(invokeMock.mock.calls.filter((c) => c[0] === 'fetch_feed')).toHaveLength(0);
   });
 

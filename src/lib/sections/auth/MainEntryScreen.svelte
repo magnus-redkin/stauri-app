@@ -14,8 +14,8 @@
     selectedAccountKeyUid = $bindable(''),
     selectedNetwork = $bindable('mainnet')
   }: {
-    onLogin: (password: string) => void; // <-- Теперь пароль передается в колбэк
-    onCreate: (password: string) => void; // <-- Теперь пароль передается в колбэк
+    onLogin: (password: string) => void;
+    onCreate: (password: string) => void;
     onRecovery: () => void;
     onNetworkChange?: (network: string) => void;
     hasProfiles: boolean;
@@ -23,7 +23,8 @@
     selectedNetwork: string;
   } = $props();
 
-  // Раздельные состояния для паролей
+  // Separate password state for the two blocks, so switching between them does not carry a
+  // value into the wrong form.
   let loginPassword = $state('');
   let createPassword = $state('');
 

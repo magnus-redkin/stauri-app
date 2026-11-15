@@ -1,50 +1,34 @@
 /**
- * История переходов внутри приложения.
+ * In-app navigation history behind the back and forward shortcuts.
  *
- * ## Зачем
+ * A snapshot of key state is stored rather than a section name, because the user returns to the
+ * exact place they left: from a chat to that same chat, from the catalog to the community they had
+ * expanded. A browser history is unavailable here: the SvelteKit SPA has a single URL, so
+ * `history.back()` has nowhere to go and the stack is our own.
  *
- * До сих пор «назад» существовало только в двух местах и вручную: кнопка ← в
- * панели dApp и повторный клик по иконке раздела. Из чата в список, из
- * профиля в домашний экран, из открытого сообщества в каталог — везде
- * приходилось помнить, откуда пришёл. Alt+← / Alt+→ дают то же поведение,
- * что в браузере, и работают одинаково во всех разделах.
- *
- * ## Почему снимок состояния, а не «шаг назад по разделам»
- *
- * Пользователь возвращается не в раздел, а в то место, из которого ушёл:
- * из чата — в тот же чат, из каталога — в раскрытое сообщество. Поэтому
- * история хранит снимок ключевых состояний, а не просто имя раздела.
- *
- * ## Почему нельзя сделать это в webview средствами браузера
- *
- * У SvelteKit здесь SPA без настоящей истории: `history.back()` вернул бы
- * на другой URL, а у нас один. Поэтому стек свой.
- *
- * ## Как записывается
- *
- * Стек не размечается вручную в каждом месте навигации — это легко забыть.
- * Вместо этого `+page.svelte` следит за ключевыми состояниями и вызывает
- * [`record`] после каждого изменения. Ключевая строка (`key`) сравнивается с
- * текущей вершиной: одинаковые подряд не пишутся, иначе «назад» возвращало
- * бы в то же место.
+ * @remarks
+ * The stack is not recorded by hand at each navigation point, which is easy to forget. Instead
+ * `+page.svelte` watches the key states and calls [`record`] after each change. A snapshot's key is
+ * compared with the current top, so consecutive identical states are not written, or "back" would
+ * return to the same place.
  */
 
 export interface NavSnapshot {
-  /** Раздел верхнего уровня (`home`, `chat`, `dapps`, …). */
+  /** Top-level section (`home`, `chat`, `dapps`, …). */
   section: string;
-  /** Выбранный чат (id) или `null`. */
+  /** Selected chat id, or `null`. */
   chatId: string | null;
-  /** Открытый провайдер в разделе dApp или `null`. */
+  /** Provider open in the dApp section, or `null`. */
   dappView: string | null;
-  /** Выбранное сообщество в каталоге (id) или `null`. */
+  /** Selected catalog community id, or `null`. */
   communityId: string | null;
-  /** Экран восстановления. */
+  /** Recovery screen. */
   showRecovery: boolean;
-  /** Экран seed-фразы. */
+  /** Seed-phrase screen. */
   showCreateSeed: boolean;
 }
 
-/** Максимум шагов: глубже пользователь всё равно не возвращается. */
+/** Maximum number of steps; nobody goes deeper than this anyway. */
 const MAX_STEPS = 50;
 
 interface Entry {
@@ -53,24 +37,25 @@ interface Entry {
 }
 
 export const navState = $state({
-  /** Позиция в истории; -1 — истории нет. */
+  /** Position in history; -1 means history is empty. */
   index: -1,
-  /** Можно ли шагнуть назад/вперёд — для кнопок в интерфейсе. */
+  /** Whether a step back/forward is possible, for the UI buttons. */
   canBack: false,
   canForward: false,
 });
 
-// Стек и применятель живут вне `$state`: это не то, что читает шаблон.
-// Читаются только `canBack`/`canForward` выше.
+// The stack and the applier live outside `$state`: the template does not read them. Only
+// `canBack`/`canForward` above are read.
 let stack: Entry[] = [];
 let applyFn: ((s: NavSnapshot) => void) | null = null;
 
 /**
- * Регистрирует функцию восстановления состояния.
+ * Registers the state-restoring function.
  *
- * Вызывается из `+page.svelte` один раз: только он знает, как выставить
- * раздел и вложенные экраны. Стор не импортирует компонент, чтобы не
- * получилось цикла.
+ * @param fn - Callback that applies a snapshot to the app.
+ * @remarks
+ * Called once from `+page.svelte`, the only place that knows how to set the section and nested
+ * screens. The store does not import the component, to avoid a cycle.
  */
 export function registerNavigationApplier(fn: (s: NavSnapshot) => void): void {
   applyFn = fn;
@@ -81,7 +66,7 @@ function syncFlags(): void {
   navState.canForward = navState.index >= 0 && navState.index < stack.length - 1;
 }
 
-/** Строка-идентификатор снимка: по ней отсеиваются повторы. */
+/** Snapshot identifier string; duplicates are filtered out by it. */
 function keyOf(s: NavSnapshot): string {
   return [
     s.section,
@@ -94,20 +79,21 @@ function keyOf(s: NavSnapshot): string {
 }
 
 /**
- * Записывает текущее состояние как шаг истории.
+ * Records the current state as a history step.
  *
- * Если пользователь перед этим вернулся назад, «будущее» отбрасывается —
- * так же, как в браузере: новый переход из середины истории начинает новую
- * ветку.
+ * @param snapshot - Key states describing where the user is.
+ * @remarks
+ * If the user went back first, the "future" is dropped, as in a browser: a new transition from
+ * the middle of the history starts a new branch.
  */
 export function record(snapshot: NavSnapshot): void {
   const key = keyOf(snapshot);
 
-  // Тот же экран, что и текущая вершина: это не переход, а перерисовка
-  // (например, пришло новое сообщение). Ничего не пишем.
+  // Same screen as the current top: a re-render (a new message arrived, say), not a transition.
+  // Record nothing.
   if (navState.index >= 0 && stack[navState.index]?.key === key) return;
 
-  // Переход из середины: обрезаем всё, что было «впереди».
+  // A transition from the middle: drop everything "ahead".
   if (navState.index < stack.length - 1) {
     stack = stack.slice(0, navState.index + 1);
   }
@@ -119,7 +105,7 @@ export function record(snapshot: NavSnapshot): void {
   syncFlags();
 }
 
-/** Шаг назад. `true`, если что-то восстановили. */
+/** Steps back. Returns `true` when something was restored. */
 export function goBack(): boolean {
   if (navState.index <= 0 || !applyFn) return false;
   navState.index -= 1;
@@ -128,7 +114,7 @@ export function goBack(): boolean {
   return true;
 }
 
-/** Шаг вперёд. `true`, если что-то восстановили. */
+/** Steps forward. Returns `true` when something was restored. */
 export function goForward(): boolean {
   if (navState.index >= stack.length - 1 || !applyFn) return false;
   navState.index += 1;
@@ -138,10 +124,10 @@ export function goForward(): boolean {
 }
 
 /**
- * Сбрасывает историю.
+ * Clears the history.
  *
- * Нужно при выходе из аккаунта: возвращаться в чаты предыдущего профиля
- * нельзя, а переход назад по чужой истории показал бы пустые экраны.
+ * Runs on sign-out: returning into the previous profile's chats is not allowed, and stepping back
+ * through foreign history would show empty screens.
  */
 export function resetNavigation(): void {
   stack = [];
@@ -149,7 +135,7 @@ export function resetNavigation(): void {
   syncFlags();
 }
 
-/** Только для тестов. */
+/** Test-only accessor for the snapshot keys on the stack. */
 export function _debugStack(): string[] {
   return stack.map((e) => e.key);
 }

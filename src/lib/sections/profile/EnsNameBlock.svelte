@@ -1,26 +1,20 @@
 <script lang="ts">
   /**
-   * Регистрация имени ENS внутри раздела профиля.
+   * Registration of an ENS name inside the profile section.
    *
-   * ## Почему блок, а не вкладка кошелька
+   * An `<name>.stateofus.eth` name belongs to the profile rather than the wallet: it is
+   * tied to the Status identity and visible to contacts as an address for transfers. The
+   * profile is where the name and the avatar are already edited, so registration sits next
+   * to them.
    *
-   * Имя `<имя>.stateofus.eth` — это свойство профиля, а не кошелька: оно
-   * привязано к личности в Status и видно собеседникам как адрес для перевода.
-   * В кошельке оно оказалось по ошибке — там его искали рядом с «Отправить»,
-   * но менять его человек идёт в профиль, где уже стоят имя и аватар.
+   * The password is asked here rather than reused from the session: a user can open the
+   * profile without having sent a transfer, so no session password exists yet. After a
+   * successful registration it is stored for the session, and the next send does not ask
+   * again.
    *
-   * ## Почему своим паролем, а не из сессии
-   *
-   * В кошельке пароль уже лежал в памяти (`sendStore`) после первого перевода,
-   * и брать его оттуда было естественно. В профиль человек может прийти, ни
-   * разу не отправив перевод, поэтому пароль спрашивается здесь и после
-   * успешной регистрации запоминается в общей сессии — следующая отправка
-   * уже не спросит.
-   *
-   * ## Почему поле — только имя
-   *
-   * Регистратор хэширует ровно тот label, который ему передали. Ввести `.eth`
-   * в поле значило бы получить `.eth.stateofus.eth`. Домен показан рядом.
+   * The field accepts the label only. The registrar hashes exactly what it is given, so
+   * typing `.eth` would produce `.eth.stateofus.eth`; the domain is shown beside the field
+   * instead.
    */
   import { i18n } from '$lib/i18n';
   import { statusState } from '$lib/stores/statusStore.svelte';
@@ -49,55 +43,47 @@
   const chainName = $derived(CHAIN_NAMES[chainId] ?? String(chainId));
   const supported = $derived(ensSupported(chainId));
 
-  /** Залоговый токен: на Sepolia это STT, на mainnet — SNT. */
+  /** Stake token: STT on Sepolia, SNT on mainnet. */
   const stakeSymbol = $derived(chainId === 11155111 ? 'STT' : 'SNT');
 
   const nameError = $derived(usernameError(ensState.username));
   const canReview = $derived(!!ensState.username.trim() && !nameError && supported);
 
   /**
-   * Балансы, которые решают, пройдёт ли регистрация.
+   * Balances that decide whether registration can succeed.
    *
-   * `$derived` от `walletState.balances`: как только кошелёк перечитает
-   * балансы (после перевода или по кнопке «Обновить»), цифры здесь тоже
-   * обновятся, без перезагрузки профиля.
+   * Derived from `walletState.balances`, so a balance refresh (after a transfer, or through
+   * the refresh button) updates these figures without reopening the profile.
    */
   const balances = $derived(chainBalances(chainId));
 
-  /** Хватает ли залога: цена известна и баланс не меньше её. */
+  /** Whether the stake is covered: the price is known and the balance is not below it. */
   const stakeShort = $derived(
     ensState.price !== null && balances.stake !== null && balances.stake < ensState.price
   );
 
   /**
-   * Нет ETH на комиссию.
+   * Whether there is no ETH for the fee.
    *
-   * Только явный ноль. `null` означает «баланс ещё не загружен или RPC не
-   * ответил» — предупреждать в этом случае значило бы пугать человека без
-   * денег при полном кошельке. Неизвестный баланс показывается как «—».
+   * Only an explicit zero counts. `null` means "balances not loaded yet or the RPC did not
+   * answer", and warning on that would alarm a user with a funded wallet; an unknown balance
+   * is shown as "—" instead.
    */
   const nativeShort = $derived(balances.native === 0n);
 
   /**
-   * Почему регистрация заведомо не пройдёт. Пустая строка — можно.
+   * Why registration cannot possibly succeed; an empty string means it can.
    *
-   * ## Почему блокируем заранее
+   * Blocking early spares the user from typing a password only to be refused by the
+   * contract — a refusal that is not about the password and is hard to read as such.
    *
-   * Без этого человек исправно доходит до поля пароля, вводит его и получает
-   * отказ от контракта — уже после того, как набрал пароль и нажал кнопку.
-   * Отказ при этом не про пароль, и понять это из текста ошибки трудно.
+   * Only known data blocks. A `null` balance means "unknown", not "zero": blocking on it
+   * would forbid registration with a funded wallet whose balances have not loaded. Which is
+   * why only a taken name, an unsupported network, a known balance below the stake or a
+   * known zero ETH balance block the form.
    *
-   * ## Почему блокируем только на достоверных данных
-   *
-   * `null` в балансе — «неизвестно», а не «ноль». Блокировать на неизвестном
-   * значило бы запрещать регистрацию при полном кошельке, если балансы ещё не
-   * подгрузились. Поэтому блокируют только: имя занято, сеть не поддерживается,
-   * известный баланс меньше залога, известный ETH ровно ноль.
-   *
-   * ## Почему не блокируем, пока имя не проверено
-   *
-   * Цена неизвестна (`price === null`) — значит и сравнивать не с чем; в этом
-   * случае отправку не запрещаем, а уточняем при нажатии.
+   * An unknown price (`price === null`) leaves nothing to compare, so it does not block; the
+   * check happens when the button is pressed.
    */
   const blockedReason = $derived.by(() => {
     if (!supported) return 'ens-blocked-unsupported';
@@ -139,8 +125,8 @@
 
   {#if !supported}
     <!--
-      Регистратор Status развёрнут только в mainnet и Sepolia. На прочих
-      сетях не показываем форму, по которой заведомо придёт отказ.
+      The Status registrar is deployed on mainnet and Sepolia only. Other networks get the
+      explanation instead of a form that is certain to be refused.
     -->
     <p class="text-xs text-muted-foreground">
       {i18n.t('ENS names can be registered only on Ethereum mainnet or Sepolia.')}
@@ -207,9 +193,9 @@
     </button>
 
     <!--
-      Что есть на счету. Без этого единственным ответом на «почему не идёт»
-      было бы сообщение об ошибке после нажатия кнопки: маршрут не строится
-      без залога, и комиссия остаётся неизвестной.
+      What the account holds. Without it the only answer to "why does this not go through"
+      would be an error after the button is pressed: the route is not built without the
+      stake, and the fee stays unknown.
     -->
     <div class="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
       <span>
@@ -245,8 +231,8 @@
     {/if}
 
   {:else}
-    <!-- Подтверждение, отправка и отказ. При отказе форма не исчезает:
-         чаще всего достаточно повторить пароль, а не набирать имя заново. -->
+    <!-- Confirmation, sending and refusal. A refusal keeps the form on screen: usually the
+         password has to be entered again, not the name. -->
     <div class="border border-border rounded-lg divide-y divide-border text-sm">
       <div class="p-2 flex justify-between gap-3">
         <span class="text-xs text-muted-foreground">{i18n.t('Network')}</span>
@@ -300,9 +286,8 @@
           {i18n.t('Needed to sign the transaction. Kept in memory until you log out.')}
         </p>
         <!--
-          Поле выключено, когда регистрация заведомо не пройдёт: набирать
-          пароль ради отказа от контракта — лишняя работа, а причина уже
-          написана ниже.
+          The field is disabled when registration cannot succeed: typing a password for a
+          refusal by the contract is wasted effort, and the reason is already stated below.
         -->
         <PasswordInput
           bind:value={passwordInput}

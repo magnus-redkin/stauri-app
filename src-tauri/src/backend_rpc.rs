@@ -1,28 +1,34 @@
-//! Вызов status-go через аутентифицирующий прокси.
+//! status-go calls through the authenticating proxy.
 //!
-//! Раньше эта функция жила внутри `transfer.rs`, но понадобилась и ENS-пути.
-//! Копия разошлась бы: одно место исправили, другое забыли. Поэтому вынесена
-//! сюда и используется обоими модулями.
+//! Shared by the transfer and ENS paths so the request handling lives in one
+//! place instead of drifting between copies.
 //!
-//! ## Почему через прокси, а не напрямую
+//! ## Why through the proxy
 //!
-//! `status-backend` не проверяет, кто к нему подключился: любой локальный
-//! процесс может вызвать `settings_getSettings` (seed-фраза) или `wallet_*`.
-//! Прокси требует заголовок с токеном, сгенерированным при старте
-//! (`auth_proxy.rs`), поэтому даже знание порта не даёт доступа.
+//! `status-backend` does not check who connects to it: any local process could
+//! call `settings_getSettings` (the seed phrase) or `wallet_*`. The proxy
+//! requires a header with a token generated at startup (see `auth_proxy.rs`), so
+//! knowing the port alone does not grant access.
 
 use serde_json::{Value, json};
 
 use crate::auth_proxy;
 use crate::error::{AppError, AppResult};
 
-/// Имя метода прокси, через который уходят все JSON-RPC вызовы.
+/// Name of the proxy method that all JSON-RPC calls go through.
 const CALL_RPC: &str = "CallRPC";
 
-/// Запрос к status-go через прокси.
+/// Calls status-go through the proxy.
 ///
-/// Таймаут 60 секунд: сборка транзакции и оценка газа на медленной сети
-/// укладываются, а зависший вызов иначе держал бы команду бесконечно.
+/// The timeout is 60 seconds: building a transaction and estimating gas on a
+/// slow network fit inside it, while a hung call would otherwise block the
+/// command indefinitely.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the proxy token is missing,
+/// the request fails, the backend answers with a non-success HTTP status, sends
+/// invalid JSON or reports a JSON-RPC error. Returns
+/// [`crate::error::ErrorKind::Internal`] when the HTTP client cannot be built.
 pub async fn call(port: u16, method: &str, params: Value) -> AppResult<Value> {
     let token = auth_proxy::token()?;
     let url = format!("http://127.0.0.1:{port}/statusgo/{CALL_RPC}");
@@ -35,7 +41,7 @@ pub async fn call(port: u16, method: &str, params: Value) -> AppResult<Value> {
     });
 
     let client = reqwest::Client::builder()
-        // Локальный адрес: системный прокси здесь только помешает.
+        // Local address: a system proxy would only get in the way.
         .no_proxy()
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -62,7 +68,7 @@ pub async fn call(port: u16, method: &str, params: Value) -> AppResult<Value> {
         .await
         .map_err(|e| AppError::backend(format!("backend sent invalid JSON: {e}")))?;
 
-    // Ошибка метода приходит внутри JSON-RPC, а не кодом HTTP.
+    // A method error arrives inside the JSON-RPC envelope, not as an HTTP status.
     if let Some(err) = envelope.get("error") {
         return Err(AppError::backend(describe_rpc_error(err)));
     }
@@ -70,11 +76,11 @@ pub async fn call(port: u16, method: &str, params: Value) -> AppResult<Value> {
     Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
 }
 
-/// Достаёт текст ошибки из ответа JSON-RPC.
+/// Extracts the message from a JSON-RPC error response.
 ///
-/// status-go кладёт ошибки в двух формах: строка и объект
-/// `{ code, message }`. Показываем что есть, но без тела ответа целиком —
-/// там бывают адреса и суммы.
+/// status-go reports errors in two forms: a plain string and a
+/// `{ code, message }` object. Both are handled without returning the whole
+/// body, which can carry addresses and amounts.
 pub fn describe_rpc_error(err: &Value) -> String {
     if let Some(msg) = err.as_str() {
         return msg.to_string();

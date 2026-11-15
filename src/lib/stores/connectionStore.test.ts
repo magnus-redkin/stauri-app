@@ -45,8 +45,8 @@ vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 /**
- * Сеть в том виде, в каком её отдаёт networks_getFlatEthereumChains.
- * Поля называются enabled и isActive — именно так они записаны в params.Network.
+ * A network in the shape networks_getFlatEthereumChains returns it.
+ * The fields are named enabled and isActive — exactly as written in params.Network.
  */
 function network(chainId: number, name: string, overrides: Record<string, unknown> = {}) {
   return { chainId, chainName: name, enabled: true, isActive: true, rpcProviders: [], ...overrides };
@@ -55,15 +55,16 @@ function network(chainId: number, name: string, overrides: Record<string, unknow
 const PROXY_PORT = 43057;
 
 /**
- * Секрет пути форвардера.
+ * Forwarder path secret.
  *
- * Форвардер отклоняет запросы без него (отвечает 404), поэтому URL провайдера
- * обязан содержать секрет первым сегментом. Тесты фиксируют это в ожиданиях:
- * иначе регрессия — «секрет снова пропал из URL» — прошла бы незамеченной.
+ * The forwarder rejects requests without it (answering 404), so a provider URL
+ * must carry the secret as its first segment. The tests pin this in their
+ * expectations: otherwise a regression — "the secret disappeared from the URL
+ * again" — would go unnoticed.
  */
 const PROXY_SECRET = 'deadbeefdeadbeefdeadbeefdeadbeef';
 
-/** URL провайдера в том виде, в каком его должна построить функция. */
+/** Provider URL in the shape the function is expected to build. */
 function proxyUrl(chainId: number): string {
   return `http://127.0.0.1:${PROXY_PORT}/${PROXY_SECRET}/${chainId}`;
 }
@@ -95,8 +96,8 @@ describe('configureWalletRpc', () => {
   });
 
   it('пропускает сети без isActive — регрессия на поле "active"', async () => {
-    // Сети с полем active вместо isActive: фильтр по несуществующему полю
-    // отбирал 0 сетей, и провайдеры не прописывались вовсе.
+    // Networks with an `active` field instead of `isActive`: filtering by the
+    // missing field selected 0 networks and no providers were written at all.
     (getFlatEthereumChains as any).mockResolvedValue([
       network(1, 'Ethereum'),
       { chainId: 10, chainName: 'Optimism', enabled: true, active: true },
@@ -117,8 +118,8 @@ describe('configureWalletRpc', () => {
 
     await configureWalletRpc(12345);
 
-    // До старта ноды сервис networks_* недоступен, но форвардер уже должен
-    // знать URL: провайдер с прошлого запуска указывает на этот порт.
+    // Before node start networks_* is unavailable, but the forwarder must
+    // already know the URLs: a provider from the previous run points at this port.
     expect(startRpcProxy).toHaveBeenCalledWith(
       expect.objectContaining({ 1: expect.stringContaining('publicnode') })
     );
@@ -192,11 +193,11 @@ describe('configureWalletRpc', () => {
 });
 
 /**
- * Перезапуск ноды на чистом профиле.
+ * Node restart on a fresh profile.
  *
- * Нода стартует внутри loginAccount и сразу собирает RPC-клиентов из встроенных
- * провайдеров; кэш не инвалидируется до её остановки. Поэтому если провайдеры
- * пришлось записывать, вход нужно повторить, иначе балансы останутся с ошибкой.
+ * The node starts inside loginAccount and immediately builds RPC clients from the
+ * built-in providers; the cache is not invalidated until it stops. So when
+ * providers had to be written, login must be repeated, or balances stay in error.
  */
 describe('перезапуск ноды после записи провайдеров', () => {
   beforeEach(() => {
@@ -223,14 +224,14 @@ describe('перезапуск ноды после записи провайде
 
     await login('pass', 'key-uid-1');
 
-    // Выход и повторный вход произошли ровно один раз.
+    // Logout and re-login happened exactly once.
     expect(logout).toHaveBeenCalledTimes(1);
     expect(logout).toHaveBeenCalledWith(12345);
     expect(waitForNodeStopped).toHaveBeenCalledTimes(1);
     expect(loginAccount).toHaveBeenCalledTimes(2);
     expect(loginAccount).toHaveBeenNthCalledWith(1, 12345, 'pass', 'key-uid-1');
     expect(loginAccount).toHaveBeenNthCalledWith(2, 12345, 'pass', 'key-uid-1');
-    // messenger стартует только после перезапуска — один раз.
+    // messenger starts only after the restart — once.
     expect(startMessenger).toHaveBeenCalledTimes(1);
   });
 
@@ -238,8 +239,8 @@ describe('перезапуск ноды после записи провайде
     (getFlatEthereumChains as any).mockResolvedValue([network(1, 'Ethereum')]);
 
     const order: string[] = [];
-    // Модель настоящего сигнала: ожидание регистрируется заранее, а
-    // разрешается только после того, как нода действительно встала.
+    // Model of the real signal: the wait is registered in advance and resolves
+    // only after the node has actually stopped.
     let resolveStopped: () => void = () => {};
     (waitForNodeStopped as any).mockImplementation(
       () => new Promise<void>((resolve) => {
@@ -255,8 +256,8 @@ describe('перезапуск ноды после записи провайде
 
     await login('pass', 'key-uid-1');
 
-    // Регистрация ожидания — до logout (иначе сигнал можно проспать),
-    // но повторный вход наступает строго после остановки.
+    // The wait is registered before logout (otherwise the signal could be
+    // missed), but re-login happens strictly after the stop.
     expect(order).toEqual(['login', 'wait-registered', 'logout', 'stopped', 'login']);
   });
 
@@ -279,8 +280,8 @@ describe('перезапуск ноды после записи провайде
   });
 
   it('пропускает перезапуск при создании аккаунта без keyUid', async () => {
-    // createAccountAndLogin мог не отдать key-uid: повторный вход без него
-    // невозможен, поэтому остаётся прежний путь — провайдеры и messenger.
+    // createAccountAndLogin may not return a key-uid: re-login without one is
+    // impossible, so the previous path applies — providers and messenger.
     statusState.accountKeyUid = '';
     (getFlatEthereumChains as any).mockResolvedValue([network(1, 'Ethereum')]);
     (createAccountAndLogin as any).mockResolvedValue({});

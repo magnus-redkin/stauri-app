@@ -12,77 +12,72 @@
     name: string;
     lastMessage: string;
     /**
-     * `direct` — личная переписка, `community` — канал внутри сообщества,
-     * `external` — источник провайдера (см. docs/ru/providers_and_dapps.md).
+     * `direct` — a one-to-one conversation, `community` — a channel inside a
+     * community, `external` — a provider source (see docs/ru/providers_and_dapps.md).
      *
-     * `channel` — публичный канал status-go, оставлен только для уже
-     * существующих чатов. Создавать новые из интерфейса нельзя: у такого
-     * канала нет владельца, его нельзя закрыть, переименовать или найти по
-     * каталогу, и в модели АКК он не выражает «канал с автором».
+     * `channel` — a public status-go channel, kept only for chats that already
+     * exist. The UI cannot create new ones: such a channel has no owner, cannot be
+     * closed, renamed or found through a catalogue, and in the AKK model it does
+     * not express "a channel with an author".
      */
     type: 'direct' | 'channel' | 'community' | 'external';
     isPendingRequest?: boolean;
-    /** Время последней активности (мс): сортировка списка «по дате». */
+    /** Last activity time in ms, used to sort the list by date. */
     sortTs?: number;
     unreadCount?: number;
-    /** Для каналов сообществ: к какому сообществу и категории относятся. */
+    /**
+     * For community channels: the community and category they belong to.
+     *
+     * `name` holds only the channel name (`general`); the community title is kept
+     * separately in `communityName`.
+     */
     communityId?: string;
     communityName?: string;
     categoryId?: string;
-    /** Можно ли писать. Для канала без права постинга ввод не показывается. */
+    /** Whether posting is allowed. A channel without posting rights shows no input. */
     canPost?: boolean;
-    /** Тип канала АКК (news / request / issues); см. channelKind.ts. */
+    /** AKK channel kind (news / request / issues); see channelKind.ts. */
     kind?: 'news' | 'request' | 'issues';
-    /** Внешний источник: чей элемент и откуда он пришёл. */
+    /** External source: whose item this is and where it came from. */
     source?: string;
     sourceUrl?: string;
   };
 
-  /**
-   * Поиск по списку чатов.
-   *
-   * Ищем и по имени сообщества: у канала внутри сообщества `name` — это
-   * только имя канала (`general`), а название сообщества лежит в
-   * `communityName`. Без этой ветки ввод `stauri-akk-test-1131` не находил
-   * ничего, хотя канал видён под заголовком с этим именем.
-   */
-  // По дате активности, новые сверху. Копия: стор не мутируем.
+  /** Chats by activity date, newest first. A copy, so the store is not mutated. */
   const filteredItems = $derived(
     [...chatsState.items].sort((a, b) => (b.sortTs ?? 0) - (a.sortTs ?? 0))
   );
 
   /**
-   * Подписки на внешние ленты как элементы списка чатов.
+   * Subscriptions to external feeds, shaped as chat list rows.
    *
-   * Живут отдельно от `chatsState.items`, потому что приходят не из
-   * status-go, а из `localStorage`. Склеиваем их здесь, а не в
-   * `chatsStore`: тот стор отвечает за «что вернул бэкенд», и подмешивать
-   * туда чужие данные значило бы смешать два источника в одном месте.
-   *
-   * Новые сверху: свежедобавленная лента должна быть видна сразу, а не
-   * искаться в конце списка.
+   * They live apart from `chatsState.items` because they come from
+   * `localStorage`, not from status-go. They are merged here rather than in
+   * `chatsStore`, which answers for what the backend returned. Newest first, so a
+   * freshly added feed is visible right away instead of at the end of the list.
    */
   const feedItems = $derived.by(() => {
-    // Форму строки строит `feedsStore`: она нужна ещё и в `selectChat`,
-    // который открывает ленту по id из другого раздела.
+    // Row shape is built by `feedsStore`, which is also needed by `selectChat`
+    // when a feed is opened by id from another section.
     const items: ChatItem[] = feedChatItems();
 
     return items;
   });
 
   /**
-   * Строки списка: подписки сверху, затем чаты.
+   * List rows: subscriptions on top, then chats.
    *
-   * Порядок задаём мы, а не источник (docs §9.3): подписки — отдельный
-   * блок, и канал сообщества не может их вытеснить.
+   * @remarks
+   * The order is fixed here, not by the source (docs §9.3): subscriptions form a
+   * separate block that a community channel cannot push aside.
    */
   const allItems = $derived([...feedItems, ...filteredItems]);
 
   /**
-   * Плоский список без заголовков сообществ.
+   * A flat list without community headings.
    *
-   * В АКК пользователь видит каналы, а не сообщества: каждый канал — отдельное
-   * техническое сообщество, и его имя в списке не выводим.
+   * In the AKK model the user sees channels, not communities: each channel is a
+   * separate technical community, so its name is not shown in the list.
    */
   const groupedItems = $derived(allItems.map((item) => ({ kind: 'item' as const, item })));
   function select(item: ChatItem) {
@@ -90,7 +85,7 @@
     onSelectChat?.(item);
   }
 
-  /** Подтверждение удаления: действие необратимо для истории. */
+  /** Row awaiting removal confirmation. Removal is irreversible for history. */
   let confirmRemove = $state<ChatItem | null>(null);
 
   async function doRemove() {
@@ -98,8 +93,8 @@
     if (!item) return;
     confirmRemove = null;
 
-    // Внешняя подписка живёт у нас, а не в бэкенде: `removeChat` отправил бы
-    // `deactivateChat` с несуществующим id и ничего не удалил.
+    // An external subscription lives here, not in the backend: `removeChat` would
+    // send `deactivateChat` with an unknown id and remove nothing.
     if (item.type === 'external') {
       if (item.sourceUrl) removeFeed(item.sourceUrl);
       if (chatsState.selected?.id === item.id) setSelectedChat(null);
@@ -159,10 +154,10 @@
   {/if}
 
   <!--
-    `min-h-0` обязателен: во flex-контейнере потомок по умолчанию не может
-    сжаться ниже своего содержимого (`min-height: auto`). Без него список
-    каналов распирал панель и не прокручивался — весь скролл уходил за
-    пределы окна.
+    `min-h-0` is required: inside a flex container a child defaults to
+    `min-height: auto` and cannot shrink below its content. Without it the channel
+    list stretched the panel and never scrolled; all scrolling went outside the
+    window.
   -->
   <ScrollArea class="flex-1 min-h-0">
     {#if chatsState.isLoading}
@@ -204,9 +199,9 @@
                     <div class="text-xs text-muted-foreground truncate">{item.lastMessage || ''}</div>
                     {#if item.type === 'external' && item.source}
                       <!--
-                        Происхождение внешнего элемента показывается всегда и не
-                        отключается: по docs/ru/providers_and_dapps.md §9.2 это
-                        часть строки, а не необязательный бейдж.
+                        An external item always shows its origin; per
+                        docs/ru/providers_and_dapps.md §9.2 it is part of the row,
+                        not an optional badge.
                       -->
                       <div class="text-[0.625rem] text-muted-foreground/70 truncate">↗ {item.source}</div>
                     {/if}
@@ -215,9 +210,9 @@
               </button>
 
               <!--
-                Убрать из списка. Показывается при наведении, но не на
-                сенсорных экранах: там hover нет, поэтому кнопка должна
-                быть видна всегда, если основной ввод — касание.
+                Remove from list. Shown on hover, but on touch screens, where
+                hover does not exist, it must stay visible when the primary input
+                is touch.
               -->
               <button
                 onclick={(e) => { e.stopPropagation(); confirmRemove = item; }}
@@ -234,11 +229,11 @@
   </ScrollArea>
 
   <!--
-    Подтверждение удаления.
+    Removal confirmation.
 
-    Спрашиваем, потому что `preserveHistory: false` стирает историю чата
-    безвозвратно: вернуть канал в список можно только повторным вступлением,
-    а сообщения при этом уже не восстановятся.
+    Removal uses `preserveHistory: false`, which wipes local history for good: the
+    channel can only be restored by joining again, and its messages will not come
+    back.
   -->
   {#if confirmRemove}
     <div class="p-3 border-t border-border bg-secondary/40 space-y-2">

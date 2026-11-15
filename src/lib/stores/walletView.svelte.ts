@@ -1,13 +1,10 @@
 /**
- * Какая вкладка открыта в разделе «Кошелёк».
+ * Which tab is open in the Wallet section.
  *
- * ## Почему отдельный стор, а не `$state` в `WalletMain`
- *
- * Вкладку переключают два места: сами кнопки в правой панели и ссылка
- * «Управление аккаунтами» в левой. Локальное состояние компонента не видно
- * левой панели, а держать копию в двух компонентах — гарантированный
- * рассинхрон: нажал «Управление аккаунтами», правая панель осталась на
- * «Активах», и ссылка снова выглядит нерабочей.
+ * The tab is changed from two places: the buttons in the right panel and the
+ * "Manage accounts" link in the left one. Component-local state is invisible to
+ * the left panel, and keeping a copy in both components guarantees drift — the
+ * right panel would stay on Assets and the link would look broken again.
  */
 
 export type WalletTab = 'assets' | 'send' | 'receive' | 'buy' | 'swap' | 'accounts';

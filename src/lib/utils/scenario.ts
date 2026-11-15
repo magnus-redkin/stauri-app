@@ -1,20 +1,30 @@
 /**
- * Метки шагов сценария для логов.
+ * Scenario step markers for the logs.
  *
- * Каждая строка начинается с `[scenario <сценарий>/<шаг>]`, поэтому по файлу
- * логов можно быстро найти нужный шаг, например:
+ * Every line starts with `[scenario <scenario>/<step>]`, so a step can be found
+ * quickly in a log file:
  *
- *   grep "\[scenario" stauri.<дата>.log
+ *   grep "\[scenario" stauri.<date>.log
  *
- * Формат фиксирован, чтобы отчёт по шаблону можно было сверять автоматически:
- * `step` — короткий идентификатор шага, `data` — небольшой объект без секретов
- * (ключи и пароли сюда не передаём; ключи сокращаем до 10 символов).
+ * The format is fixed so a report built from it can be checked automatically.
  */
 
 import { info, warn } from './log';
 
 export type ScenarioName = 'create-auto' | 'create-request' | 'join' | 'comment' | 'reply-sync';
 
+/**
+ * Writes one scenario step to the log, and on Android to the bridge trace.
+ *
+ * @param scenario - Which scenario is running.
+ * @param step - Short identifier of the step.
+ * @param data - Small payload of non-secret values; keys and passwords do not
+ * belong here, and keys are shortened to 10 characters.
+ * @param level - `info` to record progress, `warn` for a deviation.
+ * @remarks Android has no frontend log on the phone, so the same line is also
+ * sent to the bridge trace (`bridge-trace.log`), where `tests/scenarios` check
+ * it.
+ */
 export function scenarioLog(
   scenario: ScenarioName,
   step: string,
@@ -24,14 +34,17 @@ export function scenarioLog(
   const line = `[scenario ${scenario}/${step}] ${JSON.stringify(data)}`;
   if (level === 'warn') warn(line);
   else info(line);
-  // Android: логов фронтенда на телефоне нет, поэтому та же строка уходит в
-  // трассу моста (bridge-trace.log). По ней сверяют сценарии (tests/scenarios).
+  // Android: no frontend log on the phone, so the same line goes to the bridge
+  // trace (bridge-trace.log), which tests/scenarios are checked against.
   if (isAndroidWebview()) sendToBridgeTrace(line);
 }
 
 /**
- * Метки уходят в трассу по одной цепочке: порядок вызовов не гарантирован,
- * и без очереди «начало» и «конец» шага могли поменяться местами.
+ * Chain of pending bridge-trace writes.
+ *
+ * Steps go out over a single promise chain because call order is not
+ * guaranteed: without a queue, the "start" and "end" lines of a step could
+ * swap places.
  */
 let traceChain: Promise<unknown> = Promise.resolve();
 function sendToBridgeTrace(line: string): void {
@@ -45,7 +58,14 @@ function isAndroidWebview(): boolean {
   return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }
 
-/** Сокращает публичный ключ или id, чтобы в логе не было полного значения. */
+/**
+ * Shortens a public key or id so the log does not hold the full value.
+ *
+ * @param value - The key or id.
+ * @param n - Maximum characters kept, 10 by default.
+ * @returns The shortened value with an ellipsis, or an empty string for a
+ * missing one.
+ */
 export function short(value: string | undefined | null, n = 10): string {
   if (!value) return '';
   return value.length > n ? `${value.slice(0, n)}…` : value;

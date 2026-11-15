@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# android-apk.sh — шаг сборки подписанного APK (вынесен из release.sh).
-# Подключается через `source` из release.sh и release-android.sh.
-# Ожидает: $ROOT, $VERSION. Выставляет переменную APK_PATH.
+# android-apk.sh — step for building the signed APK (split out of release.sh).
+# Sourced from release.sh and release-android.sh.
+# Expects: $ROOT, $VERSION. Sets APK_PATH.
 
-# ---------- 7a. APK (Android, release, подписанный) ----------
+# ---------- 7a. APK (Android, release, signed) ----------
 echo
 if [[ "${RELEASE_SKIP_ANDROID:-0}" == "1" ]]; then
   echo "[7a] Android APK: пропущен (RELEASE_SKIP_ANDROID=1, собирает release-android.sh)"
@@ -16,7 +16,8 @@ if [[ ! -d "$ANDROID_DIR" ]]; then
   exit 1
 fi
 
-# Подпись: keystore — вне репозитория, пароль из keyring (тот же шаблон, что у Tauri).
+# Signing: the keystore lives outside the repository, the password in the
+# keyring (same pattern as Tauri's).
 KS_PATH="${STAURI_ANDROID_KEYSTORE:-$HOME/.android/stauri-release.jks}"
 if [[ ! -f "$KS_PATH" ]]; then
   echo "ERROR: keystore не найден: $KS_PATH" >&2
@@ -32,10 +33,11 @@ fi
 export STAURI_ANDROID_KEYSTORE="$KS_PATH"
 export STAURI_ANDROID_KEYSTORE_PASSWORD
 
-# versionCode по формуле Tauri CLI (tauri-cli mobile/android/mod.rs):
-# major*1000000 + minor*1000 + patch. Для 0.4.0 это 4000. Совпадение с Tauri важно:
-# он переписывает tauri.properties при каждой сборке, и наш номер должен быть тем же.
-# Бета и релиз 0.4.0 дают один код, поэтому переход беты в релиз его не меняет.
+# versionCode follows the Tauri CLI formula (tauri-cli mobile/android/mod.rs):
+# major*1000000 + minor*1000 + patch, so 0.4.0 becomes 4000. Matching Tauri
+# matters: it rewrites tauri.properties on every build, and this number must be
+# the one it would write. A prerelease and the final 0.4.0 share the same code,
+# so promoting a beta to a release does not change it either.
 VC="$(python3 -c "
 import re, sys
 m = re.match(r'(\d+)\.(\d+)\.(\d+)', '$VERSION')
@@ -48,7 +50,7 @@ tauri.android.versionCode=$VC
 PROPS
 echo "  versionName=$VERSION versionCode=$VC"
 
-# Сборка через Tauri: тот же rust-бинарник, что и для AppImage, плюс подписанный APK.
+# Build through Tauri: the same rust binary as for the AppImage, plus the signed APK.
 pnpm tauri android build --apk --target aarch64 2>&1 | sed 's/^/  /'
 
 APK_SRC="$ANDROID_DIR/app/build/outputs/apk/universal/release/app-universal-release.apk"
@@ -61,7 +63,7 @@ mkdir -p "$(dirname "$APK_PATH")"
 cp "$APK_SRC" "$APK_PATH"
 echo "  apk: $(basename "$APK_PATH")"
 
-# Проверка подписи: APK должен быть подписан нашим ключом, а не debug-ключом.
+# Signature check: the APK must be signed with our key, not the debug key.
 APKSIGNER="$(command -v apksigner || ls -d "${ANDROID_HOME:-$HOME/Android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
 if [[ -n "$APKSIGNER" ]]; then
   "$APKSIGNER" verify --print-certs "$APK_PATH" >/dev/null 2>&1 && echo "  ✓ подпись APK проверена" || {

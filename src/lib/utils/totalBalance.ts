@@ -1,81 +1,89 @@
 /**
- * Общий баланс аккаунта по основным сетям.
+ * Total account balance across the mainnet networks.
  *
- * ## Почему только mainnet
+ * ## Mainnet only
  *
- * Один и тот же ETH существует в пяти тестовых сетях как пять отдельных
- * записей. Сложить их с mainnet — значит показать сумму, которой нигде нет:
- * сеполия-ETH не конвертируется в ETH. Поэтому тестовые сети в итог не входят
- * совсем, а не «входят с нулевой ценой».
+ * The same ETH exists in five test networks as five separate entries. Adding
+ * them to mainnet would show a sum that exists nowhere, since Sepolia ETH does
+ * not convert to ETH. Test networks are therefore excluded from the total
+ * entirely rather than counted at a zero price. The total is derived from
+ * prices, and a price is approximate: it moves every minute, and some tokens
+ * have none at all (a new token, a test network, a listing missing from
+ * CoinGecko). The figure is always roughly right, and `unpriced` reports how
+ * many tokens it left out.
  *
- * ## Почему «≈»
+ * ## Arithmetic
  *
- * Сумма получается из курсов, а курс — приблизительная величина: он меняется
- * каждую минуту, а часть токенов может быть без цены вовсе (новый токен, тестовая
- * сеть, отсутствие в CoinGecko). Поэтому итог всегда приблизительный, и
- * `unpriced` говорит, сколько токенов в него не вошло.
- *
- * ## Почему считается по `bigint`, а не по числу
- *
- * Баланс приходит в минимальных единицах. `1e18` в `number` теряет точность
- * уже на 16 значащих цифрах, поэтому делим BigInt на 10^decimals и только
- * потом переводим в число — для показательной суммы этого достаточно.
+ * Balances arrive in the smallest unit, and `1e18` as a `number` loses
+ * precision beyond 16 significant digits. Each balance is divided as a `bigint`
+ * by 10^decimals and only then turned into a number, which is enough for a
+ * display figure.
  */
 
 import type { WalletToken } from '$lib/stores/walletStore.svelte';
 
 /**
- * Сети, которые попадают в итог.
+ * Networks included in the total.
  *
- * Только mainnet: Ethereum, Optimism, BNB Chain, Base, Arbitrum. Список
- * совпадает с `EVM_CHAINS` + `BSC_CHAINS` в `assetGroups.ts`, но задан
- * отдельно намеренно: то множество отвечает на вопрос «что считать одним
- * активом», а это — «что считать деньгами».
+ * Mainnet only: Ethereum, Optimism, BNB Chain, Base, Arbitrum.
+ *
+ * @remarks This matches `EVM_CHAINS` plus `BSC_CHAINS` in `assetGroups.ts` but
+ * is kept separate on purpose — that set answers "what counts as one asset",
+ * this one answers "what counts as money".
  */
 export const MAINNET_CHAINS: ReadonlySet<number> = new Set([1, 10, 56, 8453, 42161]);
 
-/** Баланс в основных единицах как число (приблизительно, для показа). */
+/** Converts a smallest-unit balance to a main-unit number, for display. */
 function toNumber(balance: bigint, decimals: number): number {
   if (decimals <= 0) return Number(balance);
   const divisor = 10n ** BigInt(decimals);
   const whole = balance / divisor;
   const fraction = balance % divisor;
-  // Остаток переводим отдельно: иначе деление BigInt отбросило бы его.
+  // Convert the remainder separately: bigint division would drop it.
   return Number(whole) + Number(fraction) / Number(divisor);
 }
 
-/** Ключ токена в том виде, в каком его ждёт `wallet_fetchPrices`. */
+/**
+ * Builds the token key `wallet_fetchPrices` expects.
+ *
+ * @param chainId - The chain id.
+ * @param tokenAddress - The token contract address.
+ * @returns The key in the `chainId-address` form, with the address lower-cased.
+ */
 export function priceKey(chainId: number, tokenAddress: string): string {
   return `${chainId}-${tokenAddress.toLowerCase()}`;
 }
 
-/** Строка к балансу без цены — такие надо перечислить отдельно. */
+/** A row for a token with a balance but no price. */
 export interface UnpricedToken {
   symbol: string;
   chainId: number;
-  /** Баланс в минимальных единицах. */
+  /** Balance in the smallest unit. */
   balance: bigint;
   decimals: number;
 }
 
 export interface TotalBalance {
-  /** Сумма в валюте цен. `0`, если цен нет вовсе. */
+  /** Sum in the currency of the prices. `0` when there are no prices at all. */
   total: number;
-  /** Сколько токенов вошло в сумму. */
+  /** Number of tokens included in the total. */
   priced: number;
-  /** Токены с ненулевым балансом, но без цены. */
+  /** Tokens with a non-zero balance but no price. */
   unpriced: UnpricedToken[];
-  /** Часть активов не вошла в сумму — итог неполный. */
+  /** Some assets were left out; the total is incomplete. */
   isPartial: boolean;
 }
 
 /**
- * Считает итог.
+ * Computes the account total.
  *
- * `prices` — плоская карта `chainId-адрес` → цена, как её отдаёт
- * `getTokenPrices`. Токен без цены не выбрасывается молча: он попадает в
- * `unpriced`, потому что иначе «итог 0» при полном кошельке выглядел бы
- * поломкой.
+ * @param tokens - Tokens as held by `walletStore`.
+ * @param prices - Flat `chainId-address` to price map, as `getTokenPrices`
+ * returns it.
+ * @returns The total, the number of priced tokens and the list of unpriced
+ * ones.
+ * @remarks A token without a price is not dropped silently: it goes into
+ * `unpriced`, because a "total 0" on a full wallet would read as a bug.
  */
 export function totalBalance(
   tokens: WalletToken[],
@@ -87,7 +95,7 @@ export function totalBalance(
 
   for (const token of tokens) {
     if (!MAINNET_CHAINS.has(token.chainId)) continue;
-    // Токен, по которому RPC не ответил, — не ноль: его просто не знаем.
+    // A token with no RPC reply is unknown, not zero.
     if (token.hasError) continue;
 
     let balance: bigint;
@@ -122,10 +130,13 @@ export function totalBalance(
 }
 
 /**
- * Формат итога для показа с «≈».
+ * Formats the total for display, marked as approximate.
  *
- * Крупные суммы без копеек: «≈ 1 234 $», мелкие — с двумя знаками. Точность
- * до цента у приблизительной цифры создавала бы ложное впечатление.
+ * @param total - The total in the price currency.
+ * @param currency - Currency symbol, `$` by default.
+ * @returns The string with a leading `≈`; `≈ $0` for a non-finite input.
+ * @remarks Large sums lose the cents: showing a cent's precision on an
+ * approximate figure would suggest an accuracy it does not have.
  */
 export function formatTotal(total: number, currency = '$'): string {
   if (!Number.isFinite(total)) return `≈ ${currency}0`;

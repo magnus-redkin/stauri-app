@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
-   * Правая панель «ввести чужой инвайт»: канал, сообщество или контакт.
+   * Right panel for entering a foreign invite: a channel, a community or a contact.
    *
-   * Разбор ссылки делает `joinByInput` — тот же, что раньше стоял в левой
-   * колонке. Здесь только поле и результат.
+   * The link is parsed by `joinByInput`; this panel only holds the input field and
+   * reports the outcome.
    */
   import { i18n } from '$lib/i18n';
   import { chatsState, joinByInput, setRightPanel } from '$lib/stores/chatsStore.svelte';
@@ -22,12 +22,12 @@
       message = { kind: 'pending', text: i18n.t('Request sent') + ': ' + result.name };
       value = '';
     } else if (result.status === 'spectated') {
-      // Канал открывается сам: переходим к переписке.
+      // The channel opens by itself: go to the conversation.
       value = '';
       setRightPanel('chat');
     } else if (result.status === 'contact') {
-      // Заявка ушла: дальше работа в контактах (строка заявки и Accept), а не
-      // в форме ввода. Справа открываем список контактов с поиском.
+      // The request is sent: the rest happens in contacts (the request row and
+      // Accept), not in this form. Contact search opens on the right.
       value = '';
       setRightPanel('contacts');
     } else {

@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { parseAmount, formatUnits, exceedsBalance, AmountError } from './amount';
 
 /**
- * Разбор сумм.
+ * Amount parsing.
  *
- * Главное, что здесь проверяется, — отказ вместо «лучшего усилия».
- * Каждый тест на исключение соответствует ошибке ввода, которая иначе
- * молча превратилась бы в неправильную сумму перевода.
+ * The main point is refusal instead of best effort: every throwing test
+ * corresponds to an input that would otherwise become a silently wrong
+ * transfer amount.
  */
 describe('parseAmount', () => {
   it('переводит целое число', () => {
@@ -20,9 +20,9 @@ describe('parseAmount', () => {
   });
 
   it('не теряет точность на 18 знаках', () => {
-    // Именно здесь `Number` врёт: parseFloat('0.1') * 1e18 !== 1e17.
+    // This is where `Number` lies: parseFloat('0.1') * 1e18 !== 1e17.
     expect(parseAmount('0.000000000000000001', 18)).toBe(1n);
-    // 15 значащих цифр после запятой дополняются нулями до 18.
+    // 15 fractional digits are padded with zeros out to 18.
     expect(parseAmount('123.456789012345678', 18)).toBe(123456789012345678000n);
   });
 
@@ -62,7 +62,7 @@ describe('parseAmount', () => {
   });
 
   it('отклоняет дробную часть, которая не помещается в decimals', () => {
-    // USDC — 6 знаков. Седьмой знак — ошибка ввода, а не повод округлить.
+    // USDC has 6 decimals. A seventh is an input error, not a rounding case.
     expect(() => parseAmount('0.1234567', 6)).toThrow(AmountError);
     expect(() => parseAmount('0.0000001', 6)).toThrow(AmountError);
   });

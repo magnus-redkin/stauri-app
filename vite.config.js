@@ -1,3 +1,11 @@
+/**
+ * Vite config for the SvelteKit frontend, shared by the Tauri dev server and Vitest.
+ *
+ * The dev server port is fixed at 1420 because Tauri's devUrl points there, and
+ * src-tauri is kept out of the watcher so a Rust rebuild does not reload the
+ * frontend. In `test` mode Svelte resolves to its browser build, without which
+ * components cannot mount under happy-dom.
+ */
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 import process from "node:process";
@@ -6,26 +14,23 @@ import tailwindcss from '@tailwindcss/vite';
 const host = process.env.TAURI_DEV_HOST;
 
 /**
- * Вырезает отладочный вывод из production-бандла.
+ * Strips debug output from the production bundle.
  *
- * Vite 8 работает на rolldown и опцию `esbuild.drop` больше не применяет
- * (она помечена deprecated и молча игнорируется). rolldown умеет
- * `compress.dropConsole`, но he достать до него можно только через
- * `build.rolldownOptions.output.minify`, перезаписывая настройки минификации,
- * которые Vite собирает сам — хрупко и версионно-зависимо.
+ * Vite 8 runs on rolldown and no longer applies `esbuild.drop` — the option is
+ * deprecated and silently ignored. rolldown has `compress.dropConsole`, but it
+ * is reachable only through `build.rolldownOptions.output.minify`, overwriting
+ * the minify settings Vite assembles itself: fragile and version-dependent.
+ * Removing the calls through the rollup `renderChunk` hook is deterministic and
+ * does not depend on bundler internals.
  *
- * Поэтому вырезаем на уровне AST-разбора через rollup-хук renderChunk:
- * детерминированно и не зависит от внутренностей бандлера.
+ * Only calls standing as a whole expression are removed; `const x = console.log(...)`
+ * is kept, because there its result would matter.
  *
- * Удаляются только вызовы, стоящие отдельным выражением, — `const x = console.log(...)`
- * не трогаем, потому что там был бы важен результат.
- */
-/**
- * @param {{ methods: string[] }} options
+ * @param {{ methods: string[] }} options - Console methods to drop, e.g. `['log', 'debug']`.
  */
 function dropConsolePlugin({ methods }) {
   const names = methods.map((m) => `console.${m}`).join('|');
-  // Весь вызов целиком, включая аргументы (учитываем вложенные скобки и строки).
+  // The whole call including its arguments (nested parentheses and strings included).
   const call = `(?:${names})\\s*\\(`;
   return {
     name: 'stauri:drop-console',
@@ -46,7 +51,7 @@ function dropConsolePlugin({ methods }) {
           break;
         }
         out += code.slice(i, found.index);
-        // Ищем парную закрывающую скобку, пропуская строки и шаблоны.
+        // Find the matching closing parenthesis, skipping strings and templates.
         let depth = 1;
         let j = found.index + found[0].length;
         let quote = null;
@@ -64,11 +69,11 @@ function dropConsolePlugin({ methods }) {
           }
           j++;
         }
-        // Проверяем, что это выражение-оператор, а не часть присваивания.
+        // Make sure this is a statement expression, not part of an assignment.
         const before = out.replace(/\s+$/, '');
         const isStatementStart = before === '' || /[;{}]$/.test(before);
         if (isStatementStart) {
-          i = j; // вырезаем целиком
+          i = j; // remove it entirely
         } else {
           out += code.slice(found.index, j);
           i = j;
@@ -88,7 +93,7 @@ export default defineConfig(({ mode }) => ({
       : []),
   ],
 
-  // 🔥 Исправление для Svelte 5 + Vitest: используем клиентскую версию Svelte
+  // Svelte 5 + Vitest: resolve the browser build of Svelte so components mount in tests.
   resolve: mode === 'test' ? { conditions: ['browser'] } : {},
 
   test: {
@@ -96,8 +101,6 @@ export default defineConfig(({ mode }) => ({
     environment: 'happy-dom',
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
-    // Строка projects: [] удалена
-    // isolate: false,
   },
 
   // Tauri development options

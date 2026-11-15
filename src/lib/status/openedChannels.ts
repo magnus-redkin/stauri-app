@@ -1,20 +1,26 @@
 /**
- * Каналы чужих сообществ, которые пользователь открыл по ссылке.
+ * Channels of other people's communities that the user opened by link.
  *
- * Зачем: спектация чужого сообщества создаёт `Chat` для всех его каналов с
- * `Active: true`, и без этой отметки в списке оказались бы все каналы
- * сообщества. Status-go различать «открыл» и «просто спектирован» не умеет,
- * поэтому признак храним локально.
+ * Spectating a community creates a `Chat` for every one of its channels with
+ * `Active: true`, so without this marker the list would show all of them.
+ * status-go cannot tell "opened" from "merely spectated", so the distinction is
+ * kept locally.
  *
- * Свои каналы (владелец) этим признаком не пользуются: они видны всегда.
- *
- * Ограничение: localStorage привязан к webview, а не к профилю. Перейдёт в
- * настройки профиля вместе с остальным хранилищем после миграции на Logos.
+ * @remarks
+ * Channels the user owns do not use this marker; they are always visible.
+ * localStorage is scoped to the webview rather than to a profile, so the marker
+ * does not follow the account.
  */
 
 const KEY = 'stauri:opened-channels';
 
-/** Читает отметки. Ошибка чтения даёт пустой набор, а не падение списка. */
+/**
+ * Reads the set of opened channel ids.
+ *
+ * @returns The stored ids, or an empty set when reading fails.
+ * @remarks
+ * A read error yields an empty set instead of failing the whole channel list.
+ */
 export function loadOpenedChannels(): Set<string> {
   try {
     if (typeof localStorage === 'undefined') return new Set();
@@ -27,7 +33,14 @@ export function loadOpenedChannels(): Set<string> {
   }
 }
 
-/** Отмечает канал открытым. Повторный вызов безопасен. */
+/**
+ * Marks a channel as opened.
+ *
+ * @param chatId - Full chat id of the channel.
+ * @remarks
+ * Calling it repeatedly is safe. When writing fails the channel stays visible
+ * for this session, which is not treated as an error.
+ */
 export function markChannelOpened(chatId: string): void {
   try {
     if (typeof localStorage === 'undefined') return;
@@ -36,6 +49,6 @@ export function markChannelOpened(chatId: string): void {
     set.add(chatId);
     localStorage.setItem(KEY, JSON.stringify([...set]));
   } catch {
-    // Запись не удалась: канал останется видимым в этой сессии, это не ошибка.
+    // The write failed: the channel stays visible for this session.
   }
 }

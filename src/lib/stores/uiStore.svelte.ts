@@ -1,49 +1,30 @@
 /**
- * Настройки отображения: размер шрифта и тема.
+ * Display preferences: font size and theme.
  *
- * ## Почему отдельный стор
+ * Values are read from `localStorage` and applied at startup by
+ * `loadUiPreferences`; the settings screen and the keyboard shortcuts only
+ * change them through this store.
  *
- * Раньше обе настройки жили внутри экрана «Настройки» и применялись только
- * при клике по контролу. Следствие было неприятным: после перезапуска
- * приложение выглядело по умолчанию, хотя значение в `localStorage` лежало
- * правильное — применить его при старте было некому. Пользователь открывал
- * Настройки и видел ползунок на старом месте, но интерфейс не менялся,
- * пока он не дёрнет ползунок заново.
- *
- * Теперь значения читаются и применяются при старте (`loadUiPreferences`),
- * а экран настроек и горячие клавиши только меняют их через этот стор.
- *
- * ## Почему размер корневого шрифта, а не отдельный класс
- *
- * Все размеры в разметке заданы в `rem` (Tailwind по умолчанию так делает),
- * поэтому изменение `font-size` у `<html>` масштабирует и текст, и отступы,
- * и контролы — как зум в браузере. Это предсказуемее, чем менять только
- * `font-size` у текстовых элементов: при втором варианте подписи перестают
- * помещаться в кнопки.
- *
- * Исключение — несколько мест с жёсткими `px`; они переведены в `rem`, иначе
- * не масштабировались бы вместе с остальным.
+ * @remarks
+ * Font size is applied to the root `<html>` element rather than to a CSS class.
+ * Layout sizes are in `rem`, so scaling the root `font-size` scales text,
+ * spacing and controls together, like browser zoom. Changing text sizes alone
+ * would push labels out of buttons.
  */
 
 const FONT_KEY = 'stauri-font-size';
 const THEME_KEY = 'stauri-theme';
 
 /**
- * Границы и шаг.
+ * Lower and upper font size bounds, in pixels.
  *
- * Ниже 12px подписи перестают читаться, выше 24px панели разъезжаются так,
- * что список чатов занимает пол-экрана. Шаг 1px: Ctrl+«+» и Ctrl+«-» должны
- * ощущаться как точная подстройка, а не как рывок.
+ * Below 12px labels stop being readable; above 24px panels spread out enough
+ * that the chat list takes half the screen.
  */
 export const FONT_MIN = 12;
 export const FONT_MAX = 24;
 
-/**
- * Значение по умолчанию.
- *
- * 17, а не 16: на этой сборке 16px читались мелковато на стандартном экране,
- * и пользователь просил сразу на пункт больше.
- */
+/** Default font size, in pixels. */
 export const FONT_DEFAULT = 17;
 
 export type ThemeName = 'maroon' | 'light' | 'dark';
@@ -54,7 +35,7 @@ export const uiState = $state({
   theme: 'maroon' as ThemeName,
 });
 
-/** Приводит значение к допустимому диапазону и целому числу. */
+/** Rounds the value to a whole pixel within the allowed range. */
 export function clampFontSize(px: number): number {
   if (!Number.isFinite(px)) return FONT_DEFAULT;
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(px)));
@@ -67,20 +48,19 @@ function applyFontSize(px: number): void {
 
 function applyTheme(theme: ThemeName): void {
   if (typeof document === 'undefined') return;
-  // Тема задаётся только атрибутом. Класс .dark больше не используется:
-  // все три темы — это [data-theme="…"], а dark:-утилиты Tailwind
-  // настроены в app.css через @custom-variant на этот атрибут.
+  // Themes are driven by the attribute alone: all three are `[data-theme="…"]`,
+  // and Tailwind's `dark:` utilities are wired to it through `@custom-variant`
+  // in app.css.
   document.documentElement.setAttribute('data-theme', theme);
 }
 
 
 /**
- * Читает сохранённые значения и применяет их к документу.
+ * Reads the stored values and applies them to the document.
  *
- * Вызывать один раз при старте, до первого рендера полезного содержимого:
- * иначе пользователь на мгновение увидит интерфейс в размере по умолчанию.
- * Ошибку чтения не пробрасываем — испорченное хранилище не должно мешать
- * приложению открыться.
+ * Call once at startup, before the first render of meaningful content, or the
+ * interface briefly appears at the default size. A read failure is swallowed:
+ * corrupt storage must not keep the app from opening.
  */
 export function loadUiPreferences(): void {
   let size = FONT_DEFAULT;
@@ -91,13 +71,13 @@ export function loadUiPreferences(): void {
       const raw = localStorage.getItem(FONT_KEY);
       if (raw) size = clampFontSize(Number(raw));
     } catch {
-      // Заблокированное хранилище: остаёмся на значении по умолчанию.
+      // Storage is unavailable: keep the default value.
     }
     try {
       const saved = localStorage.getItem(THEME_KEY);
       if (saved && (THEMES as string[]).includes(saved)) theme = saved as ThemeName;
     } catch {
-      // То же самое.
+      // Same as above.
     }
   }
 
@@ -107,7 +87,7 @@ export function loadUiPreferences(): void {
   applyTheme(theme);
 }
 
-/** Задаёт размер шрифта, сохраняет и применяет. */
+/** Sets, stores and applies the font size. */
 export function setFontSize(px: number): void {
   const size = clampFontSize(px);
   uiState.fontSize = size;
@@ -115,7 +95,7 @@ export function setFontSize(px: number): void {
   try {
     localStorage.setItem(FONT_KEY, String(size));
   } catch {
-    // Не сохранилось — действует до перезапуска. Это не повод падать.
+    // Not persisted: the value lasts until restart. Not a reason to fail.
   }
 }
 
@@ -127,7 +107,7 @@ export function decreaseFontSize(): void {
   setFontSize(uiState.fontSize - 1);
 }
 
-/** Возврат к значению по умолчанию (Ctrl+0). */
+/** Restores the default font size (Ctrl+0). */
 export function resetFontSize(): void {
   setFontSize(FONT_DEFAULT);
 }
@@ -138,6 +118,6 @@ export function setTheme(theme: ThemeName): void {
   try {
     localStorage.setItem(THEME_KEY, theme);
   } catch {
-    // См. `setFontSize`.
+    // See `setFontSize`.
   }
 }

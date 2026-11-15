@@ -1,18 +1,10 @@
 /**
- * Фасад над модулями соединения с бэкендом.
+ * Facade over the backend connection modules.
  *
- * История. Файл вырос до 364 строк, в которых перемешались три разные
- * обязанности: настройка RPC-провайдеров, WebSocket и сценарии входа.
- * Читать и тестировать его целиком было тяжело, поэтому логика разнесена:
- *
- *   - `rpcConfig.ts`    — `configureWalletRpc` и `ConfigureResult`;
- *   - `ws.ts`           — открытие/закрытие сокета `/signals`;
- *   - `connection.svelte.ts` — `connectionState`, `connect`, `changeNetwork`,
- *                        `login`, `createAccount`, `disconnect`.
- *
- * Этот файл оставлен, чтобы внешний код не пришлось править: импорт
- * из `connectionStore.svelte` продолжает работать. Новому коду лучше
- * обращаться к конкретному модулю напрямую.
+ * Keeps a single import path for the connection API so callers do not depend on
+ * the internal split: RPC provider setup lives in `rpcConfig`, the `/signals`
+ * socket in `ws`, and connection state with the login flows in
+ * `connection.svelte`. New code should import from those modules directly.
  */
 
 export { configureWalletRpc } from './rpcConfig';

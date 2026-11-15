@@ -17,10 +17,10 @@
 
   let input: HTMLInputElement | undefined = $state();
 
-  // $effect срабатывает при изменении input (когда DOM готов)
+  // The effect runs when `input` changes, that is, once the DOM node exists. The short
+  // delay lets Svelte finish rendering before focus is moved.
   $effect(() => {
     if (autofocus && input) {
-      // Небольшая задержка, чтобы Svelte завершил рендер
       const timer = setTimeout(() => input?.focus(), 50);
       return () => clearTimeout(timer);
     }

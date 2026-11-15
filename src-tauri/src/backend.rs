@@ -1,40 +1,41 @@
-//! Единая точка доступа к status-go.
+//! Single access point to status-go.
 //!
-//! Сейчас бэкенд — отдельный процесс (sidecar), и доступ к нему идёт по
-//! локальному порту через аутентифицирующий прокси. На Android бэкенд будет
-//! библиотекой внутри приложения (`libstatus.so`), и порта не будет вовсе.
+//! On desktop the backend is a separate process (sidecar) reached over a local
+//! port through the authenticating proxy. On Android it becomes a library
+//! inside the application (`libstatus.so`) and there is no port at all.
 //!
-//! Этот модуль отделяет «как вызвать status-go» от «что вызвать».
-//! Кошельковая и ENS-логика знает только `Backend`, а не порт и не сокет.
-//! Поэтому при переходе на Android меняется реализация варианта, а не код
-//! `ens.rs`, `swap.rs`, `transfer.rs`, `router.rs`.
-//!
-//! См. `docs/PLAN.md`, раздел B.1.
+//! The module separates "how to call status-go" from "what to call". Wallet and
+//! ENS code depends on `Backend`, not on a port or a socket, so moving to
+//! Android replaces the implementation of one variant rather than the code in
+//! `ens.rs`, `swap.rs`, `transfer.rs` and `router.rs`.
 
 use serde_json::Value;
 
 use crate::backend_rpc;
 use crate::error::{AppError, AppResult};
 
-/// Способ связи с status-go.
+/// How the application talks to status-go.
 ///
-/// Вариант `InProcess` — заготовка для Android. Пока не реализован, и любой
-/// вызов через него возвращает ошибку: на десктопе он не используется.
+/// `InProcess` is a placeholder for Android. It is not implemented yet and every
+/// call through it returns an error; desktop never constructs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
-    /// Отдельный процесс, доступ по локальному порту (через прокси).
+    /// A separate process reached over a local port (through the proxy).
     Rpc { port: u16 },
-    /// Библиотека внутри процесса приложения (JNI/FFI). Только Android.
-    /// Пока никем не создаётся: нужен для сборки под Android (`docs/PLAN.md`, B.2).
+    /// A library inside the application process (JNI/FFI); Android only.
+    /// Nothing constructs it yet — it exists for the Android build.
     #[allow(dead_code)]
     InProcess,
 }
 
 impl Backend {
-    /// Строит `Backend` из порта, который приходит от фронтенда.
+    /// Builds a `Backend` from the port reported by the frontend.
     ///
-    /// Порт `0` означает «бэкенд не запущен»: такой вызов отклоняется сразу,
-    /// а не уходит в сеть на `127.0.0.1:0`.
+    /// Port `0` means "backend is not running": such a call is rejected up front
+    /// instead of being sent to `127.0.0.1:0`.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Backend`] when the port is `0`.
     pub fn from_port(port: u16) -> AppResult<Self> {
         if port == 0 {
             return Err(AppError::backend("backend is not running"));
@@ -42,7 +43,12 @@ impl Backend {
         Ok(Backend::Rpc { port })
     }
 
-    /// JSON-RPC вызов `method` с параметрами `params`.
+    /// Makes a JSON-RPC call to `method` with `params`.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Backend`] when the backend is
+    /// unreachable, answers with an HTTP error or reports a JSON-RPC error. On
+    /// desktop an `InProcess` call also fails this way.
     pub async fn call(&self, method: &str, params: Value) -> AppResult<Value> {
         match self {
             Backend::Rpc { port } => backend_rpc::call(*port, method, params).await,
@@ -55,11 +61,12 @@ impl Backend {
         }
     }
 
-    /// Порт для WebSocket-подписки на сигналы, если бэкенд доступен по сети.
+    /// Port for a WebSocket signal subscription, when the backend is reachable
+    /// over the network.
     ///
-    /// На `InProcess` сигналов по сокету нет: они приходят колбэком, и
-    /// потребитель должен подписаться иначе. Поэтому возвращаем `None`,
-    /// а не порт.
+    /// `InProcess` has no socket-level signals: they arrive as callbacks and the
+    /// consumer has to subscribe differently, so this returns `None` rather than
+    /// a port.
     pub fn signals_port(&self) -> Option<u16> {
         match self {
             Backend::Rpc { port } => Some(*port),

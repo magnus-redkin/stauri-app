@@ -296,5 +296,14 @@
   "Search": "Поиск",
   "Contact request sent": "Запрос в контакты отправлен",
   "In Status Desktop this channel shows as community": "В Status Desktop этот канал виден как сообщество",
-  "with channel": "с каналом"
+  "with channel": "с каналом",
+  "At least": "Не менее",
+  "characters": "символов",
+  "Lowercase Latin letter": "Строчная латинская буква",
+  "Uppercase Latin letter": "Заглавная латинская буква",
+  "Digit": "Цифра",
+  "Symbol": "Символ",
+  "Enter a password": "Введите пароль",
+  "Passwords do not match": "Пароли не совпадают",
+  "Password must contain at least 8 characters, uppercase and lowercase Latin letters, a digit and a symbol": "Пароль должен содержать не менее 8 символов, заглавные и строчные латинские буквы, цифру и символ"
 }

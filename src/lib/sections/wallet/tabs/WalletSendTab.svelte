@@ -1,24 +1,21 @@
 <script lang="ts">
   /**
-   * Экран отправки средств.
+   * Send screen for wallet funds.
    *
-   * ## Почему шаги, а не одна кнопка
+   * A confirmation step sits between the form and the network because it lists everything
+   * that will leave: network, asset, amount, recipient and fee. That is the last chance to
+   * notice a wrong address — a transfer cannot be cancelled once it is mined.
    *
-   * Между «ввёл» и «улетело» стоит экран подтверждения со всем, что уйдёт:
-   * сеть, актив, сумма, получатель, комиссия. Это последняя возможность
-   * заметить, что адрес не тот, а перевод в блокчейне не отменяется.
+   * The amount is kept as a string: `<input type="number">` returns a `Number` and loses
+   * precision at 18 digits, so it is parsed into `BigInt` by `parseAmount`
+   * (`utils/amount.ts`).
    *
-   * ## Почему сумма — строка
-   *
-   * `<input type="number">` отдаёт `Number` и теряет точность на 18 знаках.
-   * Разбор — `parseAmount` на `BigInt` (`utils/amount.ts`).
-   *
-   * ## Пароль
-   *
-   * Спрашивается один раз за сессию и хранится в памяти (`sendStore`), не на
-   * диске. Сам перевод идёт командой Rust `send_transfer`: подпись и сборка
-   * транзакции наружу не выставлены, поэтому XSS не получает ни пароля в
-   * постоянное пользование, ни универсальной машинки подписи.
+   * The password is asked once per session and held in memory by `sendStore`, never on
+   * disk. The transfer runs through the Rust `send_transfer` command, which keeps building
+   * and signing out of the webview: a compromised page gets neither a standing password nor
+   * a universal signing tool. `wallet_signMessage` returns the signature with a `0x` prefix
+   * while `wallet_sendTransactionWithSignature` decodes bare hex and rejects it, so the
+   * prefix is stripped inside that command.
    */
   import { i18n } from '$lib/i18n';
   import { walletState } from '$lib/stores/walletStore.svelte';
@@ -57,29 +54,29 @@
     return checkAmountAgainstBalance(amount, selected);
   });
 
-  /** Похоже ли введённое на адрес 0x… */
+  /** Whether the input matches a `0x`-prefixed address. */
   const isHexAddress = $derived(/^0x[0-9a-fA-F]{40}$/.test(toAddress.trim()));
 
   /**
-   * Похоже ли на ENS-имя: `name.eth` или `name.xyz`.
+   * Whether the input looks like an ENS name (`name.eth`, `name.xyz`).
    *
-   * Разбор отдаём ноде (`ens_addressOf`): синтаксис ENS шире, чем кажется
-   * (нормализация Unicode, регистр), и повторять его здесь значило бы
-   * расходиться с ней в интерпретации.
+   * The real syntax check belongs to the node (`ensAddressOf`): ENS is wider than it looks
+   * (Unicode normalisation, case folding), and repeating that here would disagree with the
+   * node's interpretation.
    */
   const looksLikeEns = $derived(/^[^\s.]+\.[a-zA-Z]{2,}$/.test(toAddress.trim()));
 
-  /** Разрешённый адрес ENS: `toAddress` содержит имя, здесь — адрес. */
+  /** Address the ENS name resolved to; `toAddress` still holds the name. */
   let resolvedAddress = $state('');
   let resolveError = $state('');
   let isResolving = $state(false);
 
   /**
-   * Разворачивает ENS-имя в адрес.
+   * Resolves an ENS name to its address.
    *
-   * Показываем результат ДО нажатия «Проверить», чтобы человек увидел адрес,
-   * а не просто имя: имя могут перерегистрировать на другой адрес, и в этом
-   * весь смысл проверки.
+   * The address is shown before the user commits, and not only the name: a name can be
+   * re-registered to a different address, and seeing the target beforehand is the point of
+   * resolving at all.
    */
   async function resolveEns() {
     const name = toAddress.trim();
@@ -89,7 +86,7 @@
 
     isResolving = true;
     try {
-      // ENS живёт в mainnet, независимо от того, в какой сети отправляем.
+      // ENS lives on mainnet regardless of the network the transfer is sent on.
       const address = await ensAddressOf(statusState.backendPort, 1, name);
       if (!address) resolveError = i18n.t('This name has no address on mainnet');
       else resolvedAddress = address;
@@ -100,7 +97,7 @@
     }
   }
 
-  /** Имя ENS для hex-адреса получателя — показывается как подсказка. */
+  /** ENS name of a hex recipient address, shown as a hint under the field. */
   let reverseName = $state('');
   async function lookupName() {
     reverseName = '';
@@ -108,11 +105,11 @@
     try {
       reverseName = await ensGetName(statusState.backendPort, 1, toAddress.trim());
     } catch {
-      // Имени может не быть — это норма, а не ошибка.
+      // A missing name is the normal case, not an error.
     }
   }
 
-  /** Итоговый адрес получателя: развёрнутое имя или введённый 0x. */
+  /** Recipient address actually sent to: the resolved name, or the entered `0x` address. */
   const recipient = $derived(
     isHexAddress ? toAddress.trim() : looksLikeEns ? resolvedAddress : ''
   );
@@ -120,11 +117,11 @@
   const addressLooksValid = $derived(!!recipient && /^0x[0-9a-fA-F]{40}$/.test(recipient));
 
   /**
-   * Можно ли перейти к подтверждению.
+   * Whether the form may move on to confirmation.
    *
-   * Введённое ENS-имя тоже считается достаточным: разрешить его можно в
-   * момент нажатия. Иначе кнопка оставалась бы неактивной, пока человек не
-   * уйдёт с поля, и это выглядело бы как «форма не принимает имя».
+   * A raw ENS name also counts: it can still be resolved when the button is pressed.
+   * Demanding an already-resolved address would keep the button disabled until focus
+   * leaves the field, which reads as "the form does not accept names".
    */
   const canConfirm = $derived(
     !!selected &&
@@ -141,18 +138,18 @@
   );
 
   /**
-   * Подставляет весь баланс.
+   * Fills in the whole balance.
    *
-   * Точная строка, а не та, что показывается рядом: `formatBalance` по
-   * умолчанию обрезает до 6 знаков, и у токена с 18 знаками «Всё» отправило
-   * бы меньше, чем есть. Остаток навсегда остался бы на счету.
+   * Uses the exact token amount rather than the figure shown beside the field:
+   * `formatBalance` trims to 6 digits by default, so for an 18-decimal token "Max" would
+   * send less than the balance and the remainder would stay on the account forever.
    */
   function useMax() {
     if (!selected) return;
     amount = formatUnits(BigInt(selected.balance || '0'), selected.decimals);
   }
 
-  /** Запоминает пароль и сразу продолжает отправку. */
+  /** Remembers the password for the session and continues the send at once. */
   async function submitPassword() {
     if (!passwordInput.trim()) return;
     rememberPassword(passwordInput);
@@ -161,18 +158,17 @@
   }
 
   /**
-   * Переход к подтверждению: сразу считаем комиссию.
+   * Moves to the confirmation step and estimates the fee right away.
    *
-   * До ввода пароля — это безопасно (`estimate_transfer_fee` ключ не
-   * использует), и человек видит полную стоимость перевода раньше, чем
-   * решит его подписать.
+   * Estimating before the password is entered is safe (`estimate_transfer_fee` never uses
+   * the key), and it shows the full cost of the transfer before anything is signed.
    */
   async function goToConfirm() {
     sendState.error = '';
     sendState.errorCode = '';
 
-    // Имя, по которому ещё не было запроса (человек нажал «Проверить», не
-    // уходя с поля), разрешаем здесь.
+    // A name that was never resolved (the button was pressed without leaving the field)
+    // is resolved here.
     if (looksLikeEns && !resolvedAddress && !isResolving) {
       await resolveEns();
     }
@@ -188,20 +184,19 @@
     if (!selected || amountCheck?.ok !== true) return;
     await sendTransfer({
       token: selected,
-      // Адрес, а не имя: нода должна получить тот получатель, который
-      // показан на экране подтверждения.
+      // An address, never a name: the node must receive the recipient that the
+      // confirmation screen displayed.
       to: recipient,
       amount: amountCheck.amount,
     });
   }
 
   /**
-   * Ссылка на транзакцию в обозревателе.
+   * Explorer link for the transaction.
    *
-   * Адрес берётся из таблицы по сети (`utils/explorer.ts`). Раньше он
-   * собирался шаблоном `sepolia.etherscan.io` для любой тестовой сети, и
-   * транзакция в Base Sepolia по такой ссылке «не находилась», хотя перевод
-   * прошёл: у каждой сети свой обозреватель.
+   * The base URL comes from the per-chain table in `utils/explorer.ts`: every network has
+   * its own explorer, so a single testnet template would produce links that cannot find
+   * the transaction even though the transfer went through.
    */
   const explorerUrl = $derived(
     selected ? explorerTxUrl(selected.chainId, sendState.txHash) : null
@@ -222,7 +217,6 @@
 
   {#if sendState.step === 'form'}
     <div class="space-y-4 max-w-md">
-      <!-- Токен -->
       <div>
         <label class="text-sm font-medium" for="send-token">{i18n.t('Token')}</label>
         <select
@@ -250,7 +244,6 @@
         </select>
       </div>
 
-      <!-- Получатель -->
       <div>
         <label class="text-sm font-medium" for="send-to">{i18n.t('To')}</label>
         <input
@@ -263,8 +256,9 @@
         />
 
         <!--
-          Развёрнутое имя показывается до проверки: имя могут перерегистрировать
-          на чужой адрес, и увидеть адрес заранее — весь смысл разрешения ENS.
+          The resolved address appears before confirmation is pressed: a name can be
+          re-registered to someone else's address, and seeing the address beforehand is
+          what ENS resolution is for.
         -->
         {#if isResolving}
           <p class="text-xs text-muted-foreground mt-1">{i18n.t('Resolving name...')}</p>
@@ -275,7 +269,7 @@
             {i18n.t('Resolves to')}: {resolvedAddress}
           </p>
         {:else if isHexAddress && reverseName}
-          <!-- Обратная проверка: у знакомого адреса есть имя — показываем его. -->
+          <!-- Reverse lookup: a familiar address that has a name shows it. -->
           <p class="text-xs text-muted-foreground mt-1">{reverseName}</p>
         {:else if toAddress.trim() && !addressLooksValid && !looksLikeEns}
           <p class="text-xs text-destructive mt-1">
@@ -284,7 +278,6 @@
         {/if}
       </div>
 
-      <!-- Сумма -->
       <div>
         <div class="flex items-center justify-between">
           <label class="text-sm font-medium" for="send-amount">{i18n.t('Amount')}</label>
@@ -323,9 +316,8 @@
 
   {:else if sendState.step === 'confirm' || sendState.step === 'sending' || sendState.step === 'sent' || sendState.step === 'failed'}
     <!--
-      Экран подтверждения и результат живут в одной ветке: если показывать
-      результат отдельно, при ошибке форма исчезает и человек теряет
-      введённые значения, хотя чаще всего их достаточно поправить.
+      Confirmation, progress and result share one branch: a separate result screen would
+      drop the form on failure, and a failed send usually only needs a corrected value.
     -->
     <div class="space-y-4 max-w-md">
       {#if sendState.step === 'sent'}
@@ -348,7 +340,6 @@
         </button>
 
       {:else}
-        <!-- Что именно уйдёт -->
         <div class="border border-border rounded-lg divide-y divide-border">
           <div class="p-3 flex justify-between gap-3">
             <span class="text-xs text-muted-foreground">{i18n.t('Network')}</span>
@@ -369,10 +360,10 @@
                 {i18n.t('Calculated when sending')}
               {/if}
               <!--
-                Это оценка, а не обещание: лимит газа окончательно
-                определяет нода при отправке, и на тестовых сетях он бывает
-                заметно выше. Называть цифру «комиссией» без оговорки значило
-                бы обещать то, чего мы не контролируем.
+                This is an estimate, not a promise: the node sets the final gas limit when
+                the transaction is sent, and on test networks it is often noticeably
+                higher. Presenting the figure as a fixed fee would promise something the
+                app does not control.
               -->
               {#if sendState.fee !== null}
                 <div class="text-[0.625rem] text-muted-foreground font-sans text-right">
@@ -393,8 +384,8 @@
           <div class="p-3">
             <div class="text-xs text-muted-foreground">{i18n.t('To')}</div>
             <!--
-              Адрес целиком и разбитый на строки: сокращать его на последнем
-              экране нельзя — именно здесь его и проверяют глазами.
+              The full address, allowed to wrap: on the last screen it must not be
+              shortened — this is exactly where it is checked by eye.
             -->
             <div class="text-sm font-mono break-all mt-1">{recipient}</div>
             {#if looksLikeEns}
@@ -405,9 +396,8 @@
 
         {#if sendState.error}
           <!--
-            Подсказка по причине, затем исходный текст: первое объясняет,
-            что делать, второе нужно, если причина не распознана
-            (например, для отчёта об ошибке).
+            The explanation comes before the raw text: the first says what to do, the second
+            is needed when the cause was not recognised (for a bug report, for instance).
           -->
           {#if sendState.errorCode && sendState.errorCode !== 'send-unknown'}
             <p class="text-sm text-destructive">{i18n.t(sendState.errorCode)}</p>
