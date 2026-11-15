@@ -495,6 +495,9 @@
           </button>
           {#if menuOpen}
      <div role="menu" class="absolute right-0 top-full mt-1 z-10 min-w-[12rem] rounded-md border border-border bg-card shadow-md py-1 text-sm">
+       <p class="px-3 pb-2 pt-1 text-xs text-muted-foreground max-w-[16rem]">
+         {i18n.t('In Status Desktop this channel shows as community')} «{chatsState.selected.communityName || chatsState.selected.name}» {i18n.t('with channel')} #general
+       </p>
        <button role="menuitem" onclick={copyInvite} class="w-full text-left px-3 py-2 hover:bg-secondary">
          {i18n.t('Copy invite link')}
        </button>

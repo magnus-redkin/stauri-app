@@ -294,5 +294,7 @@
   "New channel": "New channel",
   "Description (up to 140 bytes)": "Description (up to 140 bytes)",
   "Search": "Search",
-  "Contact request sent": "Contact request sent"
+  "Contact request sent": "Contact request sent",
+  "In Status Desktop this channel shows as community": "In Status Desktop this channel shows as community",
+  "with channel": "with channel"
 }

@@ -18,7 +18,10 @@
     "test:frontend": "vitest run",
     "test:rust": "cd src-tauri && cargo test",
     "lint": "eslint .",
-    "test:integration": "./scripts/integration-contact.sh"
+    "test:integration": "./tests/integration/contact.sh",
+    "test:integration:chat": "./tests/integration/chat.sh",
+    "test:integration:channel": "./tests/integration/channel.sh",
+    "test:integration:wallet": "./tests/integration/wallet.sh"
   },
   "license": "MPL-2.0",
   "dependencies": {

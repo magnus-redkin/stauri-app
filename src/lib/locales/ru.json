@@ -294,5 +294,7 @@
   "New channel": "Новый канал",
   "Description (up to 140 bytes)": "Описание (до 140 байт)",
   "Search": "Поиск",
-  "Contact request sent": "Запрос в контакты отправлен"
+  "Contact request sent": "Запрос в контакты отправлен",
+  "In Status Desktop this channel shows as community": "В Status Desktop этот канал виден как сообщество",
+  "with channel": "с каналом"
 }
