@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { info } from '$lib/utils/log';
   import { formatError } from '$lib/utils/errors';
 
   // Stores
@@ -284,10 +285,9 @@
     const seen = new Map<string, string>();
     let baseline = false;
     const tick = () => untrack(async () => {
-      const port = statusState.backendPort;
-      if (!port) return;
+      if (!statusState.backendRunning) return;
       await loadContacts(true);
-      const chats = await getChats(port);
+      const chats = await getChats();
       const changed: string[] = [];
       for (const c of chats) {
         const sig = `${c.lastMessage?.timestamp ?? 0}:${c.unviewedMessagesCount ?? 0}:${c.active}`;
@@ -383,6 +383,7 @@
   });
 
   onMount(async () => {
+    info('[boot] +page onMount');
     // Display preferences are applied first, otherwise the interface flashes at the
     // default size even though the user chose another.
     loadUiPreferences();
@@ -437,8 +438,10 @@
   }
 
   async function handleCreateAccount(password: string) {
+    info('[boot] handleCreateAccount called');
     try {
       await createAccount(password);
+      info('[boot] handleCreateAccount: createAccount resolved');
       // After creation the account signs in automatically (through waitForLogin).
       if (statusState.accounts.length > 0) {
         selectedAccountKeyUid = statusState.accounts[0]["key-uid"];

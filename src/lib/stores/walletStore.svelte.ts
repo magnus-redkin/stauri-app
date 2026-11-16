@@ -95,14 +95,14 @@ function buildMetadataMap(tokens: any[]): Map<string, { symbol: string; decimals
  */
 export async function loadWallet(force = false) {
   debug('[walletStore] loadWallet called', {
-    port: statusState.backendPort,
+    backendRunning: statusState.backendRunning,
     loaded: walletState.loaded,
     isLoading: walletState.isLoading,
     force,
   });
 
-  if (!statusState.backendPort) {
-    console.warn('[walletStore] no backendPort, abort');
+  if (!statusState.backendRunning) {
+    console.warn('[walletStore] backend not running, abort');
     return;
   }
   if (walletState.isLoading) {
@@ -121,11 +121,10 @@ export async function loadWallet(force = false) {
   // overwritten below once the response arrives.
 
   try {
-    const port = statusState.backendPort;
 
     // 1. Start the wallet once; repeating it every 3 s is pointless.
     if (!walletState.loaded) {
-      const startRes = await startWallet(port);
+      const startRes = await startWallet();
       if (startRes && (startRes as any).error) {
         const err = (startRes as any).error;
         throw new Error(
@@ -143,7 +142,7 @@ export async function loadWallet(force = false) {
     // regular account addresses. A request for wallet-root-address returns an
     // empty cache — that key is simply absent — which looked like "all balances
     // failed".
-    const accounts = await getAccounts(port);
+    const accounts = await getAccounts();
     const addresses: string[] = accounts
       .filter((a: any) => a && a.address && !a.chat)
       .map((a: any) => String(a.address));
@@ -170,7 +169,7 @@ export async function loadWallet(force = false) {
     // Symbols and decimals do not change within a session, so fetch them once.
     if (!cachedMetadata) {
       try {
-        cachedMetadata = buildMetadataMap(await getTokensForActiveNetworksMode(port));
+        cachedMetadata = buildMetadataMap(await getTokensForActiveNetworksMode());
       } catch (e) {
         console.warn('[walletStore] failed to load token metadata:', e);
       }
@@ -182,7 +181,7 @@ export async function loadWallet(force = false) {
     // 4. Balances for all wallet account addresses at once.
     // The balance controller computes them for exactly this set, so the list
     // must match or the response comes back empty.
-    const balanceData = await getBalances(port, addresses, true);
+    const balanceData = await getBalances(addresses, true);
     const byAddr = (balanceData.result ?? {}) as Record<string, any[]>;
 
     // Collect tokens across all addresses: usually one per account, but the
@@ -241,7 +240,7 @@ export async function loadWallet(force = false) {
 
     if (pricedKeys.length > 0) {
       try {
-        const prices = await getTokenPrices(port, pricedKeys);
+        const prices = await getTokenPrices(pricedKeys);
         walletState.prices = prices;
         debug(`[walletStore] prices loaded: ${Object.keys(prices).length}`);
       } catch (e) {
@@ -333,11 +332,11 @@ export function stopWalletPolling() {
  * balances were updated.
  */
 export async function refreshWallet(): Promise<void> {
-  if (!statusState.backendPort || walletState.isLoading) return;
+  if (!statusState.backendRunning || walletState.isLoading) return;
 
   walletState.isRefreshing = true;
   try {
-    await restartWalletReloadTimer(statusState.backendPort);
+    await restartWalletReloadTimer();
     // Give the controller time to reach the networks, then re-read the cache.
     await new Promise((r) => setTimeout(r, REFRESH_SETTLE_MS));
     await loadWallet(true);

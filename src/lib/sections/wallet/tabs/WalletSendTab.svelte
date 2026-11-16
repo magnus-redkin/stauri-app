@@ -82,12 +82,12 @@
     const name = toAddress.trim();
     resolveError = '';
     resolvedAddress = '';
-    if (!looksLikeEns || !statusState.backendPort) return;
+    if (!looksLikeEns || !statusState.backendRunning) return;
 
     isResolving = true;
     try {
       // ENS lives on mainnet regardless of the network the transfer is sent on.
-      const address = await ensAddressOf(statusState.backendPort, 1, name);
+      const address = await ensAddressOf(1, name);
       if (!address) resolveError = i18n.t('This name has no address on mainnet');
       else resolvedAddress = address;
     } catch (e) {
@@ -101,9 +101,9 @@
   let reverseName = $state('');
   async function lookupName() {
     reverseName = '';
-    if (!isHexAddress || !statusState.backendPort) return;
+    if (!isHexAddress || !statusState.backendRunning) return;
     try {
-      reverseName = await ensGetName(statusState.backendPort, 1, toAddress.trim());
+      reverseName = await ensGetName(1, toAddress.trim());
     } catch {
       // A missing name is the normal case, not an error.
     }

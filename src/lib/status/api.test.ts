@@ -40,9 +40,9 @@ describe('Status API', () => {
       const mockResponse = { accounts: [{ 'key-uid': 'test-123' }] };
       vi.mocked(http.statusFetch).mockResolvedValue(mockResponse);
 
-      const result = await api.initializeApplication(8080, '/tmp/data', 11155111);
+      const result = await api.initializeApplication('/tmp/data', 11155111);
 
-      expect(http.statusFetch).toHaveBeenCalledWith(8080, 'InitializeApplication', {
+      expect(http.statusFetch).toHaveBeenCalledWith('InitializeApplication', {
         dataDir: '/tmp/data',
         NetworkID: 11155111,
       });
@@ -54,13 +54,11 @@ describe('Status API', () => {
     it('должен формировать корректный запрос на создание аккаунта', async () => {
       vi.mocked(http.statusFetch).mockResolvedValue({ error: '' });
 
-      await api.createAccountAndLogin(8080, '/tmp/data', 'supersecret');
+      await api.createAccountAndLogin('/tmp/data', 'supersecret');
 
       // RPC keys come from .env and are absent in tests, so only the fields the
       // code builds itself are checked.
-      expect(http.statusFetch).toHaveBeenCalledWith(
-        8080,
-        'CreateAccountAndLogin',
+      expect(http.statusFetch).toHaveBeenCalledWith('CreateAccountAndLogin',
         expect.objectContaining({
           rootDataDir: '/tmp/data',
           displayName: 'Stauri User',
@@ -79,11 +77,9 @@ describe('Status API', () => {
     it('должен вызывать LoginAccount с keyUid и паролем', async () => {
       vi.mocked(http.statusFetch).mockResolvedValue({ 'key-uid': 'test-123' });
 
-      await api.loginAccount(8080, 'supersecret', 'test-123');
+      await api.loginAccount('supersecret', 'test-123');
 
-      expect(http.statusFetch).toHaveBeenCalledWith(
-        8080,
-        'LoginAccount',
+      expect(http.statusFetch).toHaveBeenCalledWith('LoginAccount',
         expect.objectContaining({
           password: 'supersecret',
           keyUid: 'test-123',
@@ -102,9 +98,9 @@ describe('Status API', () => {
       const mockInitData = { accounts: [{ 'key-uid': 'acc-1' }, { 'key-uid': 'acc-2' }] };
       vi.mocked(http.statusFetch).mockResolvedValue(mockInitData);
 
-      const accounts = await api.getAccountsList(8080, '/tmp/data', 1);
+      const accounts = await api.getAccountsList('/tmp/data', 1);
 
-      expect(http.statusFetch).toHaveBeenCalledWith(8080, 'InitializeApplication', {
+      expect(http.statusFetch).toHaveBeenCalledWith('InitializeApplication', {
         dataDir: '/tmp/data',
         NetworkID: 1
       });
@@ -115,7 +111,7 @@ describe('Status API', () => {
     it('должен возвращать пустой массив, если accounts undefined', async () => {
       vi.mocked(http.statusFetch).mockResolvedValue({}); // No accounts field.
 
-      const accounts = await api.getAccountsList(8080, '/tmp/data', 1);
+      const accounts = await api.getAccountsList('/tmp/data', 1);
       expect(accounts).toEqual([]);
     });
   });
@@ -125,7 +121,7 @@ describe('Status API', () => {
       const error = new Error('Network error');
       vi.mocked(http.statusFetch).mockRejectedValue(error);
 
-      await expect(api.startMessenger(8080)).rejects.toThrow('Network error');
+      await expect(api.startMessenger()).rejects.toThrow('Network error');
     });
   });
 
@@ -135,9 +131,9 @@ describe('Status API', () => {
     });
 
     it('отправляет обычное сообщение с пустым responseTo', async () => {
-      await api.sendChatMessage(8080, 'status', 'hi');
+      await api.sendChatMessage('status', 'hi');
 
-      const body = vi.mocked(http.statusFetch).mock.calls[0][2] as any;
+      const body = vi.mocked(http.statusFetch).mock.calls[0][1] as any;
       expect(body.params[0]).toMatchObject({
         chatId: 'status',
         text: 'hi',
@@ -149,9 +145,9 @@ describe('Status API', () => {
     it('передаёт responseTo на верхнем уровне объекта', async () => {
       // Message.UnmarshalJSON reads the field at the top level:
       // `ResponseTo string \`json:"responseTo"\`` in the aux struct.
-      await api.sendChatMessage(8080, 'status', 'comment', '', '0xparent');
+      await api.sendChatMessage('status', 'comment', '', '0xparent');
 
-      const body = vi.mocked(http.statusFetch).mock.calls[0][2] as any;
+      const body = vi.mocked(http.statusFetch).mock.calls[0][1] as any;
       expect(body.params[0].responseTo).toBe('0xparent');
       // Not nested in a payload, and not in chatId.
       expect(body.params[0].chatId).toBe('status');

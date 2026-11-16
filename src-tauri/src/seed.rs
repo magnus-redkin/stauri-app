@@ -16,7 +16,6 @@ use std::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
 
 /// The phrase in process memory. `None` until loaded and after clearing.
 static PHRASE: Mutex<Option<Vec<String>>> = Mutex::new(None);
@@ -37,55 +36,14 @@ pub struct VerifyResult {
 /// Returns the word count only, never the phrase itself.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the backend is not running,
-/// the `settings_getSettings` call fails, or the response carries no usable
-/// mnemonic. Returns [`crate::error::ErrorKind::Network`] on transport and body
-/// read failures, [`crate::error::ErrorKind::Internal`] when the HTTP client
-/// cannot be built or a lock is poisoned.
+/// Returns [`crate::error::ErrorKind::Backend`] when the
+/// `settings_getSettings` call fails or the response carries no usable mnemonic,
+/// and [`crate::error::ErrorKind::Internal`] when the library cannot be loaded.
 #[tauri::command]
-pub async fn fetch_seed_phrase(app: tauri::AppHandle) -> AppResult<SeedInfo> {
-    let port = {
-        let state = app.state::<crate::sidecar::BackendState>();
-        let port_lock = state.port.lock().map_err(|_| AppError::poisoned())?;
-        port_lock.ok_or_else(|| AppError::backend("backend is not running"))?
-    };
-
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
-
-    let resp = client
-        .post(format!("http://127.0.0.1:{port}/statusgo/CallRPC"))
-        .header("Content-Type", "application/json")
-        .body(
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "settings_getSettings",
-                "params": []
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .map_err(|e| AppError::network(format!("request failed: {e}")))?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::backend(format!(
-            "settings_getSettings HTTP {}",
-            resp.status()
-        )));
-    }
-
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| AppError::network(format!("body read error: {e}")))?;
-
-    let parsed: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| AppError::backend(format!("JSON parse error: {e}")))?;
+pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
+    // No HTTP: the seed is read over the library, in this process. The password
+    // never passes through here.
+    let parsed = crate::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
 
     let mnemonic = parsed
         .get("result")

@@ -67,7 +67,7 @@
       {:else if statusState.isConnected}
         <div class="flex items-center gap-2 text-green-600 font-semibold text-sm">
           <div class="w-2 h-2 rounded-full bg-green-500"></div>
-          {i18n.t('Connected')} (Port: {statusState.backendPort})
+          {i18n.t('Connected')}
         </div>
         <button
           onclick={onDisconnect}

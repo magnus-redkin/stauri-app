@@ -31,14 +31,13 @@
    */
   async function saveProfile(): Promise<boolean> {
     if (!isChanged) return true;
-    const port = statusState.backendPort;
-    if (!port) {
+    if (!statusState.backendRunning) {
       saveError = i18n.t('Backend is not running');
       return false;
     }
     try {
-      await saveSetting(port, 'display-name', displayName);
-      await sendContactUpdates(port, displayName);
+      await saveSetting('display-name', displayName);
+      await sendContactUpdates(displayName);
       statusState.alias = displayName;
       originalDisplayName = displayName;
       saveError = '';

@@ -120,14 +120,13 @@ function toEntry(community: Community, featured: boolean): CatalogEntry {
  * @param force - when true, reloads even if already loaded.
  */
 export async function loadCommunities(force = false): Promise<void> {
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
   if (communitiesState.loaded && !force) return;
 
-  const port = statusState.backendPort;
   communitiesState.isLoading = true;
   try {
     const [curated, known] = await Promise.all([
-      getCuratedCommunities(port).catch((e) => {
+      getCuratedCommunities().catch((e) => {
         warn('[communities] curated failed:', e);
         return {
           ids: [] as string[],
@@ -136,7 +135,7 @@ export async function loadCommunities(force = false): Promise<void> {
           unknown: [] as string[],
         };
       }),
-      getCommunities(port).catch((e) => {
+      getCommunities().catch((e) => {
         warn('[communities] communities failed:', e);
         return [] as Community[];
       }),
@@ -288,9 +287,8 @@ export async function openChannel(
   entry: CatalogEntry,
   channelId: string
 ): Promise<{ ok: boolean; chatId?: string; error?: string }> {
-  if (!statusState.backendPort) return { ok: false, error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { ok: false, error: 'Backend is not running' };
 
-  const port = statusState.backendPort;
   communitiesState.isBusy = true;
   communitiesState.error = '';
   try {
@@ -298,7 +296,7 @@ export async function openChannel(
     // is no reason to stop. The stored state (`spectated`/`joined`) may be stale, for instance
     // after a node restart, so call every time and swallow the error.
     if (!entry.joined) {
-      await spectateCommunity(port, entry.id).catch((e) => {
+      await spectateCommunity(entry.id).catch((e) => {
         debug(`[communities] spectate ${entry.id} skipped:`, e);
       });
     }
@@ -340,7 +338,7 @@ export async function selectCommunity(entry: CatalogEntry): Promise<void> {
   communitiesState.error = '';
   communitiesState.eligibility = null;
 
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
 
   // Already a member or already spectating: a repeated spectate answers "already spectated or
   // joined", so there is nothing to call.
@@ -351,7 +349,7 @@ export async function selectCommunity(entry: CatalogEntry): Promise<void> {
     // Wait for the answer: an entry from `unknownCommunities` has no cached description, so without
     // waiting status-go only starts a background fetch and returns empty. The user is already
     // looking at the catalog tree, so an explicit wait for one community beats an endless spinner.
-    const fresh = await fetchCommunity(statusState.backendPort, entry.id, !entry.joined);
+    const fresh = await fetchCommunity(entry.id, !entry.joined);
     if (fresh) {
       const updated = toEntry(fresh, entry.featured);
       communitiesState.selected = updated;
@@ -372,11 +370,11 @@ export async function selectCommunity(entry: CatalogEntry): Promise<void> {
 
 /** Wallet addresses of the profile, candidates for revealing. */
 export async function loadWalletAddresses(): Promise<string[]> {
-  if (!statusState.backendPort) return [];
+  if (!statusState.backendRunning) return [];
   if (communitiesState.walletAddresses.length) return communitiesState.walletAddresses;
 
   try {
-    const accounts = await getAccounts(statusState.backendPort);
+    const accounts = await getAccounts();
     const addresses = accounts
       .filter((a: any) => a && a.address && !a.chat)
       .map((a: any) => String(a.address));
@@ -396,14 +394,13 @@ export async function loadWalletAddresses(): Promise<string[]> {
  */
 export async function checkEligibility(): Promise<void> {
   const entry = communitiesState.selected;
-  if (!entry || !statusState.backendPort) return;
+  if (!entry || !statusState.backendRunning) return;
 
   communitiesState.isBusy = true;
   communitiesState.error = '';
   try {
     const addresses = await loadWalletAddresses();
     const res = await checkPermissionsToJoinCommunity(
-      statusState.backendPort,
       entry.id,
       addresses
     );
@@ -444,18 +441,16 @@ export async function joinSelectedCommunity(
   password: string
 ): Promise<{ ok: boolean; pending?: boolean; error?: string }> {
   const entry = communitiesState.selected;
-  if (!entry || !statusState.backendPort) {
+  if (!entry || !statusState.backendRunning) {
     return { ok: false, error: 'No community selected' };
   }
   if (!addressesToReveal.length) return { ok: false, error: 'Select at least one address' };
   if (!airdropAddress) return { ok: false, error: 'Select an airdrop address' };
 
-  const port = statusState.backendPort;
   communitiesState.isBusy = true;
   communitiesState.error = '';
   try {
     const toSign = await generateJoiningRequestsForSigning(
-      port,
       statusState.publicKey || '',
       entry.id,
       addressesToReveal
@@ -468,7 +463,7 @@ export async function joinSelectedCommunity(
       throw new Error('No address can be revealed: watch-only accounts cannot sign');
     }
 
-    const signatures = await signJoinRequestData(port, signable, password);
+    const signatures = await signJoinRequestData(signable, password);
     if (signatures.length !== signable.length) {
       throw new Error('Signature count does not match address count');
     }
@@ -476,7 +471,7 @@ export async function joinSelectedCommunity(
     const revealed = signable.map((p) => p.account);
     const airdrop = revealed.includes(airdropAddress) ? airdropAddress : revealed[0];
 
-    await requestToJoinCommunity(port, entry.id, revealed, signatures, airdrop);
+    await requestToJoinCommunity(entry.id, revealed, signatures, airdrop);
     info(`[communities] join requested ${entry.id} addresses=${revealed.length}`);
 
     return { ok: true, pending: true };

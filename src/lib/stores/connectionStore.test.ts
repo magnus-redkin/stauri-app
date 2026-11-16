@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureWalletRpc, login, createAccount } from './connectionStore.svelte';
 import { statusState, waitForNodeStopped, waitForLogin } from './statusStore.svelte';
-import WebSocket from '@tauri-apps/plugin-websocket';
 import {
   getFlatEthereumChains,
   setChainUserRpcProvider,
@@ -26,14 +25,16 @@ vi.mock('$lib/status/api', () => ({
   getRpcProxySecret: vi.fn(),
   setRpcUpstreams: vi.fn(),
   startMessenger: vi.fn(),
-  getAuthToken: vi.fn().mockResolvedValue('test-token'),
   logout: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/plugin-websocket', () => ({ default: { connect: vi.fn() } }));
+// Signals arrive as a Tauri event now, not over a WebSocket.
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
 
 vi.mock('./statusStore.svelte', () => ({
-  statusState: { backendPort: 12345, isLoggedIn: false, accountKeyUid: 'key-uid-1' },
+  statusState: { backendRunning: true, isLoggedIn: false, accountKeyUid: 'key-uid-1' },
   setAccounts: vi.fn(),
   setNetworkInfo: vi.fn(),
   processSignal: vi.fn(),
@@ -84,14 +85,12 @@ describe('configureWalletRpc', () => {
       network(42161, 'Arbitrum'),
     ]);
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
     expect(setChainUserRpcProvider).toHaveBeenCalledTimes(2);
-    expect(setChainUserRpcProvider).toHaveBeenCalledWith(
-      12345, 1, 'stauri-rpc', proxyUrl(1)
+    expect(setChainUserRpcProvider).toHaveBeenCalledWith(1, 'stauri-rpc', proxyUrl(1)
     );
-    expect(setChainUserRpcProvider).toHaveBeenCalledWith(
-      12345, 42161, 'stauri-rpc', proxyUrl(42161)
+    expect(setChainUserRpcProvider).toHaveBeenCalledWith(42161, 'stauri-rpc', proxyUrl(42161)
     );
   });
 
@@ -105,18 +104,17 @@ describe('configureWalletRpc', () => {
       network(56, 'Binance', { enabled: false }),
     ]);
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
     expect(setChainUserRpcProvider).toHaveBeenCalledTimes(1);
-    expect(setChainUserRpcProvider).toHaveBeenCalledWith(
-      12345, 1, 'stauri-rpc', proxyUrl(1)
+    expect(setChainUserRpcProvider).toHaveBeenCalledWith(1, 'stauri-rpc', proxyUrl(1)
     );
   });
 
   it('передаёт таблицу upstream форвардеру при запуске', async () => {
     (getFlatEthereumChains as any).mockRejectedValue(new Error('API not ready'));
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
     // Before node start networks_* is unavailable, but the forwarder must
     // already know the URLs: a provider from the previous run points at this port.
@@ -136,7 +134,7 @@ describe('configureWalletRpc', () => {
       }),
     ]);
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
     expect(setChainUserRpcProvider).not.toHaveBeenCalled();
   });
@@ -151,10 +149,9 @@ describe('configureWalletRpc', () => {
       }),
     ]);
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
-    expect(setChainUserRpcProvider).toHaveBeenCalledWith(
-      12345, 1, 'stauri-rpc', proxyUrl(1)
+    expect(setChainUserRpcProvider).toHaveBeenCalledWith(1, 'stauri-rpc', proxyUrl(1)
     );
   });
 
@@ -163,7 +160,7 @@ describe('configureWalletRpc', () => {
       network(999999, 'Unknown chain'),
     ]);
 
-    await configureWalletRpc(12345);
+    await configureWalletRpc();
 
     expect(setChainUserRpcProvider).not.toHaveBeenCalled();
   });
@@ -171,7 +168,7 @@ describe('configureWalletRpc', () => {
   it('сообщает, что провайдеров пришлось записывать (чистый профиль)', async () => {
     (getFlatEthereumChains as any).mockResolvedValue([network(1, 'Ethereum')]);
 
-    const result = await configureWalletRpc(12345);
+    const result = await configureWalletRpc();
 
     expect(result.wroteProviders).toBe(true);
   });
@@ -186,7 +183,7 @@ describe('configureWalletRpc', () => {
       }),
     ]);
 
-    const result = await configureWalletRpc(12345);
+    const result = await configureWalletRpc();
 
     expect(result.wroteProviders).toBe(false);
   });
@@ -202,7 +199,7 @@ describe('configureWalletRpc', () => {
 describe('перезапуск ноды после записи провайдеров', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    statusState.backendPort = 12345;
+    statusState.backendRunning = true;
     statusState.accountKeyUid = 'key-uid-1';
     (startRpcProxy as any).mockResolvedValue(PROXY_PORT);
     (getRpcProxySecret as any).mockResolvedValue(PROXY_SECRET);
@@ -213,10 +210,6 @@ describe('перезапуск ноды после записи провайде
     (startMessenger as any).mockResolvedValue({});
     (waitForLogin as any).mockResolvedValue(undefined);
     (waitForNodeStopped as any).mockResolvedValue(undefined);
-    (WebSocket.connect as any).mockResolvedValue({
-      addListener: vi.fn(),
-      disconnect: vi.fn(),
-    });
   });
 
   it('перезапускает ноду, когда вход идёт на чистом профиле', async () => {
@@ -226,11 +219,11 @@ describe('перезапуск ноды после записи провайде
 
     // Logout and re-login happened exactly once.
     expect(logout).toHaveBeenCalledTimes(1);
-    expect(logout).toHaveBeenCalledWith(12345);
+    expect(logout).toHaveBeenCalledWith();
     expect(waitForNodeStopped).toHaveBeenCalledTimes(1);
     expect(loginAccount).toHaveBeenCalledTimes(2);
-    expect(loginAccount).toHaveBeenNthCalledWith(1, 12345, 'pass', 'key-uid-1');
-    expect(loginAccount).toHaveBeenNthCalledWith(2, 12345, 'pass', 'key-uid-1');
+    expect(loginAccount).toHaveBeenNthCalledWith(1, 'pass', 'key-uid-1');
+    expect(loginAccount).toHaveBeenNthCalledWith(2, 'pass', 'key-uid-1');
     // messenger starts only after the restart — once.
     expect(startMessenger).toHaveBeenCalledTimes(1);
   });

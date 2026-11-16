@@ -1,8 +1,4 @@
 export interface StartBackendResponse {
-  /** Real status-backend port. Internal; the frontend does not use it. */
-  port: number;
-  /** Authenticating proxy port, through which all traffic flows. */
-  authPort: number;
   dataDir: string;
   networkName: string;
   chainId: number;

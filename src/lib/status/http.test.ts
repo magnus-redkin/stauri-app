@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { statusFetch } from './http';
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { invoke } from '@tauri-apps/api/core';
+import { statusCall, statusFetch } from './http';
 
-// Mock the @tauri-apps/plugin-http module.
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: vi.fn(),
-}));
-
-// The auth proxy token comes from a Rust command.
+// status-go lives in this process, so every call is a Tauri command.
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue('test-token'),
+  invoke: vi.fn(),
 }));
 
 describe('statusFetch', () => {
@@ -17,84 +12,111 @@ describe('statusFetch', () => {
     vi.clearAllMocks();
   });
 
-  it('должен успешно отправлять запрос и возвращать распарсенные данные', async () => {
-    const mockResponse = {
-      ok: true,
-      text: vi.fn().mockResolvedValue(JSON.stringify({ result: 'success', data: 123 })),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('должен вызывать status_rpc с именем метода и параметрами', async () => {
+    vi.mocked(invoke).mockResolvedValue({ data: 123 });
 
-    const result = await statusFetch(8080, 'TestEndpoint', { foo: 'bar' });
-
-    expect(tauriFetch).toHaveBeenCalledWith('http://127.0.0.1:8080/statusgo/TestEndpoint', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Stauri-Token': 'test-token',
-      },
-      body: JSON.stringify({ foo: 'bar' }),
+    const result = await statusFetch('CallRPC', {
+      method: 'wakuext_chats',
+      params: [],
     });
-    expect(result).toEqual({ result: 'success', data: 123 });
+
+    expect(invoke).toHaveBeenCalledWith('status_rpc', {
+      method: 'wakuext_chats',
+      params: [],
+    });
+    // Rust returns the bare result; callers read `res.result`, so the envelope
+    // is rebuilt in statusFetch.
+    expect(result).toEqual({ result: { data: 123 } });
   });
 
-  it('должен возвращать пустой объект при пустом ответе', async () => {
-    const mockResponse = {
-      ok: true,
-      text: vi.fn().mockResolvedValue(''),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('оборачивает пустой ответ в result, чтобы вызывающие читали res.result', async () => {
+    vi.mocked(invoke).mockResolvedValue(null);
 
-    const result = await statusFetch(8080, 'LoginAccount', { password: '123' });
-    expect(result).toEqual({});
+    const result = await statusFetch<any>('CallRPC', { method: 'wakuext_chats', params: [] });
+    expect(result.result).toBeNull();
   });
 
-  it('должен выбрасывать ошибку при HTTP-статусе не 2xx', async () => {
-    const mockResponse = {
-      ok: false,
-      status: 500,
-      text: vi.fn().mockResolvedValue('Internal Server Error details...'),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('не заворачивает result повторно', async () => {
+    // A caller that already received an envelope-shaped reply must not get
+    // `{ result: { result: … } }`.
+    vi.mocked(invoke).mockResolvedValue({ result: [1, 2] });
 
-    // The response body is deliberately kept out of the error text: it may carry
-    // profile data. Only the status code remains.
-    const promise = statusFetch(8080, 'Fail', {});
-    await expect(promise).rejects.toThrow('HTTP 500');
-    await expect(promise).rejects.not.toThrow('Internal Server Error details');
+    const result = await statusFetch<any>('CallRPC', { method: 'wakuext_chats', params: [] });
+    expect(result.result).toEqual([1, 2]);
   });
 
-  it('должен выбрасывать ошибку при невалидном JSON', async () => {
-    const mockResponse = {
-      ok: true,
-      text: vi.fn().mockResolvedValue('not a valid json string'),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('должен пробрасывать ошибку backend без тела ответа', async () => {
+    // Rust turns a JSON-RPC error into a rejected command; the message is the
+    // method error text and carries no profile data.
+    vi.mocked(invoke).mockRejectedValue(new Error('incorrect password'));
 
-    // A fragment of the body is left out of the error as well.
-    const promise = statusFetch(8080, 'BadJson', {});
-    await expect(promise).rejects.toThrow('Invalid JSON response from BadJson');
-    await expect(promise).rejects.not.toThrow('not a valid json string');
+    await expect(
+      statusFetch('CallRPC', { method: 'wallet_signMessage', params: [] })
+    ).rejects.toThrow('incorrect password');
   });
 
-  it('должен выбрасывать ошибку, если data.error является строкой', async () => {
-    const mockResponse = {
-      ok: true,
-      text: vi.fn().mockResolvedValue(JSON.stringify({ error: 'incorrect password' })),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('должен выбрасывать ошибку, если в ответе есть поле error', async () => {
+    vi.mocked(invoke).mockResolvedValue({ error: { code: -32000, message: 'method not found' } });
 
-    await expect(statusFetch(8080, 'Login', {})).rejects.toThrow('incorrect password');
+    await expect(
+      statusFetch('CallRPC', { method: 'wallet_unknown', params: [] })
+    ).rejects.toThrow('method not found');
   });
 
-  it('должен выбрасывать ошибку, если data.error является объектом (JSON-RPC стиль)', async () => {
-    const mockResponse = {
-      ok: true,
-      text: vi.fn().mockResolvedValue(JSON.stringify({
-        error: { code: -32000, message: 'method not found' }
-      })),
-    };
-    vi.mocked(tauriFetch).mockResolvedValue(mockResponse as any);
+  it('должен выбрасывать ошибку, если error является строкой', async () => {
+    vi.mocked(invoke).mockResolvedValue({ error: 'incorrect password' });
 
-    await expect(statusFetch(8080, 'RPC', {})).rejects.toThrow('method not found');
+    await expect(statusFetch('CallRPC', { method: 'x', params: [] })).rejects.toThrow(
+      'incorrect password'
+    );
+  });
+
+  it('не логирует тело запроса и ответа', async () => {
+    // `settings_getSettings` returns the seed phrase in `mnemonic`; a log line
+    // containing it would write the seed to the console.
+    const spy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    vi.mocked(invoke).mockResolvedValue({ mnemonic: 'alpha bravo charlie' });
+
+    await statusFetch('CallRPC', { method: 'settings_getSettings', params: [] });
+
+    const logged = spy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).not.toContain('alpha bravo charlie');
+    spy.mockRestore();
+  });
+});
+
+describe('statusCall', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('передаёт lifecycle-эндпоинт в status_call', async () => {
+    vi.mocked(invoke).mockResolvedValue('{"accounts":[]}');
+
+    const result = await statusCall('InitializeApplication', { dataDir: '/tmp/x' });
+
+    expect(invoke).toHaveBeenCalledWith('status_call', {
+      endpoint: 'InitializeApplication',
+      body: JSON.stringify({ dataDir: '/tmp/x' }),
+    });
+    expect(result).toEqual({ accounts: [] });
+  });
+
+  it('возвращает пустой объект на пустой ответ', async () => {
+    vi.mocked(invoke).mockResolvedValue('');
+
+    expect(await statusCall('Logout', {})).toEqual({});
+  });
+
+  it('statusFetch направляет не-CallRPC эндпоинт в status_call', async () => {
+    vi.mocked(invoke).mockResolvedValue('{"accounts":[{"key-uid":"0x1"}]}');
+
+    const result = await statusFetch<any>('LoginAccount', { password: 'x' });
+
+    expect(invoke).toHaveBeenCalledWith('status_call', {
+      endpoint: 'LoginAccount',
+      body: JSON.stringify({ password: 'x' }),
+    });
+    expect(result.accounts[0]['key-uid']).toBe('0x1');
   });
 });

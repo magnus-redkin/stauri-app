@@ -16,7 +16,7 @@ vi.mock('$lib/status/wallet', () => ({
 
 // Mocks statusState
 vi.mock('./statusStore.svelte', () => ({
-  statusState: { backendPort: 12345, isLoggedIn: true },
+  statusState: { backendRunning: true, isLoggedIn: true },
 }));
 
 /** Metadata in the shape status-go returns it. */

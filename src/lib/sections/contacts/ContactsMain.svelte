@@ -16,11 +16,11 @@
   let error = $state('');
 
   async function handleSend() {
-    if (!publicKey.trim() || !statusState.backendPort) return;
+    if (!publicKey.trim() || !statusState.backendRunning) return;
     isSending = true;
     error = '';
     try {
-      await sendContactRequest(statusState.backendPort, publicKey.trim(), message.trim());
+      await sendContactRequest(publicKey.trim(), message.trim());
       publicKey = '';
       message = '';
       alert(i18n.t('Contact request sent!'));

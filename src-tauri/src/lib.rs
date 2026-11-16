@@ -5,10 +5,9 @@
 //!
 //! * [`config`] — network configuration detection and loading;
 //! * [`env`] — locating and loading `.env`;
-//! * [`sidecar`] — starting and stopping `status-backend`;
+//! * [`inprocess`] — status-go as a library inside this process;
 //! * [`commands`] — commands exposed to the frontend;
 //! * [`rpc_proxy`] — forwarder for RPC providers;
-//! * [`auth_proxy`] — authenticating proxy in front of the backend;
 //! * [`seed`] — seed phrase handling outside the webview;
 //! * [`market`] — CoinGecko data;
 //! * [`logging`] — file and stderr logging with secret scrubbing;
@@ -19,16 +18,13 @@ use tauri::Manager;
 
 mod appdirs;
 mod trace;
-mod auth_proxy;
 mod backend;
-mod backend_rpc;
 mod commands;
 mod config;
 mod dapp;
 mod ens;
 mod env;
 mod error;
-#[cfg(target_os = "android")]
 mod inprocess;
 mod invite;
 mod logging;
@@ -38,7 +34,6 @@ mod providers;
 mod router;
 mod rpc_proxy;
 mod seed;
-mod sidecar;
 mod swap;
 mod transfer;
 mod updater;
@@ -55,9 +50,6 @@ pub fn run() {
         tracing::warn!("no .env found; using environment variables only");
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_websocket::init())
-        .plugin(tauri_plugin_http::init())
         // The updater plugin is registered for its configuration alone
         // (endpoints and pubkey from tauri.conf.json). Its commands are not
         // available to the frontend: no permission is granted in capabilities,
@@ -83,11 +75,28 @@ pub fn run() {
                 trace::set_dir(dir.clone());
                 appdirs::set_data_dir(dir.clone());
             }
+
+            // status-go lives in this process, so its signals reach the webview
+            // through a Tauri event rather than a WebSocket.
+            let handle = app.handle().clone();
+            inprocess::set_app_emitter(move |raw| {
+                use tauri::Emitter;
+                let payload: serde_json::Value = match serde_json::from_str(raw) {
+                    Ok(v) => v,
+                    // An unparsable signal is still worth surfacing to the
+                    // trace, but it cannot be typed for the frontend.
+                    Err(_) => serde_json::Value::Null,
+                };
+                if payload.is_null() {
+                    return;
+                }
+                if let Err(e) = handle.emit("status-signal", payload) {
+                    tracing::warn!(error = %e, "cannot emit status signal");
+                }
+            });
             Ok(())
         })
-        .manage(sidecar::BackendState::default())
         .manage(rpc_proxy::RpcProxyState::default())
-        .manage(auth_proxy::AuthProxyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::start_backend,
             commands::stop_backend,
@@ -95,12 +104,12 @@ pub fn run() {
             commands::rpc_proxy_secret,
             commands::set_rpc_upstreams,
             commands::stop_rpc_proxy,
-            commands::auth_proxy_token,
             commands::check_for_update,
             commands::install_update,
             commands::restart_app,
             commands::inprocess_initialize,
             commands::status_call,
+            commands::status_rpc,
             commands::log_frontend,
             market::fetch_market_data,
             seed::fetch_seed_phrase,
@@ -124,13 +133,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                let auth_state = app_handle.state::<auth_proxy::AuthProxyState>();
-                auth_proxy::stop(&auth_state);
-
                 let proxy_state = app_handle.state::<rpc_proxy::RpcProxyState>();
                 rpc_proxy::stop(&proxy_state);
-
-                sidecar::shutdown(app_handle);
 
                 // Last: flushes what is still queued in the log.
                 logging::shutdown();

@@ -4,7 +4,7 @@
 
 **Stauri** is a lightweight desktop client for the Status ecosystem, being developed as an actively growing alternative to the official `status-desktop`.
 
-Built on **Tauri (Rust)** and **Svelte 5**, Stauri uses a sidecar architecture to talk to the Status backend (`status-backend`) over local WebSocket and HTTP. This approach preserves the full power of `status-go` while providing a modern, fast, and flexible user interface.
+Built on **Tauri (Rust)** and **Svelte 5**, Stauri runs `status-go` as a **library inside its own process**. The same Rust code drives the desktop and Android builds: no child process, no local port, no separate backend to keep alive. This preserves the full power of `status-go` while providing a modern, fast, and flexible user interface.
 
 ## ✨ Expected advantages over `status-desktop`
 
@@ -32,7 +32,7 @@ When connected to a testnet, Stauri provides clear visual cues:
 - [`docs/en/networks_and_balances.md`](docs/en/networks_and_balances.md) — path from balance to screen, RPC forwarder, `status-go` caches.
 - [`docs/en/status_outdated_architecture.md`](docs/en/status_outdated_architecture.md) — why `status-go` is complex (RPC clients, providers).
 - [`docs/en/tests.md`](docs/en/tests.md) — testing strategy (unit, component, E2E, manual checks).
-- [`docs/BUILDING.md`](docs/BUILDING.md) — building `status-backend` in Nix and preparing the sidecar.
+- [`docs/BUILDING.md`](docs/BUILDING.md) — building `libstatus.so` and `libsds.so` in Nix, and how the app loads them.
 
 ## 🧩 What is already implemented
 
@@ -83,11 +83,12 @@ Why this way: `status-go` can return market data, but that pulls in a dependency
 
 ## ⚠️ Known limitations and challenges
 
-- **Nix build of `status-backend`:** the `status-backend` binary and `libsds.so` must be built **in the same Nix environment** (same glibc, same ABI). If `status-backend` is built with system Go and `libsds.so` is taken from the Nix store (or vice versa), `status-backend` crashes with `SIGSEGV` when loading `libsds.so`. See `BUILDING.md` for details.
-- **`CGO_LDFLAGS`/`CGO_CFLAGS`:** local variables (vosk, whisper, portaudio, onnxruntime) inject system libraries (e.g., `libmp3lame` built against glibc 2.43) and break the Nix build. Before `make status-backend` in the Nix shell, run `unset CGO_LDFLAGS CGO_CFLAGS`.
-- **Nix interpreter in `status-backend`:** the binaries carry a `/nix/store` `INTERP` and `RUNPATH`, so on a machine without that store `execve` fails with `ENOENT`. `release.sh` rewrites them with `patchelf` to the system loader and an `$ORIGIN`-relative `RPATH`. Before that patch `linuxdeploy` also crashed on `ldd` (exit 139).
-- **AppImage and Nix glibc:** an AppImage built with a Nix-built `status-backend` may crash on systems with a different glibc (e.g., Ubuntu 26.04). The release build needs a cross-platform pipeline that avoids Nix for production binaries.
-- **Sidecar overhead:** running `status-backend` as a separate process simplifies integration but requires careful lifecycle management (start, stop, and preventing zombie processes).
+- **Nix build of the libraries:** `libstatus.so` and `libsds.so` must be built **in the same Nix environment** (same glibc, same ABI). A mismatch crashes the app with `SIGSEGV` when `libsds.so` is loaded. See `BUILDING.md` for details.
+- **`CGO_LDFLAGS`/`CGO_CFLAGS`:** local variables (vosk, whisper, portaudio, onnxruntime) inject system libraries (e.g., `libmp3lame` built against glibc 2.43) and break the Nix build. Before `make statusgo-library` in the Nix shell, run `unset CGO_LDFLAGS CGO_CFLAGS`.
+- **Nix interpreter in `libstatus.so`:** the library carries a `/nix/store` `RUNPATH`, so on a machine without that store it fails to load its own dependencies. `release.sh` rewrites it with `patchelf` to an `$ORIGIN`-relative `RPATH`.
+- **AppImage and Nix glibc:** an AppImage built with Nix-built libraries may crash on systems with a different glibc (e.g., Ubuntu 26.04). The release build needs a pipeline that avoids Nix for production binaries.
+- **A library, not a process:** a crash or an unrecovered panic inside `status-go` now takes the whole app down, and the backend cannot be updated independently of the UI. This was an accepted trade-off: the price is one shared build pipeline instead of two, and identical Rust code on desktop, Android and Windows.
+- **Relay peers before sending:** a message published before the node has Waku relay peers is dropped silently, while the send RPC still returns success. A contact request sent seconds after login can therefore never arrive.
 - **`status-go` caches:** RPC clients are cached forever; the balance cache is not invalidated. This requires a specific startup order and a local RPC forwarder (see `docs/en/networks_and_balances.md`).
 - **Feature completeness:** Send/Receive/Swap/Buy are in progress; `window.ethereum` injection, Manage Tokens, and Sell are planned.
 
@@ -95,8 +96,8 @@ Why this way: `status-go` can return market data, but that pulls in a dependency
 
 Stauri is in an active prototyping phase. The following key features already work:
 
-- Dynamic launch of the `status-backend` sidecar with automatic port allocation and per-network `dataDir` isolation.
-- WebSocket connection for real-time signal parsing (`node.login`, `node.stopped`, `messages.new`).
+- `status-go` loaded in-process from `libstatus.so`; per-network `dataDir` isolation stays.
+- Signals from status-go through a C callback, forwarded to the webview as a Tauri event (`node.login`, `node.stopped`, `messages.new`).
 - Account creation and login.
 - Messenger and wallet service initialization.
 - Wallet address retrieval (`accounts_getAccounts`, filter `chat = false`).
@@ -115,21 +116,21 @@ Stauri is in an active prototyping phase. The following key features already wor
 
 ## 🛠 Building from source
 
-Stauri requires a prebuilt `status-backend` binary and `libsds.so` from the Status Go repository. They must be built **in the same Nix environment**.
+Stauri requires a prebuilt `libstatus.so` and `libsds.so` from the Status Go repository. They must be built **in the same Nix environment**.
 
 Detailed instructions are in [docs/BUILDING.md](docs/BUILDING.md). Briefly:
 
 ```bash
-# 1. Build status-backend in Nix
+# 1. Build the library in Nix
 cd ~/ETH/github.status-go
 nix develop --extra-experimental-features 'nix-command flakes'
 unset CGO_LDFLAGS CGO_CFLAGS
-make status-backend
+make statusgo-library
 find /nix/store -name "libsds.so"   # take the one from -L at link time
 
 # 2. Copy into Stauri
-cp ~/ETH/github.status-go/build/bin/status-backend \
-   ~/ETH/stauri/stauri-app/src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu
+cp ~/ETH/github.status-go/build/bin/libstatus.so.0 \
+   ~/ETH/stauri/stauri-app/src-tauri/binaries/libstatus.so
 cp /nix/store/<hash>-nim-sds-.../lib/libsds.so \
    ~/ETH/stauri/stauri-app/src-tauri/binaries/libsds.so
 
@@ -139,4 +140,4 @@ pnpm install
 pnpm tauri dev
 
 # 4. Build AppImage
-./scripts/release.sh 0.2.0
+./scripts/release.sh 0.5.0

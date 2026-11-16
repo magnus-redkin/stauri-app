@@ -14,7 +14,7 @@ import {
   waitForNodeStopped,
 } from './statusStore.svelte';
 import { invoke } from '@tauri-apps/api/core';
-import { debug } from '$lib/utils/log';
+import { debug, info, error } from '$lib/utils/log';
 import { formatError, errorTag } from '$lib/utils/errors';
 import {
   startBackend,
@@ -41,9 +41,10 @@ export const connectionState = $state({
  * default is used.
  */
 export async function connect(network?: string) {
+  info(`[boot] connect(network=${network ?? 'default'}) connected=${statusState.isConnected} connecting=${connectionState.isConnecting}`);
   if (statusState.isConnected || connectionState.isConnecting) return;
 
-  if (statusState.backendPort) {
+  if (statusState.backendRunning) {
     await disconnect();
   }
 
@@ -52,16 +53,14 @@ export async function connect(network?: string) {
 
   try {
     const backendInfo = await startBackend(network);
-    // The AUTHENTICATING PROXY port, not the backend port: the proxy checks the
-    // token and only then forwards the request to the real backend.
-    statusState.backendPort = backendInfo.authPort;
+    // status-go runs in this process, so there is no port to keep.
+    statusState.backendRunning = true;
     statusState.backendDataDir = backendInfo.dataDir;
     connectionState.selectedNetwork = backendInfo.networkName;
 
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     const initData = await initializeApplication(
-      statusState.backendPort,
       statusState.backendDataDir,
       backendInfo.chainId
     );
@@ -80,8 +79,10 @@ export async function connect(network?: string) {
       backendInfo.chainId
     );
 
-    await openWs(statusState.backendPort);
+    info('[boot] connect: InitializeApplication done, opening ws');
+    await openWs();
     statusState.isConnected = true;
+    info('[boot] connect: ws open, configuring wallet rpc');
 
     // Providers are written right after initialization, BEFORE login. status-go
     // caches RPC clients by chainID and never invalidates them, so a client
@@ -92,7 +93,7 @@ export async function connect(network?: string) {
     // initServices, i.e. after node start, and the node starts inside
     // LoginAccount. Mode switching happens in `login` and `createAccount` —
     // see `applyNetworkMode`.
-    await configureWalletRpc(backendInfo.authPort);
+    await configureWalletRpc();
 
     // Networks are registered in processSignal AFTER node.login through
     // ensureNetworksConfigured; otherwise LoginAccount overwrites the settings.
@@ -100,8 +101,10 @@ export async function connect(network?: string) {
   } catch (e: any) {
     statusState.errorMsg = `${errorTag(e)}Connection failed: ${formatError(e)}`;
     statusState.isConnected = false;
+    error(`[boot] connect failed: ${formatError(e)}`);
   } finally {
     connectionState.isConnecting = false;
+    info('[boot] connect finished');
   }
 }
 
@@ -139,8 +142,7 @@ export async function changeNetwork(network: string) {
  * a login loop is not acceptable.
  */
 async function restartNodeForProviders(password: string, keyUid: string): Promise<boolean> {
-  const port = statusState.backendPort;
-  if (!port || !keyUid) return false;
+  if (!statusState.backendRunning || !keyUid) return false;
 
   debug('[login] провайдеры записаны после старта ноды — перезапускаю ноду');
 
@@ -149,17 +151,17 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
   // the full 15s. The node stops asynchronously; logging in before it stops
   // returns the same cached client.
   const stopped = waitForNodeStopped(15000);
-  await apiLogout(port);
+  await apiLogout();
   await stopped;
 
   // A login error is not swallowed: without the node there is nothing to
   // continue with, so let the caller surface it.
   await traceSecret('login', password);
-  await loginAccount(port, password, keyUid);
-  await waitForLoginReady(port, 30000);
+  await loginAccount(password, keyUid);
+  await waitForLoginReady(30000);
 
-  await configureWalletRpc(port);
-  await startMessenger(port);
+  await configureWalletRpc();
+  await startMessenger();
   return true;
 }
 
@@ -173,7 +175,6 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
  * computes balances over the mainnet chains (1, 10, 56, 8453, 42161) and the
  * user sees zeros instead of Sepolia assets.
  *
- * @param port - Port of the authenticating proxy.
  * @returns `true` when the flag had to be rewritten.
  * @remarks
  * Runs after login, not in `connect`: `settings_*` registers in initServices,
@@ -182,9 +183,9 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
  * cached by chainID (see `restartNodeForProviders`), so the caller must restart
  * the node — otherwise balances keep coming from the previous networks.
  */
-async function applyNetworkMode(port: number): Promise<boolean> {
+async function applyNetworkMode(): Promise<boolean> {
   try {
-    const changed = await ensureTestNetworkMode(port, statusState.isTestnet);
+    const changed = await ensureTestNetworkMode(statusState.isTestnet);
     if (changed) {
       debug(
         `[connect] test networks mode switched to ${statusState.isTestnet ? 'on' : 'off'}`
@@ -216,22 +217,21 @@ async function applyNetworkMode(port: number): Promise<boolean> {
  * see `restartNodeForProviders`.
  */
 export async function login(password: string, keyUid: string) {
-  if (!statusState.backendPort) return;
-  const port = statusState.backendPort;
-  if (!isWsOpen()) await openWs(port);
+  if (!statusState.backendRunning) return;
+  if (!isWsOpen()) await openWs();
 
   await traceSecret('login', password);
-  await loginAccount(port, password, keyUid);
-  await waitForLoginReady(port, 30000);
+  await loginAccount(password, keyUid);
+  await waitForLoginReady(30000);
 
   // The network mode comes before the providers: it decides which networks they
   // are written for.
-  const modeChanged = await applyNetworkMode(port);
+  const modeChanged = await applyNetworkMode();
 
-  const { wroteProviders } = await configureWalletRpc(port);
+  const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
-  await startMessenger(port);
+  await startMessenger();
 }
 
 /**
@@ -245,31 +245,32 @@ export async function login(password: string, keyUid: string) {
  * normal path here, not an exception — see `restartNodeForProviders`.
  */
 export async function createAccount(password: string) {
-  if (!statusState.backendPort) return;
-  const port = statusState.backendPort;
-  if (!isWsOpen()) await openWs(port);
-  await traceSecret('create', password);
-  const createResult = await createAccountAndLogin(port, statusState.backendDataDir, password);
-  if (createResult?.error) throw new Error(createResult.error);
-  if (isAndroidRuntime()) {
-    // Android has no node.login signal (the SetSignalEventCallback hook is not
-    // wired), so wait until the node answers settings_getSettings itself.
-    await waitForNodeLogin(port, 30000);
-  } else {
-    await waitForLogin(30000);
+  // Length only: the password itself never reaches the log.
+  info(`[boot] createAccount: backendRunning=${statusState.backendRunning} passwordLength=${password.length}`);
+  if (!statusState.backendRunning) {
+    error('[boot] createAccount: no backend port, nothing sent');
+    return;
   }
+  if (!isWsOpen()) await openWs();
+  await traceSecret('create', password);
+  info('[boot] createAccount: calling CreateAccountAndLogin');
+  const createResult = await createAccountAndLogin(statusState.backendDataDir, password);
+  if (createResult?.error) throw new Error(createResult.error);
+  info('[boot] createAccount: CreateAccountAndLogin ok, waiting for node.login');
+  // One path on every platform: status-go runs in this process and delivers
+  // `node.login` through the signal callback.
+  await waitForLogin(30000);
 
   const keyUid = statusState.accountKeyUid;
-  const modeChanged = await applyNetworkMode(port);
-  const { wroteProviders } = await configureWalletRpc(port);
+  const modeChanged = await applyNetworkMode();
+  const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
-  await startMessenger(port);
+  await startMessenger();
 }
 
-/** Waits for login: by the node.login signal on desktop, by polling on Android. */
-async function waitForLoginReady(port: number, timeoutMs: number): Promise<void> {
-  if (isAndroidRuntime()) return waitForNodeLogin(port, timeoutMs);
+/** Waits for the `node.login` signal. */
+async function waitForLoginReady(timeoutMs: number): Promise<void> {
   return waitForLogin(timeoutMs);
 }
 
@@ -290,7 +291,6 @@ async function traceNote(note: unknown): Promise<void> {
  * written, never the password itself.
  */
 async function traceSecret(kind: string, password: string): Promise<void> {
-  if (!isAndroidRuntime()) return;
   try {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
     const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -300,77 +300,18 @@ async function traceSecret(kind: string, password: string): Promise<void> {
   }
 }
 
-/** Android: libstatus.so emits no signals yet, so login is checked by polling. */
-function isAndroidRuntime(): boolean {
-  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
-}
-
-/**
- * Waits until the node is logged in: settings_getSettings returns the key-uid.
- *
- * Sets `isLoggedIn` and `accountKeyUid` the way the node.login signal does.
- *
- * @param port - Port of the authenticating proxy.
- * @param timeoutMs - How long to poll before giving up.
- * @throws When the node does not report a key-uid within the timeout.
- */
-async function waitForNodeLogin(port: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = '';
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    attempt += 1;
-    try {
-      const raw = await getSettings(port);
-      // CallRPC returns a JSON-RPC envelope: the settings are in `result`.
-      const settings = raw && typeof raw === 'object' && 'result' in raw ? raw.result : raw;
-      const keyUid = settings?.['key-uid'];
-      if (attempt <= 5 && isAndroidRuntime()) {
-        await traceNote({
-   attempt,
-   keys: settings && typeof settings === 'object' ? Object.keys(settings) : typeof settings,
-          keyUid: typeof keyUid === 'string' ? keyUid.slice(0, 10) : keyUid ?? null,
-   raw: JSON.stringify(settings ?? null).slice(0, 300),
-        });
-      }
-      if (typeof keyUid === 'string' && keyUid.length > 0) {
-               statusState.accountKeyUid = keyUid;
- // Same fields as the node.login signal: without signals on Android the
-        // public key and alias would otherwise never reach the profile and the
-        // invite link.
-        if (typeof settings['public-key'] === 'string' && settings['public-key']) {
-   statusState.publicKey = settings['public-key'];
-        }
-        if (typeof settings['compressedKey'] === 'string' && settings['compressedKey']) {
-   statusState.compressedKey = settings['compressedKey'];
-        }
-        if (typeof settings['alias'] === 'string' && settings['alias']) {
-          statusState.alias = settings['alias'];
-        }
-        statusState.isLoggedIn = true;
- return;
-      }
-      lastError = 'settings without key-uid';
-    } catch (e) {
-      lastError = String(e);
-      if (attempt <= 5 && isAndroidRuntime()) await traceNote({ attempt, error: lastError.slice(0, 300) });
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  throw new Error(`Login timeout: node did not answer (${lastError})`);
-}
 
 /**
  * Closes the WebSocket and stops the backend.
  */
 export async function disconnect() {
   await closeWs();
-  if (statusState.backendPort) {
+  if (statusState.backendRunning) {
     try { await stopBackend(); } catch {
       /* a failed stop is not critical: the next connect starts a new backend */
     }
   }
   await new Promise(r => setTimeout(r, 500));
   statusState.isConnected = false;
-  statusState.backendPort = null;
+  statusState.backendRunning = false;
 }

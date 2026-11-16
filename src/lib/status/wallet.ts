@@ -21,14 +21,13 @@ import { statusFetch } from './http';
 /**
  * Starts the wallet service.
  *
- * @param port - Auth proxy port.
  * @returns The backend's response.
  * @remarks
  * Call once per session rather than on every balance poll: repeated calls achieve
  * nothing and cost time.
  */
-export async function startWallet(port: number): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function startWallet(): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wallet_startWallet',
@@ -43,7 +42,6 @@ export async function startWallet(port: number): Promise<any> {
 /**
  * Accounts of the profile.
  *
- * @param port - Auth proxy port.
  * @returns Account records from status-go.
  * @remarks
  * These records give the addresses the backend actually computes balances for:
@@ -51,8 +49,8 @@ export async function startWallet(port: number): Promise<any> {
  * (internal/db/multiaccounts/accounts/database.go, `GetWalletAddresses`). The
  * `chat = true` account is the chat address and has no wallet.
  */
-export async function getAccounts(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getAccounts(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 2,
     method: 'accounts_getAccounts',
@@ -64,7 +62,6 @@ export async function getAccounts(port: number): Promise<any[]> {
 /**
  * Balances from the backend cache.
  *
- * @param port - Auth proxy port.
  * @param addresses - Wallet addresses to read.
  * @param forceRefresh - Ignored by status-go; kept for callers that still pass it.
  * @returns Balance map: `{ "0xAddr": [ { tokenAddress, tokenChainId, rawBalance,
@@ -77,11 +74,10 @@ export async function getAccounts(port: number): Promise<any[]> {
  * a timer is required. Use `restartWalletReloadTimer` to trigger a refetch.
  */
 export async function getBalances(
-  port: number,
   addresses: string[],
   forceRefresh = false
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 3,
     method: 'wallet_fetchOrGetCachedWalletBalances',
@@ -92,7 +88,6 @@ export async function getBalances(
 /**
  * Token metadata (symbol, decimals, name) for the active networks.
  *
- * @param port - Auth proxy port.
  * @returns Token records.
  * @remarks
  * A `StorageToken` from `getBalances` has no `symbol` or `decimals`, only address,
@@ -101,8 +96,8 @@ export async function getBalances(
  * (~4.6 MB, ~17 700 tokens), so `walletStore` fetches it once per session and
  * caches it.
  */
-export async function getTokensForActiveNetworksMode(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getTokensForActiveNetworksMode(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 4,
     method: 'wallet_getTokensForActiveNetworksMode',
@@ -114,14 +109,13 @@ export async function getTokensForActiveNetworksMode(port: number): Promise<any[
 /**
  * Profile settings.
  *
- * @param port - Auth proxy port.
  * @returns Settings object.
  * @remarks
  * The object contains `mnemonic`, the seed phrase. `statusFetch` does not log
  * response bodies, but this object must never be put into a store or a log.
  */
-export async function getSettings(port: number): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function getSettings(): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 5,
     method: 'settings_getSettings',
@@ -132,7 +126,6 @@ export async function getSettings(port: number): Promise<any> {
 /**
  * Saves a profile setting.
  *
- * @param port - Auth proxy port.
  * @param key - "React name" of the field, with a question mark for booleans.
  * @param value - New value.
  * @returns The backend's response.
@@ -142,11 +135,10 @@ export async function getSettings(port: number): Promise<any> {
  * plain field name (`test_networks_enabled`) does not work here.
  */
 export async function saveSetting(
-  port: number,
   key: string,
   value: unknown
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 22,
     method: 'settings_saveSetting',
@@ -157,7 +149,6 @@ export async function saveSetting(
 /**
  * Turns the display of test networks on or off.
  *
- * @param port - Auth proxy port.
  * @param enabled - Whether test networks are active.
  * @returns The backend's response.
  * @remarks
@@ -180,31 +171,28 @@ export async function saveSetting(
  * `networks_*`.
  */
 export async function setTestNetworksEnabled(
-  port: number,
   enabled: boolean
 ): Promise<any> {
-  return saveSetting(port, 'test-networks-enabled?', enabled);
+  return saveSetting('test-networks-enabled?', enabled);
 }
 
 /**
  * Current value of the test networks flag.
  *
- * @param port - Auth proxy port.
  * @returns Whether test networks are enabled.
  * @remarks
  * Reads the whole settings object and takes one field, because status-go has no
  * dedicated getter for this flag. The object carries the seed phrase, so it must
  * not be logged or stored.
  */
-export async function getTestNetworksEnabled(port: number): Promise<boolean> {
-  const settings = await getSettings(port);
+export async function getTestNetworksEnabled(): Promise<boolean> {
+  const settings = await getSettings();
   return settings?.result?.['test-networks-enabled?'] === true;
 }
 
 /**
  * Brings the network mode to the requested value.
  *
- * @param port - Auth proxy port.
  * @param enabled - Whether test networks should be active.
  * @returns `true` when the flag had to be rewritten.
  * @remarks
@@ -213,19 +201,17 @@ export async function getTestNetworksEnabled(port: number): Promise<boolean> {
  * balances will come from the wrong networks.
  */
 export async function ensureTestNetworkMode(
-  port: number,
   enabled: boolean
 ): Promise<boolean> {
-  const current = await getTestNetworksEnabled(port);
+  const current = await getTestNetworksEnabled();
   if (current === enabled) return false;
-  await setTestNetworksEnabled(port, enabled);
+  await setTestNetworksEnabled(enabled);
   return true;
 }
 
 /**
  * Resolves an address into its ENS name and details.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain to resolve on.
  * @param address - Address to look up.
  * @returns Address details, including the ENS name when there is one.
@@ -234,11 +220,10 @@ export async function ensureTestNetworkMode(
  * if one exists — the last chance to notice a substituted address.
  */
 export async function getAddressDetails(
-  port: number,
   chainId: number,
   address: string
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 6,
     method: 'wallet_getAddressDetails',
@@ -249,7 +234,6 @@ export async function getAddressDetails(
 /**
  * Triggers a full refetch of balances.
  *
- * @param port - Auth proxy port.
  * @returns The backend's response.
  * @remarks
  * This is the only working way to refresh balances, since `getBalances` ignores
@@ -262,8 +246,8 @@ export async function getAddressDetails(
  * appear in the cache a few seconds later, so callers must re-read balances after
  * a delay rather than once.
  */
-export async function restartWalletReloadTimer(port: number): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function restartWalletReloadTimer(): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 21,
     method: 'wallet_restartWalletReloadTimer',
@@ -291,17 +275,15 @@ export async function restartWalletReloadTimer(port: number): Promise<any> {
 /**
  * Builds a transaction and returns the hash that must be signed.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain the transaction targets.
  * @param sendTxArgsJson - Transaction arguments as a JSON string.
  * @returns The backend's build result, including `messageToSign` and `txArgs`.
  */
 export async function buildTransaction(
-  port: number,
   chainId: number,
   sendTxArgsJson: string
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 7,
     method: 'wallet_buildTransaction',
@@ -312,7 +294,6 @@ export async function buildTransaction(
 /**
  * Signs 32 bytes with the account key.
  *
- * @param port - Auth proxy port.
  * @param message - Hash to sign.
  * @param address - Wallet address whose key signs.
  * @param password - Profile password.
@@ -322,12 +303,11 @@ export async function buildTransaction(
  * interface.
  */
 export async function signMessage(
-  port: number,
   message: string,
   address: string,
   password: string
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 8,
     method: 'wallet_signMessage',
@@ -338,7 +318,6 @@ export async function signMessage(
 /**
  * Sends a signed transaction to the network.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain to send on.
  * @param txType - Transaction type.
  * @param sendTxArgsJson - Transaction arguments as a JSON string.
@@ -350,13 +329,12 @@ export async function signMessage(
  * stripped before calling. The Rust transfer command does this.
  */
 export async function sendTransactionWithSignature(
-  port: number,
   chainId: number,
   txType: 'WalletTransfer' | 'RegisterENS' | 'ReleaseENS' | 'SetPubKey',
   sendTxArgsJson: string,
   signature: string
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 9,
     method: 'wallet_sendTransactionWithSignature',
@@ -365,8 +343,8 @@ export async function sendTransactionWithSignature(
 }
 
 /** Transactions waiting for confirmation, for the status indicator on screen. */
-export async function getPendingTransactions(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getPendingTransactions(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 10,
     method: 'wallet_getPendingTransactions',
@@ -376,8 +354,8 @@ export async function getPendingTransactions(port: number): Promise<any[]> {
 }
 
 /** Network-suggested fees, in gwei. */
-export async function getSuggestedFees(port: number, chainId: number): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function getSuggestedFees(chainId: number): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 11,
     method: 'wallet_getSuggestedFees',
@@ -393,8 +371,8 @@ export async function getSuggestedFees(port: number, chainId: number): Promise<a
 // opens the link in an external handler.
 
 /** Available purchase providers, usually empty on testnet. */
-export async function getCryptoOnRamps(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getCryptoOnRamps(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 12,
     method: 'wallet_getCryptoOnRamps',
@@ -405,11 +383,10 @@ export async function getCryptoOnRamps(port: number): Promise<any[]> {
 
 /** Provider link with the receiving address filled in. */
 export async function getCryptoOnRampUrl(
-  port: number,
   providerId: string,
   parameters: { destAddress?: string; chainID?: number; symbol?: string }
 ): Promise<string> {
-  const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
     jsonrpc: '2.0',
     id: 13,
     method: 'wallet_getCryptoOnRampURL',
@@ -426,8 +403,8 @@ export async function getCryptoOnRampUrl(
 // by `rpcConfig.ts` on connect, and without these calls no balances arrive.
 
 /** Networks known to the backend, with their RPC providers. */
-export async function getFlatEthereumChains(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getFlatEthereumChains(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 14,
     method: 'networks_getFlatEthereumChains',
@@ -439,7 +416,6 @@ export async function getFlatEthereumChains(port: number): Promise<any[]> {
 /**
  * Adds a user RPC provider to a network.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain to configure.
  * @param name - Provider name, shown in status-go settings.
  * @param url - Endpoint URL.
@@ -452,12 +428,11 @@ export async function getFlatEthereumChains(port: number): Promise<any[]> {
  * so calling this is safe.
  */
 export async function setChainUserRpcProvider(
-  port: number,
   chainId: number,
   name: string,
   url: string
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 15,
     method: 'networks_setChainUserRpcProviders',
@@ -492,8 +467,8 @@ export async function setChainUserRpcProvider(
 // in SNT and on testnet in STT. See `src-tauri/src/ens.rs`.
 
 /** ENS names of this profile. */
-export async function getEnsUsernames(port: number): Promise<any[]> {
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+export async function getEnsUsernames(): Promise<any[]> {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 16,
     method: 'ens_getEnsUsernames',
@@ -505,7 +480,6 @@ export async function getEnsUsernames(port: number): Promise<any[]> {
 /**
  * Records an ENS name on the profile and syncs it to linked devices.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain the name belongs to.
  * @param username - Full name, including the `.eth` suffix.
  * @returns Nothing.
@@ -520,8 +494,8 @@ export async function getEnsUsernames(port: number): Promise<any[]> {
  * to the sync chat, and whether anyone receives it depends on linked devices.
  * Harmless for a single profile.
  */
-export async function addEnsUsername(port: number, chainId: number, username: string): Promise<void> {
-  await statusFetch(port, 'CallRPC', {
+export async function addEnsUsername(chainId: number, username: string): Promise<void> {
+  await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 16,
     method: 'ens_add',
@@ -532,7 +506,6 @@ export async function addEnsUsername(port: number, chainId: number, username: st
 /**
  * ENS name of an address.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain to resolve on.
  * @param address - Address to look up.
  * @returns The name, or an empty string when the address has none.
@@ -540,11 +513,10 @@ export async function addEnsUsername(port: number, chainId: number, username: st
  * An empty result is not an error: most addresses have no name.
  */
 export async function ensGetName(
-  port: number,
   chainId: number,
   address: string
 ): Promise<string> {
-  const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
     jsonrpc: '2.0',
     id: 17,
     method: 'ens_getName',
@@ -556,7 +528,6 @@ export async function ensGetName(
 /**
  * Address an ENS name points to.
  *
- * @param port - Auth proxy port.
  * @param chainId - Chain to resolve on.
  * @param username - Name such as `vitalik.eth`.
  * @returns The address, or an empty string when the name does not exist.
@@ -565,11 +536,10 @@ export async function ensGetName(
  * address behind it.
  */
 export async function ensAddressOf(
-  port: number,
   chainId: number,
   username: string
 ): Promise<string> {
-  const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
     jsonrpc: '2.0',
     id: 18,
     method: 'ens_addressOf',
@@ -579,8 +549,8 @@ export async function ensAddressOf(
 }
 
 /** Registration price of a name. */
-export async function ensPrice(port: number, chainId: number): Promise<string> {
-  const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
+export async function ensPrice(chainId: number): Promise<string> {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
     jsonrpc: '2.0',
     id: 19,
     method: 'ens_price',
@@ -591,11 +561,10 @@ export async function ensPrice(port: number, chainId: number): Promise<string> {
 
 /** When the name expires (RFC3339). Empty when the name is not registered. */
 export async function ensExpireAt(
-  port: number,
   chainId: number,
   username: string
 ): Promise<string> {
-  const res = await statusFetch<{ result?: string }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
     jsonrpc: '2.0',
     id: 20,
     method: 'ens_expireAt',
@@ -611,7 +580,6 @@ export async function ensExpireAt(
 /**
  * Token prices in one currency.
  *
- * @param port - Auth proxy port.
  * @param tokenKeys - Keys in status-go form, `chainId-address`.
  * @param currency - Currency code.
  * @returns Flat map of token key to price; tokens without a price are omitted.
@@ -629,14 +597,12 @@ export async function ensExpireAt(
  * price"; the two are not conflated.
  */
 export async function getTokenPrices(
-  port: number,
   tokenKeys: string[],
   currency = 'usd'
 ): Promise<Record<string, number>> {
   if (tokenKeys.length === 0) return {};
 
   const res = await statusFetch<{ result?: Record<string, Record<string, number>> }>(
-    port,
     'CallRPC',
     {
       jsonrpc: '2.0',

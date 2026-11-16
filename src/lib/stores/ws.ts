@@ -1,58 +1,40 @@
 /**
- * WebSocket to the backend `/signals` endpoint.
+ * status-go signal subscription.
  *
- * The connection carries no reactive application state — it is a resource to
- * open, reuse and close — so the socket handle stays private and only the
- * operations are exported.
+ * The backend lives inside this process, so there is no `/signals` socket:
+ * Rust registers a C callback with status-go and forwards every signal to the
+ * webview as the `status-signal` Tauri event. What remains here is the shape the
+ * rest of the app expects (`openWs`/`closeWs`/`isWsOpen`), so call sites did not
+ * have to change.
  */
 
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { processSignal } from './statusStore.svelte';
-import { getAuthToken } from '$lib/status/api';
-import WebSocket from '@tauri-apps/plugin-websocket';
 
-let ws: WebSocket | null = null;
+let unlisten: UnlistenFn | null = null;
 
-/** Whether the socket is currently open. */
+/** Whether the signal subscription is active. */
 export function isWsOpen(): boolean {
-  return ws !== null;
+  return unlisten !== null;
 }
 
 /**
- * Connects the WebSocket, closing any previous one first.
+ * Starts listening for status-go signals.
  *
- * The token travels in a header: a plain browser WebSocket cannot set headers,
- * but the Tauri plugin accepts `ConnectionConfig.headers`. The proxy checks the
- * token before the upgrade. `port` is the authenticating proxy port, not the
- * backend port.
+ * Idempotent: a second call replaces the listener rather than doubling it.
  *
- * @param port - Port of the authenticating proxy that fronts the backend.
+ * @param _port - Retained for call-site compatibility; no transport exists.
  */
-export async function openWs(port: number): Promise<void> {
-  // Android has no `/signals` socket (the backend is a library, see B.2).
-  // Signals are not bridged yet: login and requests go through
-  // statusFetch → status_call.
-  if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
-    return;
-  }
+export async function openWs(): Promise<void> {
   await closeWs();
-
-  const socket = await WebSocket.connect(`ws://127.0.0.1:${port}/signals`, {
-    headers: { 'X-Stauri-Token': await getAuthToken() },
+  unlisten = await listen<any>('status-signal', (event) => {
+    if (event.payload) processSignal(JSON.stringify(event.payload));
   });
-  socket.addListener((msg) => {
-    // msg.data arrives as string | number[] | CloseFrame | null
-    if (typeof msg.data === 'string') processSignal(msg.data);
-  });
-  ws = socket;
 }
 
-/** Closes the socket if it is open. Safe to call repeatedly. */
+/** Stops listening. Safe to call repeatedly. */
 export async function closeWs(): Promise<void> {
-  if (!ws) return;
-  try {
-    await ws.disconnect();
-  } catch {
-    /* a failed close is not critical: the next connect opens a new socket */
-  }
-  ws = null;
+  if (!unlisten) return;
+  unlisten();
+  unlisten = null;
 }

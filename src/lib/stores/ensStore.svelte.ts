@@ -185,8 +185,7 @@ async function ensureWalletAddress(): Promise<string> {
 
 /** Price and availability of the name. Read-only: no password needed. */
 export async function checkName(): Promise<void> {
-  const port = statusState.backendPort;
-  if (!port) return;
+  if (!statusState.backendRunning) return;
 
   const chainId = statusState.chainId;
   ensState.unsupportedChain = !ensSupported(chainId);
@@ -215,7 +214,6 @@ export async function checkName(): Promise<void> {
       owner: string;
       available: boolean;
     }>('get_ens_quote', {
-      port,
       // The argument name is `chainId`, not `chain_id`: Tauri converts command
       // parameters to camelCase and answers "missing required key chainId"
       // otherwise. In Rust the parameter stays `chain_id`.
@@ -266,11 +264,10 @@ export async function goToConfirm(): Promise<void> {
  * the app to work.
  */
 export async function loadProfileNames(): Promise<void> {
-  const port = statusState.backendPort;
-  if (!port) return;
+  if (!statusState.backendRunning) return;
 
   try {
-    const names = await getEnsUsernames(port);
+    const names = await getEnsUsernames();
     ensState.profileNames = names
       .filter((n: any) => n && n.username && n.removed !== true)
       .map((n: any) => String(n.username));
@@ -290,8 +287,7 @@ export async function loadProfileNames(): Promise<void> {
  * `sendTransfer`.
  */
 export async function registerName(): Promise<boolean> {
-  const port = statusState.backendPort;
-  if (!port) {
+  if (!statusState.backendRunning) {
     ensState.error = 'Wallet is not ready';
     ensState.step = 'failed';
     return false;
@@ -321,7 +317,6 @@ export async function registerName(): Promise<boolean> {
         // Inside `request` names stay snake_case: it is the serde
         // `EnsRegisterRequest`, and Tauri's camelCase conversion covers only the
         // top-level command arguments (like `chainId` above).
-        port,
         chain_id: statusState.chainId,
         from: walletState.address,
         username: ensState.username.trim(),
@@ -339,7 +334,7 @@ export async function registerName(): Promise<boolean> {
     // the name would only be visible on chain.
     if (ensState.fullName) {
       try {
-        await addEnsUsername(port, statusState.chainId, ensState.fullName);
+        await addEnsUsername(statusState.chainId, ensState.fullName);
         await loadProfileNames();
       } catch (e) {
         // Do not fail the registration: the name is already on chain, and

@@ -121,8 +121,7 @@ export interface TransferInput {
  * just without the fee line.
  */
 export async function estimateFee(input: TransferInput): Promise<void> {
-  const port = statusState.backendPort;
-  if (!port || !walletState.address) return;
+  if (!statusState.backendRunning || !walletState.address) return;
 
   sendState.isEstimating = true;
   sendState.feeError = '';
@@ -131,7 +130,6 @@ export async function estimateFee(input: TransferInput): Promise<void> {
       'estimate_transfer_fee',
       {
         request: {
-          port,
           chain_id: input.token.chainId,
           from: walletState.address,
           to: input.to,
@@ -208,8 +206,7 @@ export function classifySendError(message: string): SendErrorCode {
  * started and the cache is read again.
  */
 export async function sendTransfer(input: TransferInput): Promise<boolean> {
-  const port = statusState.backendPort;
-  if (!port || !walletState.address) {
+  if (!statusState.backendRunning || !walletState.address) {
     sendState.error = 'Wallet is not ready';
     sendState.errorCode = 'send-wallet-not-ready';
     sendState.step = 'failed';
@@ -229,7 +226,6 @@ export async function sendTransfer(input: TransferInput): Promise<boolean> {
   try {
     const result = await invoke<{ tx_hash: string }>('send_transfer', {
       request: {
-        port,
         chain_id: input.token.chainId,
         from: walletState.address,
         to: input.to,
@@ -273,8 +269,8 @@ async function refreshAfterSend(): Promise<void> {
   try {
     // Let the network accept the transaction, then ask the backend to refetch.
     await new Promise((r) => setTimeout(r, 3000));
-    if (statusState.backendPort) {
-      await restartWalletReloadTimer(statusState.backendPort);
+    if (statusState.backendRunning) {
+      await restartWalletReloadTimer();
       await new Promise((r) => setTimeout(r, 2000));
       await loadWallet(true);
     }

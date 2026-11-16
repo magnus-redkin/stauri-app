@@ -92,11 +92,11 @@ jobs:
       # sidecar и libsds.so — артефакты Nix-сборки, в CI их нет.
       # Создаём пустышки, чтобы tauri-build не падал на внешнем бинарнике:
       # для cargo test настоящие бинарники не нужны.
-      - name: Stub sidecar binaries
+      - name: Stub native libraries
         working-directory: src-tauri
         run: |
           mkdir -p binaries
-          touch binaries/status-backend-x86_64-unknown-linux-gnu
+          touch binaries/libstatus.so
           touch binaries/libsds.so
 
       - name: Format check

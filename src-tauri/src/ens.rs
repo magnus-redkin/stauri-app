@@ -79,8 +79,6 @@ fn token_key(chain_id: u64) -> AppResult<String> {
 /// Registration request body.
 #[derive(Debug, Deserialize)]
 pub struct EnsRegisterRequest {
-    /// Port of the authenticating proxy.
-    pub port: u16,
     pub chain_id: u64,
     /// Wallet address paying in SNT and receiving the name.
     pub from: String,
@@ -266,18 +264,16 @@ async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
 /// the confirmation screen is not a separate guess but the same estimate.
 ///
 /// # Errors
-/// `ErrorKind::Config` when the backend is not running, the name is invalid, the
-/// wallet address is malformed or the chain has no registrar; `ErrorKind::Backend`
-/// when the price or the owner cannot be read.
+/// `ErrorKind::Config` when the name is invalid, the wallet address is malformed
+/// or the chain has no registrar; `ErrorKind::Backend` when the price or the
+/// owner cannot be read.
 #[tauri::command]
 pub async fn get_ens_quote(
-    port: u16,
     chain_id: u64,
     from: String,
     username: String,
 ) -> AppResult<EnsQuote> {
-    let backend =
-        Backend::from_port(port).map_err(|_| AppError::config("backend is not running"))?;
+    let backend = Backend::new();
     validate_username(&username)?;
     if !is_address(&from) {
         return Err(AppError::config("invalid wallet address"));
@@ -358,7 +354,7 @@ fn route_fee(route: &Value) -> Option<String> {
 #[tauri::command]
 pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegisterResult> {
     let backend =
-        Backend::from_port(request.port).map_err(|_| AppError::config("backend is not running"))?;
+        Backend::new();
     validate_username(&request.username)?;
     if !is_address(&request.from) {
         return Err(AppError::config("invalid wallet address"));

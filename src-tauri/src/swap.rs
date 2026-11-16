@@ -32,7 +32,7 @@ use std::time::Duration;
 use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 use crate::router::{
-    GAS_FEE_MEDIUM, connect_signals, execute_round, hex_u128, is_address, unique_uuid,
+    GAS_FEE_MEDIUM, execute_round, hex_u128, is_address, unique_uuid,
 };
 
 /// `SendType` from `pkg/services/wallet/router/sendtype/send_type.go`: Swap=8.
@@ -62,7 +62,6 @@ const MINING_POLL_SLOW: Duration = Duration::from_millis(2500);
 /// Swap request body.
 #[derive(Debug, Deserialize)]
 pub struct SwapRequest {
-    pub port: u16,
     pub chain_id: u64,
     /// Wallet address: both payer and recipient of the swap.
     pub from: String,
@@ -181,21 +180,16 @@ fn first_path(route: &Value) -> Option<&Value> {
 /// quote can be shown before the password is entered.
 ///
 /// # Errors
-/// `ErrorKind::Config` for a missing backend port, a bad wallet address or
-/// validation failures; `ErrorKind::Backend` when the backend call fails or no
-/// route is available.
+/// `ErrorKind::Config` for a bad wallet address or validation failures;
+/// `ErrorKind::Backend` when the backend call fails or no route is available.
 #[tauri::command]
 pub async fn get_swap_quote(
-    port: u16,
     chain_id: u64,
     from: String,
     from_token: String,
     to_token: String,
     amount: String,
 ) -> AppResult<SwapQuote> {
-    if port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
     if !is_address(&from) {
         return Err(AppError::config("invalid wallet address"));
     }
@@ -203,7 +197,7 @@ pub async fn get_swap_quote(
 
     let uuid = unique_uuid();
     let params = route_params(&uuid, chain_id, &from, &from_token, &to_token, value);
-    let route = Backend::from_port(port)?
+    let route = Backend::new()
         .call("wallet_getSuggestedRoutes", json!([params]))
         .await?;
 
@@ -263,15 +257,11 @@ pub async fn get_swap_quote(
 /// the user has not agreed to.
 ///
 /// # Errors
-/// `ErrorKind::Config` for a missing backend port, a bad wallet address, an
-/// empty password or validation failures; `ErrorKind::Backend` when building the
-/// route, signing or sending fails; `ErrorKind::Internal` when the signals
-/// connection cannot be built.
+/// `ErrorKind::Config` for a bad wallet address, an empty password or validation
+/// failures; `ErrorKind::Backend` when building the route, signing or sending
+/// fails.
 #[tauri::command]
 pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
-    if request.port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
     if !is_address(&request.from) {
         return Err(AppError::config("invalid wallet address"));
     }
@@ -295,11 +285,12 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
         value,
     );
 
-    let backend = Backend::from_port(request.port)?;
-    let mut ws = connect_signals(request.port).await?;
+    let backend = Backend::new();
+    // Subscribe before the first call: signals are not replayed.
+    let mut rx = backend.subscribe();
 
     let first = execute_round(
-        &mut ws,
+        &mut rx,
         backend,
         Some(params),
         &uuid,
@@ -318,7 +309,7 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
 
         // Second round with the same uuid: the route is already in the backend.
         let second = execute_round(
-            &mut ws,
+            &mut rx,
             backend,
             None,
             &uuid,
@@ -337,8 +328,6 @@ pub async fn swap_tokens(request: SwapRequest) -> AppResult<SwapResult> {
             first,
         )
     };
-
-    let _ = ws.close(None).await;
 
     let (approval_tx_hash, txs) = final_txs;
 

@@ -12,7 +12,7 @@ vi.mock('$lib/status/api', () => ({
 
 // Mocks the store (`setPendingRequestsCount`).
 vi.mock('./statusStore.svelte', () => ({
-  statusState: { backendPort: 12345 },
+  statusState: { backendRunning: true },
   setPendingRequestsCount: vi.fn(),
 }));
 
@@ -52,7 +52,7 @@ describe('contactsStore', () => {
 
     await acceptRequest('0x123');
 
-    expect(acceptContactRequest).toHaveBeenCalledWith(12345, '0x123');
+    expect(acceptContactRequest).toHaveBeenCalledWith('0x123');
     expect(getContacts).toHaveBeenCalled(); // Reload after accepting
   });
 

@@ -4,74 +4,74 @@ use std::collections::HashMap;
 
 use tauri::Manager;
 
-use crate::auth_proxy;
 use crate::error::AppResult;
+use crate::inprocess;
 use crate::rpc_proxy;
-use crate::sidecar;
 use crate::updater;
 
-#[cfg(desktop)]
-#[tauri::command]
-pub async fn start_backend(
-    app: tauri::AppHandle,
-    network: Option<String>,
-) -> AppResult<sidecar::StartBackendResponse> {
-    sidecar::start(app, network).await
-}
-
-/// Android: no process and no port — the backend is a library inside the app.
+/// Prepares status-go inside this process.
 ///
-/// The response has the same shape as on desktop. `port`/`authPort` are 0 and
-/// unused because `statusFetch` goes through the `status_call` bridge on
-/// Android.
-#[cfg(mobile)]
+/// There is no child process to start: the library is loaded on first use and
+/// the signal callback is registered with it. The response carries the data
+/// directory and the network settings; no port is returned.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the data directory cannot
+/// be determined or created, and when the library or one of its symbols cannot
+/// be loaded.
 #[tauri::command]
 pub async fn start_backend(
     app: tauri::AppHandle,
     network: Option<String>,
-) -> AppResult<sidecar::StartBackendResponse> {
+) -> AppResult<inprocess::StartBackendResponse> {
     let _ = app;
-    let dir = crate::appdirs::data_dir()
+    tracing::info!(network = ?network, "start_backend called");
+    let base = crate::appdirs::data_dir()
         .ok_or_else(|| crate::error::AppError::internal("cannot determine app data dir"))?;
+
+    let config = match network.as_deref() {
+        Some(net) => crate::config::config_for_network(net)?,
+        None => crate::config::load_config(),
+    };
+
+    // One profile directory per network: mainnet and testnet must never share
+    // accounts or databases.
+    let dir = base.join(config.data_dir_suffix());
     std::fs::create_dir_all(&dir)
         .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
-    // Android has a single network: mainnet (chainId 1). Testnet comes separately.
-    let _ = network;
-    Ok(sidecar::StartBackendResponse {
- port: 0,
-        // There is no port on Android: 1 is a non-zero marker so that connect()
-        // does not skip configureWalletRpc (statusFetch does not read the port
-        // over the bridge).
- auth_port: 1,
+
+    // Loading here rather than lazily gives an immediate, actionable error when
+    // the library is missing next to the executable.
+    let backend = inprocess::backend()?;
+    backend.register_signals();
+
+    Ok(inprocess::StartBackendResponse {
         data_dir: dir.to_string_lossy().into_owned(),
-        network_name: "mainnet".to_string(),
-        chain_id: 1,
-        rpc_url: String::new(),
-        waku_fleet: String::new(),
- is_testnet: false,
+        network_name: config.network_name(),
+        chain_id: config.chain_id(),
+        rpc_url: config.rpc_url(),
+        waku_fleet: config.waku_fleet(),
+        is_testnet: config.is_testnet(),
     })
 }
 
-#[tauri::command]
-pub fn stop_backend(app: tauri::AppHandle) -> AppResult<String> {
-    sidecar::stop(app)
-}
-
-/// Returns the token for the `X-Stauri-Token` header.
+/// Logs out of status-go.
 ///
-/// The frontend adds it to every request to the auth proxy. Without a token the
-/// proxy answers 403, so a third-party local process cannot call status-backend
-/// methods directly.
-///
-/// The token is read inside the webview, so an XSS attacker can reach it — an
-/// accepted trade-off, see the header of `auth_proxy.rs`.
+/// Nothing is killed: the node lives in this process, so stopping it means
+/// asking status-go to log out. The reply mirrors the old `stop_backend` string
+/// so callers keep working.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the token lock is
-/// poisoned or the token cannot be generated.
+/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
+/// loaded, and [`crate::error::ErrorKind::Backend`] when status-go refuses.
 #[tauri::command]
-pub fn auth_proxy_token() -> AppResult<String> {
-    auth_proxy::token()
+pub async fn stop_backend() -> AppResult<String> {
+    let backend = inprocess::backend()?;
+    // `Logout` takes no arguments; `direct` handles that endpoint specially.
+    tokio::task::spawn_blocking(move || backend.logout())
+        .await
+        .map_err(|e| crate::error::AppError::internal(format!("logout panicked: {e}")))??;
+    Ok("Backend stopped".to_string())
 }
 
 /// Starts the forwarder and returns the port.
@@ -164,7 +164,7 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
 /// the running process keeps executing the old code.
 ///
 /// `request_restart` is used rather than `restart` because only the former
-/// reliably delivers `RunEvent::Exit`, where the sidecar and both proxies are
+/// reliably delivers `RunEvent::Exit`, where the RPC forwarder is
 /// stopped and the log queue is flushed. Called from the main thread, `restart`
 /// bypasses those handlers: the `status-backend` child would stay alive on the
 /// old image and the log tail would be lost.
@@ -211,90 +211,82 @@ pub fn log_frontend(level: String, message: String) {
     }
 }
 
-/// Android: initialises status-go through the `libstatus.so` bridge.
+/// Initialises status-go through the library.
 ///
-/// It checks one thing — that the library loads and answers
+/// Checks one thing — that the library loads and answers
 /// `InitializeApplication` — and returns the reply to the frontend as is.
 ///
 /// # Errors
 /// Returns [`crate::error::ErrorKind::Internal`] when the data directory cannot
-/// be determined or created and when the bridge fails to load, and
+/// be determined or created and when the library fails to load, and
 /// [`crate::error::ErrorKind::Backend`] when status-go returns no response.
 #[tauri::command]
 pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<String> {
-    #[cfg(target_os = "android")]
-    {
-        // Data directory: appdirs honours STAURI_DATA_DIR and otherwise uses the
-        // Tauri value.
-        let _ = app;
-        let dir = crate::appdirs::data_dir()
-            .ok_or_else(|| crate::error::AppError::internal("cannot determine app data dir"))?;
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
-        let data_dir = dir.to_string_lossy().into_owned();
-        let request = serde_json::json!({
-     "dataDir": data_dir,
-     "rootDataDir": data_dir,
-     "networkId": 1,
-        })
-        .to_string();
- crate::inprocess::backend()?.initialize(&request)
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Err(crate::error::AppError::internal("in-process backend is only available on Android"))
-    }
+    let _ = app;
+    // Data directory: appdirs honours STAURI_DATA_DIR and otherwise uses the
+    // Tauri value.
+    let dir = crate::appdirs::data_dir()
+        .ok_or_else(|| crate::error::AppError::internal("cannot determine app data dir"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
+    let data_dir = dir.to_string_lossy().into_owned();
+    let request = serde_json::json!({
+        "dataDir": data_dir,
+        "rootDataDir": data_dir,
+        "networkId": 1,
+    })
+    .to_string();
+    crate::inprocess::backend()?.initialize(&request)
 }
 
-/// Calls status-go without HTTP.
+/// Calls a status-go endpoint by name without a transport.
 ///
-/// On Android this goes through the `libstatus.so` bridge; on other platforms
-/// the frontend talks HTTP through the proxy and does not need this command.
+/// The frontend uses this for `InitializeApplication`, `LoginAccount`,
+/// `CreateAccountAndLogin`, `Logout` and `CallRPC`; everything else goes through
+/// [`status_rpc`].
 ///
-/// `body` is the request body as `statusFetch` sends it; it is unused for
+/// `body` is the request body as the frontend builds it; it is unused for
 /// `Logout`.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the bridge cannot be
+/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
 /// loaded or the endpoint is unsupported, and
 /// [`crate::error::ErrorKind::Backend`] when status-go returns an error or no
 /// response.
 #[tauri::command]
 pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<String> {
-    #[cfg(target_os = "android")]
-    {
- if endpoint == "TraceNote" {
-     // Frontend test notes. A password never reaches this call.
-            crate::trace::line(&format!("note {body}"));
-     return Ok(String::new());
-        }
-        crate::trace::line(&format!("call {endpoint} body={}b", body.len()));
- let res = crate::inprocess::backend()?.direct(&endpoint, &body);
-        match &res {
-     Ok(text) => {
-  let limit = if crate::trace::debug_enabled() { 4000 } else { 200 };
-        crate::trace::line(&format!("ok {endpoint} len={} text={}", text.len(), text.chars().take(limit).collect::<String>()));
-         if endpoint == "InitializeApplication" {
-      if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
-          match v.get("accounts").and_then(|a| a.get(0)) {
-       Some(acc) => {
-    let fields: Vec<String> = acc.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
-    let key_uid = acc.get("key-uid").or_else(|| acc.get("keyUid")).and_then(|k| k.as_str()).unwrap_or("<none>");
-           crate::trace::line(&format!("init account fields={fields:?} key-uid={key_uid}"));
-       }
-       None => crate::trace::line("init accounts: none"),
-   }
-      }
-  }
-     }
-     Err(e) => crate::trace::line(&format!("err {endpoint} {e}")),
-        }
- res
+    if endpoint == "TraceNote" {
+        // Frontend test notes. A password never reaches this call.
+        crate::trace::line(&format!("note {body}"));
+        return Ok(String::new());
     }
-    #[cfg(not(target_os = "android"))]
-    {
- let _ = (endpoint, body);
- Err(crate::error::AppError::internal("in-process backend is only available on Android"))
+    crate::trace::line(&format!("call {endpoint} body={}b", body.len()));
+    let res = crate::inprocess::backend()?.direct(&endpoint, &body);
+    match &res {
+        Ok(text) => {
+            let limit = if crate::trace::debug_enabled() { 4000 } else { 200 };
+            crate::trace::line(&format!(
+                "ok {endpoint} len={} text={}",
+                text.len(),
+                text.chars().take(limit).collect::<String>()
+            ));
+        }
+        Err(e) => crate::trace::line(&format!("err {endpoint} {e}")),
     }
+    res
+}
+
+/// One JSON-RPC call to status-go.
+///
+/// The async counterpart of `status_call("CallRPC", …)`: the blocking C call
+/// runs on a worker thread, so a slow method (routing, signing) does not stall
+/// the command handler.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
+/// loaded, and [`crate::error::ErrorKind::Backend`] when status-go reports a
+/// JSON-RPC error.
+#[tauri::command]
+pub async fn status_rpc(method: String, params: serde_json::Value) -> AppResult<serde_json::Value> {
+    crate::inprocess::call_rpc(&method, params).await
 }

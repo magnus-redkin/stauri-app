@@ -102,7 +102,6 @@ export function utf8Length(s: string): number {
 /**
  * Creates a channel as a community that holds a single channel.
  *
- * @param port - Auth proxy port.
  * @param params - Name, description and kind of the new channel.
  * @returns The community id and the full chat id of the created channel.
  * @throws When status-go returns an error or yields no community or channel.
@@ -113,7 +112,6 @@ export function utf8Length(s: string): number {
  * backend creates.
  */
 export async function createChannel(
-  port: number,
   params: CreateChannelParams
 ): Promise<CreatedChannel> {
   const membership =
@@ -125,7 +123,7 @@ export async function createChannel(
       chats?: Array<{ id: string }>;
     };
     error?: { message?: string };
-  }>(port, 'CallRPC', {
+  }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_createCommunity',
@@ -176,7 +174,6 @@ export interface PendingJoinRequest {
 /**
  * Join requests waiting for the channel author's decision.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @returns Pending requests, or an empty array when the call fails.
  * @remarks
@@ -185,13 +182,12 @@ export interface PendingJoinRequest {
  * real state.
  */
 export async function pendingJoinRequests(
-  port: number,
   communityId: string
 ): Promise<PendingJoinRequest[]> {
   const res = await statusFetch<{
     result?: Array<{ id: string; publicKey: string; communityId: string; clock: number }>;
     error?: { message?: string };
-  }>(port, 'CallRPC', {
+  }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_pendingRequestsToJoinForCommunity',
@@ -204,11 +200,10 @@ export async function pendingJoinRequests(
 /**
  * Accepts a join request, giving the requester access to the channel.
  *
- * @param port - Auth proxy port.
  * @param requestId - Request id from `pendingJoinRequests`.
  */
-export async function acceptJoinRequest(port: number, requestId: string): Promise<void> {
-  await statusFetch(port, 'CallRPC', {
+export async function acceptJoinRequest(requestId: string): Promise<void> {
+  await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_acceptRequestToJoinCommunity',
@@ -219,11 +214,10 @@ export async function acceptJoinRequest(port: number, requestId: string): Promis
 /**
  * Declines a join request.
  *
- * @param port - Auth proxy port.
  * @param requestId - Request id from `pendingJoinRequests`.
  */
-export async function declineJoinRequest(port: number, requestId: string): Promise<void> {
-  await statusFetch(port, 'CallRPC', {
+export async function declineJoinRequest(requestId: string): Promise<void> {
+  await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_declineRequestToJoinCommunity',
@@ -238,7 +232,6 @@ export async function declineJoinRequest(port: number, requestId: string): Promi
 /**
  * Posts a comment on a channel entry.
  *
- * @param port - Auth proxy port.
  * @param channelChatId - Full chat id of the channel.
  * @param communityId - Community that owns the channel.
  * @param parentMessageId - Id of the entry being answered.
@@ -250,11 +243,10 @@ export async function declineJoinRequest(port: number, requestId: string): Promi
  * before it can be answered.
  */
 export function sendComment(
-  port: number,
   channelChatId: string,
   communityId: string,
   parentMessageId: string,
   text: string
 ): Promise<unknown> {
-  return sendChatMessage(port, channelChatId, text, communityId, parentMessageId);
+  return sendChatMessage(channelChatId, text, communityId, parentMessageId);
 }

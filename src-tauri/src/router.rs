@@ -8,7 +8,7 @@
 //! Unlike `transfer.rs`, which is three synchronous calls, two of the four steps
 //! here are asynchronous: `buildTransactionsFromRoute` and
 //! `sendRouterTransactionsWithSignatures` return nothing and deliver the result
-//! as a WebSocket signal, hence the separate connection to `/signals`.
+//! as a status-go signal, so each of them is awaited on a signal subscription.
 //!
 //! Signing happens here rather than in the webview. The Router can return
 //! several transactions (approve + swap, for instance), and `wallet_signMessage`
@@ -18,10 +18,9 @@
 
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 
-use crate::auth_proxy;
 use crate::backend::Backend;
 use crate::error::{AppError, AppResult};
 
@@ -128,60 +127,19 @@ pub fn unique_uuid() -> String {
     format!("stauri-{nanos:x}")
 }
 
-/// Opens a `/signals` connection through the authenticating proxy.
-///
-/// The proxy checks the token before the upgrade and then copies bytes in both
-/// directions (`auth_proxy.rs`, `copy_bidirectional`), so the WebSocket passes
-/// through untouched. This is a dedicated connection: the backend broadcasts
-/// signals to every subscriber, so the frontend neither sees them nor loses
-/// any.
-///
-/// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the request cannot be built or the
-/// token is not a valid header value, and [`crate::error::ErrorKind::Backend`] when the
-/// WebSocket handshake fails.
-pub async fn connect_signals(
-    port: u16,
-) -> AppResult<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-> {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    use tokio_tungstenite::tungstenite::http::HeaderValue;
-
-    let token = auth_proxy::token()?;
-    let url = format!("ws://127.0.0.1:{port}/signals");
-    let mut request = url
-        .into_client_request()
-        .map_err(|e| AppError::internal(format!("cannot build signals request: {e}")))?;
-    request.headers_mut().insert(
-        auth_proxy::TOKEN_HEADER,
-        HeaderValue::from_str(&token)
-            .map_err(|e| AppError::internal(format!("invalid auth token: {e}")))?,
-    );
-
-    let (ws, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| AppError::backend(format!("cannot subscribe to signals: {e}")))?;
-    Ok(ws)
-}
-
 /// Waits for a signal of the given type that belongs to `uuid`.
 ///
-/// Signals of other requests (another uuid) are skipped: the connection carries
-/// one shared stream, and the first message to arrive may not be ours.
+/// Signals of other requests (another uuid) are skipped: the subscription carries
+/// every signal status-go emits, and the first message to arrive may not be ours.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] on timeout, when the connection closes or
-/// fails, and when the backend reports an error in `sendDetails.errorResponse`.
-async fn wait_for_signal<S>(ws: &mut S, signal_type: &str, uuid: &str) -> AppResult<Value>
-where
-    S: futures_util::Stream<
-            Item = Result<
-                tokio_tungstenite::tungstenite::Message,
-                tokio_tungstenite::tungstenite::Error,
-            >,
-        > + Unpin,
-{
+/// Returns [`crate::error::ErrorKind::Backend`] on timeout, when the signal channel
+/// closes, and when the backend reports an error in `sendDetails.errorResponse`.
+async fn wait_for_signal(
+    rx: &mut broadcast::Receiver<String>,
+    signal_type: &str,
+    uuid: &str,
+) -> AppResult<Value> {
     let deadline = tokio::time::Instant::now() + SIGNAL_TIMEOUT;
 
     loop {
@@ -192,30 +150,24 @@ where
             ));
         }
 
-        let message = match tokio::time::timeout(remaining, ws.next()).await {
+        let raw = match tokio::time::timeout(remaining, rx.recv()).await {
             Err(_) => {
                 return Err(AppError::backend(
                     "the backend did not respond in time; the transaction may still be pending",
                 ));
             }
-            Ok(None) => {
-                return Err(AppError::backend("signals connection closed unexpectedly"));
+            Ok(Err(broadcast::error::RecvError::Lagged(skipped))) => {
+                // The subscription fell behind; a later signal may still match.
+                tracing::warn!(skipped, "signal subscription lagged");
+                continue;
             }
-            Ok(Some(Err(e))) => {
-                return Err(AppError::backend(format!("signals connection failed: {e}")));
+            Ok(Err(broadcast::error::RecvError::Closed)) => {
+                return Err(AppError::backend("signal channel closed unexpectedly"));
             }
-            Ok(Some(Ok(message))) => message,
+            Ok(Ok(raw)) => raw,
         };
 
-        let text = match message {
-            tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-            tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                String::from_utf8_lossy(&bytes).to_string()
-            }
-            _ => continue,
-        };
-
-        let parsed: Value = match serde_json::from_str(&text) {
+        let parsed: Value = match serde_json::from_str(&raw) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -256,8 +208,8 @@ where
 
 /// Runs a route end to end and returns the hashes of the sent transactions.
 ///
-/// The signals connection opens before the first request: building a route can
-/// answer faster than a subscription could be established, and the signal would
+/// The subscription is opened before the first request: building a route can
+/// answer faster than a later subscription could be set up, and the signal would
 /// then be delivered to nobody.
 ///
 /// # Errors
@@ -276,12 +228,10 @@ pub async fn execute_route(
         .ok_or_else(|| AppError::internal("route params have no uuid"))?
         .to_string();
 
-    let signals_port = backend
-        .signals_port()
-        .ok_or_else(|| AppError::backend("signals are not available for this backend"))?;
-    let mut ws = connect_signals(signals_port).await?;
-    let sent = execute_round(&mut ws, backend, Some(params), &uuid, from, password).await?;
-    let _ = ws.close(None).await;
+    // Subscribe before the first call: the channel does not replay, and route
+    // building can answer faster than a later subscription could be set up.
+    let mut rx = backend.subscribe();
+    let sent = execute_round(&mut rx, backend, Some(params), &uuid, from, password).await?;
 
     Ok(sent.into_iter().map(|tx| tx.hash).collect())
 }
@@ -313,22 +263,14 @@ pub struct SentTx {
 /// Returns [`crate::error::ErrorKind::Backend`] when a route step fails, when no transactions
 /// come back to sign, when no signature or hash is returned, or when the
 /// signals connection fails.
-pub async fn execute_round<S>(
-    ws: &mut S,
+pub async fn execute_round(
+    rx: &mut broadcast::Receiver<String>,
     backend: Backend,
     params: Option<Value>,
     uuid: &str,
     from: &str,
     password: &str,
-) -> AppResult<Vec<SentTx>>
-where
-    S: futures_util::Stream<
-            Item = Result<
-                tokio_tungstenite::tungstenite::Message,
-                tokio_tungstenite::tungstenite::Error,
-            >,
-        > + Unpin,
-{
+) -> AppResult<Vec<SentTx>> {
     // 1. Route. First round only.
     if let Some(params) = params {
         backend
@@ -341,7 +283,7 @@ where
         .call("wallet_buildTransactionsFromRoute", json!([uuid]))
         .await?;
 
-    let built = wait_for_signal(ws, SIGNAL_ROUTER_TXS, uuid).await?;
+    let built = wait_for_signal(rx, SIGNAL_ROUTER_TXS, uuid).await?;
 
     let hashes = signing_hashes(&built);
     if hashes.is_empty() {
@@ -374,7 +316,7 @@ where
         )
         .await?;
 
-    let sent = wait_for_signal(ws, SIGNAL_TXS_SENT, uuid).await?;
+    let sent = wait_for_signal(rx, SIGNAL_TXS_SENT, uuid).await?;
 
     let txs = sent_transactions(&sent);
     if txs.is_empty() {

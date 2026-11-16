@@ -68,7 +68,6 @@ export function isDirectMessage(chat: Chat): boolean {
 /**
  * All chats of the profile.
  *
- * @param port - Auth proxy port.
  * @returns Every chat, including deactivated ones.
  * @remarks
  * This uses `wakuext_chats`, not `chatsPreview`: `ChatsPreview` in this branch of
@@ -78,8 +77,8 @@ export function isDirectMessage(chat: Chat): boolean {
  * output. `Chats()` applies no such filter and includes the `Active` field, so
  * the client decides what to show. The cost is full records instead of previews.
  */
-export async function getChats(port: number): Promise<Chat[]> {
-  const res = await statusFetch<{ result?: Chat[] }>(port, 'CallRPC', {
+export async function getChats(): Promise<Chat[]> {
+  const res = await statusFetch<{ result?: Chat[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_chats',
@@ -91,7 +90,6 @@ export async function getChats(port: number): Promise<Chat[]> {
 /**
  * Lightweight chat previews.
  *
- * @param port - Auth proxy port.
  * @param filter - `community` or `nonCommunity`, or omitted for both.
  * @returns Preview records from status-go.
  * @remarks
@@ -99,14 +97,13 @@ export async function getChats(port: number): Promise<Chat[]> {
  * channels in this status-go branch.
  */
 export async function getChatPreviews(
-  port: number,
   filter?: 'community' | 'nonCommunity'
 ): Promise<any[]> {
   const params: any[] = [];
   if (filter === 'community') params.push(0); // ChatPreviewFilterTypeCommunity
   else if (filter === 'nonCommunity') params.push(1); // ChatPreviewFilterTypeNonCommunity
 
-  const res = await statusFetch<{ result?: any[] }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: any[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_chatsPreview',
@@ -116,8 +113,8 @@ export async function getChatPreviews(
 }
 
 /** Full chat record by id, for when the list is not enough. */
-export async function getChat(port: number, chatId: string): Promise<Chat | null> {
-  const res = await statusFetch<{ result?: Chat | null }>(port, 'CallRPC', {
+export async function getChat(chatId: string): Promise<Chat | null> {
+  const res = await statusFetch<{ result?: Chat | null }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_chat',
@@ -129,20 +126,17 @@ export async function getChat(port: number, chatId: string): Promise<Chat | null
 /**
  * Messages of a chat.
  *
- * @param port - Auth proxy port.
  * @param chatId - Chat id.
  * @param limit - Maximum number of messages in a page.
  * @param cursor - Paging cursor; an empty string means "from the newest".
  * @returns The page of messages and the cursor for the next page, if any.
  */
 export async function getChatMessages(
-  port: number,
   chatId: string,
   limit = 20,
   cursor = ''
 ): Promise<{ messages: any[]; cursor?: string }> {
   const res = await statusFetch<{ result?: { messages?: any[]; cursor?: string } }>(
-    port,
     'CallRPC',
     {
       jsonrpc: '2.0',
@@ -161,12 +155,11 @@ export async function getChatMessages(
 /**
  * Communities the user has joined.
  *
- * @param port - Auth proxy port.
  * @returns Joined communities, each with `chats` (channel id to channel) and
  * `categories` (category id to category).
  */
-export async function getJoinedCommunities(port: number): Promise<Community[]> {
-  const res = await statusFetch<{ result?: Community[] }>(port, 'CallRPC', {
+export async function getJoinedCommunities(): Promise<Community[]> {
+  const res = await statusFetch<{ result?: Community[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_joinedCommunities',
@@ -176,8 +169,8 @@ export async function getJoinedCommunities(port: number): Promise<Community[]> {
 }
 
 /** Every known community, including ones the user has not joined. */
-export async function getCommunities(port: number): Promise<Community[]> {
-  const res = await statusFetch<{ result?: Community[] }>(port, 'CallRPC', {
+export async function getCommunities(): Promise<Community[]> {
+  const res = await statusFetch<{ result?: Community[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_communities',
@@ -189,7 +182,6 @@ export async function getCommunities(port: number): Promise<Community[]> {
 /**
  * Communities the user is spectating.
  *
- * @param port - Auth proxy port.
  * @returns Communities with `spectated === true`.
  * @remarks
  * `wakuext_joinedCommunities` is literally `WHERE c.joined`
@@ -200,15 +192,14 @@ export async function getCommunities(port: number): Promise<Community[]> {
  * `PublicAPI`. This therefore reads `wakuext_communities` (`All()`) and filters
  * on the client.
  */
-export async function getSpectatedCommunities(port: number): Promise<Community[]> {
-  const all = await getCommunities(port);
+export async function getSpectatedCommunities(): Promise<Community[]> {
+  const all = await getCommunities();
   return all.filter((c) => c.spectated === true);
 }
 
 /**
  * Community catalogue from the Directory smart contract.
  *
- * @param port - Auth proxy port.
  * @returns Contract community ids, the featured subset, known descriptions and
  * ids whose descriptions are still missing.
  * @remarks
@@ -221,7 +212,6 @@ export async function getSpectatedCommunities(port: number): Promise<Community[]
  * in the background; that is not an error.
  */
 export async function getCuratedCommunities(
-  port: number
 ): Promise<{
   ids: string[];
   featured: string[];
@@ -235,7 +225,7 @@ export async function getCuratedCommunities(
       communities?: Record<string, Community>;
       unknownCommunities?: string[];
     };
-  }>(port, 'CallRPC', {
+  }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_curatedCommunities',
@@ -334,7 +324,6 @@ export function communityChatId(communityId: string, channelId: string): string 
 /**
  * Checks which of the user's addresses satisfy the community's token criteria.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @param addresses - Addresses to check; an empty array checks every active
  * wallet address.
@@ -343,7 +332,6 @@ export function communityChatId(communityId: string, channelId: string): string 
  * the "Select address to share" screen.
  */
 export async function checkPermissionsToJoinCommunity(
-  port: number,
   communityId: string,
   addresses: string[] = []
 ): Promise<{
@@ -361,7 +349,7 @@ export async function checkPermissionsToJoinCommunity(
       roles?: any[];
       highestRole?: any;
     };
-  }>(port, 'CallRPC', {
+  }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_checkPermissionsToJoinCommunity',
@@ -381,7 +369,6 @@ export async function checkPermissionsToJoinCommunity(
 /**
  * Builds the payloads that must be signed to reveal addresses to a community.
  *
- * @param port - Auth proxy port.
  * @param memberPublicKey - Public key of the community member.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @param addressesToReveal - Addresses the user agreed to share.
@@ -400,14 +387,13 @@ export async function checkPermissionsToJoinCommunity(
  * elsewhere.
  */
 export async function generateJoiningRequestsForSigning(
-  port: number,
   memberPublicKey: string,
   communityId: string,
   addressesToReveal: string[]
 ): Promise<Array<{ data: string; account: string }>> {
   const res = await statusFetch<{
     result?: Array<{ data: string; account: string }>;
-  }>(port, 'CallRPC', {
+  }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_generateJoiningCommunityRequestsForSigning',
@@ -419,7 +405,6 @@ export async function generateJoiningRequestsForSigning(
 /**
  * Signs the prepared payloads with the profile password.
  *
- * @param port - Auth proxy port.
  * @param params - Payloads returned by `generateJoiningRequestsForSigning`.
  * @param password - Profile password, the same for every address.
  * @returns Signatures in the same order as `params`.
@@ -435,11 +420,10 @@ export async function generateJoiningRequestsForSigning(
  * per address would need a separate call for each.
  */
 export async function signJoinRequestData(
-  port: number,
   params: Array<{ data: string; account: string }>,
   password: string
 ): Promise<string[]> {
-  const res = await statusFetch<{ result?: string[] }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: string[] }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_signData',
@@ -451,7 +435,6 @@ export async function signJoinRequestData(
 /**
  * Sends a request to join a community.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @param addressesToReveal - Addresses to reveal; must not be empty.
  * @param signatures - One signature per revealed address, in the same order.
@@ -470,14 +453,13 @@ export async function signJoinRequestData(
  * deliberately share should not be revealed to the community automatically.
  */
 export async function requestToJoinCommunity(
-  port: number,
   communityId: string,
   addressesToReveal: string[],
   signatures: string[],
   airdropAddress: string,
   shareFutureAddresses = false
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_requestToJoinCommunity',
@@ -497,7 +479,6 @@ export async function requestToJoinCommunity(
 /**
  * Views a community without joining it.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @returns The backend's response.
  * @remarks
@@ -512,8 +493,8 @@ export async function requestToJoinCommunity(
  * The state is persisted, so spectating survives a restart and needs an explicit
  * `leaveCommunity` to undo.
  */
-export async function spectateCommunity(port: number, communityId: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function spectateCommunity(communityId: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_spectateCommunity',
@@ -524,7 +505,6 @@ export async function spectateCommunity(port: number, communityId: string): Prom
 /**
  * Loads a community by its key: an invite link or a `0x` identifier.
  *
- * @param port - Auth proxy port.
  * @param communityKey - Community key or invite link.
  * @param waitForResponse - Whether to block until the network answers.
  * @returns The community, or `null` when it could not be loaded.
@@ -539,11 +519,10 @@ export async function spectateCommunity(port: number, communityId: string): Prom
  * waiting for one community the user explicitly opened is the reliable path.
  */
 export async function fetchCommunity(
-  port: number,
   communityKey: string,
   waitForResponse = false
 ): Promise<Community | null> {
-  const res = await statusFetch<{ result?: Community | null }>(port, 'CallRPC', {
+  const res = await statusFetch<{ result?: Community | null }>('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_fetchCommunity',
@@ -555,7 +534,6 @@ export async function fetchCommunity(
 /**
  * Joins a community.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @returns The backend's response.
  * @remarks
@@ -563,8 +541,8 @@ export async function fetchCommunity(
  * internal/crypto/types/hex.go: `UnmarshalJSON` expects a string). An id without
  * the prefix fails to parse.
  */
-export async function joinCommunity(port: number, communityId: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function joinCommunity(communityId: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_joinCommunity',
@@ -575,12 +553,11 @@ export async function joinCommunity(port: number, communityId: string): Promise<
 /**
  * Leaves a community.
  *
- * @param port - Auth proxy port.
  * @param communityId - Community id, with or without a `0x` prefix.
  * @returns The backend's response.
  */
-export async function leaveCommunity(port: number, communityId: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function leaveCommunity(communityId: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_leaveCommunity',
@@ -591,7 +568,6 @@ export async function leaveCommunity(port: number, communityId: string): Promise
 /**
  * Removes a chat from the list (`wakuext_deactivateChat`).
  *
- * @param port - Auth proxy port.
  * @param chatId - Chat id.
  * @param preserveHistory - Whether to keep message history.
  * @returns The backend's response.
@@ -609,11 +585,10 @@ export async function leaveCommunity(port: number, communityId: string): Promise
  * community needs `leaveCommunity`.
  */
 export async function deactivateChat(
-  port: number,
   chatId: string,
   preserveHistory = false
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_deactivateChat',
@@ -624,7 +599,6 @@ export async function deactivateChat(
 /**
  * Joins a public channel, creating it if it does not exist yet.
  *
- * @param port - Auth proxy port.
  * @param chatId - Channel name, with or without a leading `#`.
  * @returns The backend's response.
  * @remarks
@@ -632,8 +606,8 @@ export async function deactivateChat(
  * (internal/protocol/requests/create_public_chat.go), not a string. `id` is the
  * channel name without the hash, for example `status`.
  */
-export async function joinPublicChat(port: number, chatId: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function joinPublicChat(chatId: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_createPublicChat',
@@ -857,7 +831,6 @@ export function communityChannels(communities: Community[]): CommunityChat[] {
 /**
  * Sends a text message.
  *
- * @param port - Auth proxy port.
  * @param chatId - Full chat id.
  * @param text - Message body.
  * @param communityId - Community id for messages in community channels; an empty
@@ -885,13 +858,12 @@ export function communityChannels(communities: Community[]): CommunityChat[] {
  * job, see `isReply`.
  */
 export async function sendChatMessage(
-  port: number,
   chatId: string,
   text: string,
   communityId = '',
   responseTo = ''
 ): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 3,
     method: 'wakuext_sendChatMessage',
@@ -932,8 +904,8 @@ export function isReply(msg: { responseTo?: string } | null | undefined): boolea
 
 // Contacts share the same namespace and are used by the chat list to resolve
 // display names, so they live here too.
-export async function getContacts(port: number): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function getContacts(): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_contacts',
@@ -941,8 +913,8 @@ export async function getContacts(port: number): Promise<any> {
   });
 }
 
-export async function acceptContactRequest(port: number, contactPublicKey: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function acceptContactRequest(contactPublicKey: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_acceptLatestContactRequestForContact',
@@ -953,7 +925,6 @@ export async function acceptContactRequest(port: number, contactPublicKey: strin
 /**
  * Declines an incoming contact request.
  *
- * @param port - Auth proxy port.
  * @param contactPublicKey - Public key of the contact.
  * @returns The backend's response.
  * @remarks
@@ -962,9 +933,9 @@ export async function acceptContactRequest(port: number, contactPublicKey: strin
  * here is that same value, so it matches the row stored for a request from this
  * contact.
  */
-export async function declineContactRequest(port: number, contactPublicKey: string): Promise<any> {
+export async function declineContactRequest(contactPublicKey: string): Promise<any> {
   const id = '0x' + contactPublicKey.replace(/^0x/, '') + '20';
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_declineContactRequest',
@@ -973,8 +944,8 @@ export async function declineContactRequest(port: number, contactPublicKey: stri
 }
 
 /** Marks every message in a chat as read, clearing its unread counter. */
-export async function markChatRead(port: number, chatId: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function markChatRead(chatId: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_markAllRead',
@@ -985,7 +956,6 @@ export async function markChatRead(port: number, chatId: string): Promise<any> {
 /**
  * Sends the updated display name to contacts that were already added.
  *
- * @param port - Auth proxy port.
  * @param displayName - New display name.
  * @returns The backend's response.
  * @remarks
@@ -993,8 +963,8 @@ export async function markChatRead(port: number, chatId: string): Promise<any> {
  * contact that already received it keeps seeing the old name until an update
  * arrives. Call this after the name is saved to the profile.
  */
-export async function sendContactUpdates(port: number, displayName: string): Promise<any> {
-  return await statusFetch(port, 'CallRPC', {
+export async function sendContactUpdates(displayName: string): Promise<any> {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_sendContactUpdates',
@@ -1006,7 +976,6 @@ export async function sendContactUpdates(port: number, displayName: string): Pro
 /**
  * Sends a contact request.
  *
- * @param port - Auth proxy port.
  * @param publicKey - Contact public key, compressed `0x`-hex or multibase.
  * @param message - Greeting; empty falls back to a default.
  * @returns The backend's response.
@@ -1022,7 +991,6 @@ export async function sendContactUpdates(port: number, displayName: string): Pro
  * characters) is accepted as is, so it is passed through unchanged.
  */
 export async function sendContactRequest(
-  port: number,
   publicKey: string,
   message = ''
 ): Promise<any> {
@@ -1034,7 +1002,7 @@ export async function sendContactRequest(
   if (/^0x[0-9a-fA-F]{66}$/.test(id)) {
     id = hexToBase58Key(id);
   }
-  return await statusFetch(port, 'CallRPC', {
+  return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_sendContactRequest',

@@ -22,7 +22,7 @@ const KEY_LEGACY = '0x04' + 'a'.repeat(128);
 function sentBody(): any {
   expect(fetchMock).toHaveBeenCalled();
   const call = fetchMock.mock.calls.at(-1)!;
-  return (call[2] as any).params[0];
+  return (call[1] as any).params[0];
 }
 
 describe('sendContactRequest', () => {
@@ -32,40 +32,40 @@ describe('sendContactRequest', () => {
   });
 
   it('конвертирует сжатый 0x-ключ в multibase: status-go не понимает type "3"', async () => {
-    await sendContactRequest(1, KEY_HEX, '');
+    await sendContactRequest(KEY_HEX, '');
     expect(sentBody().id.startsWith('zQ3')).toBe(true);
     expect(sentBody().id).toBe(KEY_B58);
   });
 
   it('multibase-ключ передаёт как есть', async () => {
-    await sendContactRequest(1, KEY_B58, '');
+    await sendContactRequest(KEY_B58, '');
     expect(sentBody().id).toBe(KEY_B58);
   });
 
   it('старый несжатый ключ (132 символа) передаёт как есть', async () => {
-    await sendContactRequest(1, KEY_LEGACY, '');
+    await sendContactRequest(KEY_LEGACY, '');
     expect(sentBody().id).toBe(KEY_LEGACY);
   });
 
   it('пустое сообщение заменяет текстом: status-go возвращает invalid message', async () => {
-    await sendContactRequest(1, KEY_B58, '');
+    await sendContactRequest(KEY_B58, '');
     expect(sentBody().message.trim().length).toBeGreaterThan(0);
   });
 
   it('пробельное сообщение тоже считает пустым', async () => {
-    await sendContactRequest(1, KEY_B58, '   ');
+    await sendContactRequest(KEY_B58, '   ');
     expect(sentBody().message.trim().length).toBeGreaterThan(0);
   });
 
   it('непустое сообщение сохраняет без изменений', async () => {
-    await sendContactRequest(1, KEY_B58, 'Привет!');
+    await sendContactRequest(KEY_B58, 'Привет!');
     expect(sentBody().message).toBe('Привет!');
   });
 
   it('отправляет через wakuext_sendContactRequest', async () => {
-    await sendContactRequest(1, KEY_B58, '');
+    await sendContactRequest(KEY_B58, '');
     const call = fetchMock.mock.calls.at(-1)!;
-    expect((call[2] as any).method).toBe('wakuext_sendContactRequest');
+    expect((call[1] as any).method).toBe('wakuext_sendContactRequest');
   });
 });
 
@@ -86,9 +86,9 @@ describe('sendContactUpdates', () => {
 
   it('рассылает новое экранное имя (а не заглушку) через wakuext_sendContactUpdates', async () => {
     fetchMock.mockResolvedValue({} as any);
-    await sendContactUpdates(1, 'Михаил');
+    await sendContactUpdates('Михаил');
     const call = fetchMock.mock.calls.at(-1)!;
-    expect((call[2] as any).method).toBe('wakuext_sendContactUpdates');
-    expect((call[2] as any).params[0]).toBe('Михаил');
+    expect((call[1] as any).method).toBe('wakuext_sendContactUpdates');
+    expect((call[1] as any).params[0]).toBe('Михаил');
   });
 });

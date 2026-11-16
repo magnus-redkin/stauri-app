@@ -1,4 +1,3 @@
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { invoke } from '@tauri-apps/api/core';
 import { debug, error } from '$lib/utils/log';
 import { statusState } from '$lib/stores/statusStore.svelte';
@@ -6,27 +5,38 @@ import { statusState } from '$lib/stores/statusStore.svelte';
 /**
  * status-go RPC client.
  *
+ * status-go runs inside this process, so a call is a Tauri command rather than an
+ * HTTP request: there is no port, no proxy and no token. `status_rpc` moves the
+ * blocking C call to a worker thread in Rust.
+ *
  * Request and response bodies are NEVER logged: `settings_getSettings` returns
  * the seed phrase in the `mnemonic` field, so any body logging writes it to the
  * webview console. What is logged: the method name, the duration and, on
- * failure, the status code and the error text. Error text carries no profile
- * data, because status-go puts it in a separate `error` field.
- *
- * @remarks
- * `port` is the port of the AUTHENTICATING PROXY, not of the backend. The proxy
- * requires a token header and forwards the request only after checking it.
+ * failure, the error text. Error text carries no profile data, because status-go
+ * puts it in a separate `error` field.
  */
 
-/** Proxy token, cached for the lifetime of the page. */
-let authToken: string | null = null;
-
-async function token(): Promise<string> {
-  if (authToken) return authToken;
-  authToken = await invoke<string>('auth_proxy_token');
-  return authToken;
+/**
+ * Parses a status-go response: empty body, JSON, and JSON-RPC errors.
+ *
+ * The Rust side already unwraps the JSON-RPC envelope for `status_rpc`, so this
+ * only has to reject a shape it does not recognise.
+ */
+function parseResult<T>(value: any, label: string): T {
+  if (value === null || value === undefined) {
+    return {} as T;
+  }
+  if (value && typeof value === 'object' && 'error' in value && value.error) {
+    const err = (value as any).error;
+    const message =
+      typeof err === 'string' ? err : (err.message ?? JSON.stringify(err));
+    error(`[statusFetch] ← ${label} error: ${message}`);
+    throw new Error(message);
+  }
+  return value as T;
 }
 
-/** Extracts the RPC method name from a request body, for logging. */
+/** RPC method name from a request body, for logging. */
 function methodOf(body: any): string {
   if (body && typeof body === 'object' && typeof body.method === 'string') {
     return body.method;
@@ -34,92 +44,79 @@ function methodOf(body: any): string {
   return 'direct';
 }
 
-export async function statusFetch<T>(port: number, endpoint: string, body: any): Promise<T> {
-  const url = `http://127.0.0.1:${port}/statusgo/${endpoint}`;
-  const method = methodOf(body);
-  const label = `${endpoint}/${method}`;
+/**
+ * Calls a lifecycle endpoint by name.
+ *
+ * `InitializeApplication`, `LoginAccount`, `CreateAccountAndLogin` and `Logout`
+ * return their whole body rather than a JSON-RPC `result`, so they go through
+ * `status_call` instead of `status_rpc`.
+ *
+ * @param endpoint - status-go export name, e.g. `LoginAccount`.
+ * @param body - Request object, serialised before the call.
+ * @returns The parsed reply.
+ */
+export async function statusCall<T>(endpoint: string, body: any): Promise<T> {
   const started = performance.now();
-  // Android has no HTTP server; requests go through the libstatus.so bridge.
-  if (isAndroid()) {
-    const started = performance.now();
-    debug(`[statusFetch] → ${label} (bridge)`);
-    const text = await invoke<string>('status_call', {
-      endpoint,
-      body: JSON.stringify(body),
-    });
-    statusState.probe = `[bridge] ${label}: ${text.slice(0, 120)}`;
-    debug(`[statusFetch] ← ${label} ok ${Math.round(performance.now() - started)}ms (bridge)`);
-    return parseBody<T>(text, label, endpoint);
-  }
-
-
-  debug(`[statusFetch] → ${label}`);
-
-  const response = await tauriFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Stauri-Token': await token(),
-    },
-    body: JSON.stringify(body)
+  debug(`[statusCall] → ${endpoint}`);
+  const text = await invoke<string>('status_call', {
+    endpoint,
+    body: JSON.stringify(body),
   });
-
-  const ms = Math.round(performance.now() - started);
-
-  // Check the HTTP status first. The body is neither logged nor included in the
-  // error text: it may carry profile data. Only the status and its length stay.
-  if (!response.ok) {
-    const errorText = await response.text();
-    error(`[statusFetch] ← ${label} HTTP ${response.status} ${ms}ms len=${errorText.length}`);
-    throw new Error(`HTTP ${response.status}`);
-  }
-
-  const text = await response.text();
-  debug(`[statusFetch] ← ${label} ok ${ms}ms len=${text.length}`);
-
-  return parseBody<T>(text, label, endpoint);
-}
-
-
-/** Parses a status-go response: empty body, JSON, and JSON-RPC errors. */
-function parseBody<T>(text: string, label: string, endpoint: string): T {
-  // An empty body is a normal answer, for example from LoginAccount.
-  if (!text || text.trim() === '') {
-    return {} as T;
-  }
-
-  // Parse the JSON.
-  let data: any;
+  debug(`[statusCall] ← ${endpoint} ok ${Math.round(performance.now() - started)}ms`);
+  if (!text || text.trim() === '') return {} as T;
   try {
-    data = JSON.parse(text);
+    return JSON.parse(text) as T;
   } catch (e) {
-    error(`[statusFetch] ← ${label} invalid JSON`);
+    error(`[statusCall] ← ${endpoint} invalid JSON`);
     throw new Error(`Invalid JSON response from ${endpoint}`, { cause: e });
   }
+}
 
-  // Handle errors from both JSON-RPC and the plain API in one place.
-  if (data && data.error) {
-    let errorMessage: string;
+/**
+ * One JSON-RPC call to status-go.
+ *
+ * `statusFetch` keeps the shape callers already use: an endpoint plus a JSON-RPC
+ * body. In practice the endpoint is always `CallRPC`.
+ *
+ * @param endpoint - `CallRPC` for JSON-RPC, otherwise a lifecycle endpoint.
+ * @param body - JSON-RPC request.
+ * @returns The reply in the shape callers already use: `{ result }` for
+ * `CallRPC`, the whole body for a lifecycle endpoint.
+ *
+ * @remarks
+ * Rust unwraps the JSON-RPC envelope and returns the bare `result`, while every
+ * caller reads `res.result` (and `res.error` before it). The envelope is rebuilt
+ * here, in one place, rather than at 26 call sites.
+ */
+export async function statusFetch<T>(endpoint: string, body: any): Promise<T> {
+  const method = methodOf(body);
+  const label = `${endpoint}/${method}`;
 
-    if (typeof data.error === 'string') {
-      errorMessage = data.error;
-    } else if (typeof data.error === 'object' && data.error.message) {
-      errorMessage = data.error.message;
-    } else {
-      errorMessage = JSON.stringify(data.error);
-    }
-
-    // Log the full error text: it names the backend's reason for refusing, and
-    // without it the failure cannot be diagnosed. It holds no profile data —
-    // that lives in `result`.
-    error(`[statusFetch] ← ${label} error: ${errorMessage}`);
-    throw new Error(errorMessage);
+  if (endpoint !== 'CallRPC') {
+    // Lifecycle endpoints answer with their whole body, not a `result`.
+    return (await statusCall<T>(endpoint, body)) as T;
   }
 
-  return data as T;
+  const started = performance.now();
+  debug(`[statusFetch] → ${label}`);
+  try {
+    const result = await invoke<any>('status_rpc', {
+      method,
+      params: body?.params ?? [],
+    });
+    debug(`[statusFetch] ← ${label} ok ${Math.round(performance.now() - started)}ms`);
+    if (result === null || result === undefined) {
+      // Callers read `res.result` without a null check (`res.result || []`), so
+      // a null reply becomes a null field rather than a null envelope.
+      return { result: null } as T;
+    }
+    const value = parseResult<any>(result, label);
+    // `parseResult` already rejected an error body; what is left is the result.
+    return { result: value?.result ?? value } as T;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    error(`[statusFetch] ← ${label} error: ${message}`);
+    throw e instanceof Error ? e : new Error(message);
+  }
 }
 
-/** On Android there is no backend HTTP server, so requests go through a bridge. */
-function isAndroid(): boolean {
-  return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
-}

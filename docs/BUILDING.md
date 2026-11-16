@@ -1,9 +1,10 @@
 # Сборка Stauri
 
-Документ описывает сборку `status-backend` (десктоп), `libsds.so`, `libstatus.so`
-(Android) и самого Stauri. Состояние на 2026-11-11: десктоп собирается и
-запускается; Android собирается, вход на телефоне работает, чаты и кошелёк в работе;
-Windows не собран.
+Документ описывает сборку `libstatus.so` и `libsds.so` (десктоп и Android) и
+самого Stauri. `status-go` работает внутри процесса приложения, отдельного
+бэкенд-бинарника больше нет. Состояние на 2026-11-16: десктоп собирается и
+запускается, вход, чаты, контакты и сообщения проверены; Android собирается,
+вход на телефоне работает, чаты и кошелёк в работе; Windows не собран.
 
 ## Пререквизиты
 
@@ -28,7 +29,7 @@ unset CGO_LDFLAGS CGO_CFLAGS LD_LIBRARY_PATH LIBRARY_PATH
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH <команда>
 ```
 
-## 1. Сборка `status-backend` в Nix (десктоп)
+## 1. Сборка `libstatus.so` в Nix (десктоп)
 
 ```bash
 git clone https://github.com/status-im/status-go.git ~/ETH/github.status-go
@@ -36,15 +37,18 @@ cd ~/ETH/github.status-go
 git checkout 766535cf3   # протестированный коммит
 
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
-  nix develop --extra-experimental-features 'nix-command flakes' --command make status-backend
+  nix develop --extra-experimental-features 'nix-command flakes' --command make statusgo-shared-library
 ```
 
-Результат: `build/bin/status-backend` (≈113 МБ). Проверено: сборка даёт бинарник
-побайтно равный тому, что лежит в `src-tauri/binaries/`.
+Результат: `build/bin/libstatus.so` и `build/bin/libstatus.so.0` (SONAME).
+Stauri берёт `libstatus.so.0` и кладёт под именем `libstatus.so`.
+
+Цель `make statusgo-library` даёт статическую `libstatus.a` — она Stauri не
+нужна. Для настольной сборки нужна именно `statusgo-shared-library`.
 
 ## 2. `libsds.so` для десктопа
 
-`libsds.so` берётся из Nix store — из того же окружения, что и бинарник
+`libsds.so` берётся из Nix store — из того же окружения, что и библиотека
 (одна glibc, один ABI). Путь виден в логе сборки (`-L/nix/store/…-nim-sds-…/lib -lsds`):
 
 ```bash
@@ -57,21 +61,27 @@ env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
 ## 3. Скопировать артефакты в Stauri
 
 ```bash
-TRIPLE=x86_64-unknown-linux-gnu
-cp ~/ETH/github.status-go/build/bin/status-backend \
-   ~/ETH/stauri/stauri-app/src-tauri/binaries/status-backend-$TRIPLE
+cp ~/ETH/github.status-go/build/bin/libstatus.so.0 \
+   ~/ETH/stauri/stauri-app/src-tauri/binaries/libstatus.so
 cp /nix/store/gczmis7bgww5azpihnzlsyfz3yjgsbjc-nim-sds-d317821f/lib/libsds.so \
    ~/ETH/stauri/stauri-app/src-tauri/binaries/libsds.so
 ```
+
+При `cargo build` (в том числе `tauri dev`) `src-tauri/build.rs` копирует оба
+файла рядом с исполняемым файлом (`target/debug` или `target/release`).
+Библиотека ищется именно там; переменная `STAURI_LIBSTATUS` задаёт другой путь.
 
 ## 4. Проверка
 
 ```bash
 cd ~/ETH/stauri/stauri-app/src-tauri
-LD_LIBRARY_PATH=./binaries ./binaries/status-backend-x86_64-unknown-linux-gnu --help
+cargo build
+cmp target/debug/libstatus.so binaries/libstatus.so && echo "copied"
 ```
 
-Должно вывести `Usage of …status-backend` (а не segmentation fault).
+Полная проверка — запуск приложения: в логе должна появиться строка
+`start_backend called`, затем `InitializeApplication ok`. Если библиотеки
+нет, `start_backend` вернёт ошибку `cannot load …/libstatus.so`.
 
 ## 5. Запуск Stauri (десктоп)
 
@@ -118,9 +128,9 @@ cd ~/ETH/stauri/stauri-app
 ./scripts/release.sh 0.2.0
 ```
 
-`release.sh` собирает AppImage нативно (Ubuntu 24.04+), копирует `libsds.so`
-рядом с `status-backend` в `AppDir/usr/bin/`, использует `RPATH=$ORIGIN` и
-запускает linuxdeploy. Требует `TAURI_SIGNING_PRIVATE_KEY_PATH` (без ключа
+`release.sh` собирает AppImage нативно (Ubuntu 24.04+), копирует `libstatus.so`
+в `AppDir/usr/bin/` (рядом с исполняемым файлом), `libsds.so` в `AppDir/usr/lib/`,
+задаёт `RPATH=$ORIGIN` и запускает linuxdeploy. Требует `TAURI_SIGNING_PRIVATE_KEY_PATH` (без ключа
 подписи скрипт останавливается — AppImage без подписи не получит обновлений).
 
 ## 7. Android: `libsds.so` и `libstatus.so`
@@ -186,8 +196,8 @@ APK: `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-
 - Не запускай две сборки одновременно: второй `gradlew` ждёт блокировку
   (`Blocking waiting for file lock on Android`). Простаивающий демон можно
   остановить: `cd src-tauri/gen/android && ./gradlew --stop`.
-- `src-tauri/tauri.android.conf.json` очищает `externalBin` и `resources`
-  для Android (sidecar на телефоне не используется).
+- `src-tauri/tauri.android.conf.json` очищает `resources` для Android: на телефон
+  `libsds.so` кладётся через `jniLibs`, а не как ресурс бандла.
 
 Установка на телефон (USB, отладка включена, «Установка через USB» разрешена на MIUI):
 
@@ -239,8 +249,8 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
   решение о снятии проверки.
 - **patchelf assertion `splitIndex != -1`** на некоторых бинарниках. Обход:
   `--remove-rpath` + `--set-rpath`, либо не патчить RPATH (`libsds.so` рядом, `RPATH=$ORIGIN`).
-- **ldd segfault на `status-backend`** при linuxdeploy. Обход: обёртка `/tmp/bin/ldd`,
-  которая для `status-backend` отвечает «statically linked».
+- **ldd segfault на библиотеке** при linuxdeploy. Обход: обёртка `/tmp/bin/ldd`,
+  которая для `libstatus.so` отвечает «statically linked».
 - **`dApp`-окна и `open_dapp` на Android** не поддерживаются (заглушка).
 - **`wakuext_*` недоступен в `libstatus.so`** (`method does not exist`): после входа
   `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` не отвечают. Чаты и каналы
@@ -248,10 +258,14 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
 
 ## Интеграционные тесты (отдельно, не в CI)
 
-Тесты лежат в `tests/integration/` и проверяют клиент через настоящий
-`status-backend` на двух-трёх нодах. Нужен собранный
-`src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu` и `libsds.so`
-рядом (см. шаги 1–2 выше).
+Тесты лежат в `tests/integration/` и проверяют клиент на двух-трёх нодах.
+Каждая нода — отдельный процесс `tests/integration/libstatus_node.py`: это
+небольшой HTTP-фасад над `libstatus.so` (через `ctypes`), тот же код, что
+загружает приложение. Нужны `src-tauri/binaries/libstatus.so` и `libsds.so`
+(см. шаги 1–3 выше) и сеть.
+
+Перед первой отправкой нода ждёт `WARMUP` секунд (по умолчанию 60): сообщение,
+отправленное до подключения к relay-пирам, теряется без ошибки.
 
 ```bash
 ./tests/integration/contact.sh   # приглашение в контакты (pnpm test:integration)
@@ -302,6 +316,6 @@ pending после Accept», порядок сообщений, скрытые �
 
 В CI (`.github/workflows/ci.yml`) сейчас: `pnpm check`, `pnpm lint`, `pnpm test`,
 `pnpm build`, AppStream-валидация, `cargo fmt --check`, `cargo clippy -D warnings`,
-`cargo test`. Артефакты Nix (`status-backend`, `libsds.so`) в CI **не собираются**:
+`cargo test`. Артефакты Nix (`libstatus.so`, `libsds.so`) в CI **не собираются**:
 туда кладутся пустые файлы-заглушки, чтобы `tauri-build` проходил. Android-сборка в CI
 пока не настроена.

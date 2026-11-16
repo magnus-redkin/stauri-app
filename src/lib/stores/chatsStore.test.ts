@@ -45,7 +45,7 @@ vi.mock('$lib/status/messaging', async (importOriginal) => {
 });
 
 vi.mock('./statusStore.svelte', () => ({
-  statusState: { backendPort: 12345, publicKey: '0xownkey' },
+  statusState: { backendRunning: true, publicKey: '0xownkey' },
 }));
 
 vi.mock('$lib/utils/user', () => ({
@@ -441,7 +441,7 @@ describe('spectateCommunityById', () => {
     const result = await spectateCommunityById('0xabc');
 
     expect(result).toEqual({ status: 'spectated', name: 'Logos' });
-    expect(spectateCommunity).toHaveBeenCalledWith(12345, '0xabc');
+    expect(spectateCommunity).toHaveBeenCalledWith('0xabc');
   });
 
   it('не падает, если описание ещё не получено', async () => {
@@ -496,23 +496,17 @@ describe('requestJoinCommunity', () => {
     // Even for an open community the result is first a "request": acceptance arrives asynchronously
     // via a signal, and claiming "joined" would be a lie.
     expect(result).toEqual({ status: 'requested', name: 'Status Inc' });
-    expect(generateJoiningRequestsForSigning).toHaveBeenCalledWith(
-      12345,
-      '0xownkey',
+    expect(generateJoiningRequestsForSigning).toHaveBeenCalledWith('0xownkey',
       communityId,
       ['0xaddr1', '0xaddr2']
     );
-    expect(signJoinRequestData).toHaveBeenCalledWith(
-      12345,
-      [
+    expect(signJoinRequestData).toHaveBeenCalledWith([
         { data: '0xhash1', account: '0xaddr1' },
         { data: '0xhash2', account: '0xaddr2' },
       ],
       'secret'
     );
-    expect(requestToJoinCommunity).toHaveBeenCalledWith(
-      12345,
-      communityId,
+    expect(requestToJoinCommunity).toHaveBeenCalledWith(communityId,
       ['0xaddr1', '0xaddr2'],
       ['0xsig1', '0xsig2'],
       '0xaddr1'
@@ -576,9 +570,7 @@ describe('requestJoinCommunity', () => {
       'secret'
     );
 
-    expect(requestToJoinCommunity).toHaveBeenCalledWith(
-      12345,
-      communityId,
+    expect(requestToJoinCommunity).toHaveBeenCalledWith(communityId,
       ['0xaddr1'],
       ['0xsig1'],
       '0xaddr1'
@@ -611,23 +603,21 @@ describe('joinByInput', () => {
     const hex = '0x' + 'a'.repeat(64);
     const result = await joinByInput(hex);
     expect(result.status).toBe('spectated');
-    expect(spectateCommunity).toHaveBeenCalledWith(12345, hex);
+    expect(spectateCommunity).toHaveBeenCalledWith(hex);
   });
 
   it('достаёт идентификатор из короткой ссылки-приглашения', async () => {
     // Format status.app/c#<key>: no base64 part after /c/.
     const id = 'zQ3shabc';
     await joinByInput(`https://status.app/c#${id}`);
-    expect(spectateCommunity).toHaveBeenCalledWith(12345, id);
+    expect(spectateCommunity).toHaveBeenCalledWith(id);
   });
 
   it('ведёт полную ссылку-приглашение в spectateCommunity с раскодированным id', async () => {
     const link =
       'https://status.app/c/G0UAAGR0254sGpC8mYb0UborbMAJSIkEhgPewpWlTiIJf7_6f-agXtfg698vSJIsofpwPiaav4DmYzTTmMbQgA2dPCtjWbkgAw==#zQ3shuaXi1bQ6iVowkgm6eUtt5PPToUUpifePDvereeupioks';
     await joinByInput(link);
-    expect(spectateCommunity).toHaveBeenCalledWith(
-      12345,
-      '0x03ddf4c625afcbf7fb9fe189e43b9158b70e8f01fe968e41ae49f258aa9b7d1400'
+    expect(spectateCommunity).toHaveBeenCalledWith('0x03ddf4c625afcbf7fb9fe189e43b9158b70e8f01fe968e41ae49f258aa9b7d1400'
     );
   });
 });
@@ -659,7 +649,7 @@ describe('joinByInput: приглашения от контакта и кана�
     expect(result.status).toBe('contact');
     expect(sendContactRequest).toHaveBeenCalledTimes(1);
     // The store passes hex; sendContactRequest converts it to zQ3 (covered in messaging.test.ts).
-    const [, sentId] = (sendContactRequest as any).mock.calls[0];
+    const [sentId] = (sendContactRequest as any).mock.calls[0];
     expect(sentId).toBe(communityIdFromInvite(`#${KEY}`));
     expect(sentId).toMatch(/^0x[0-9a-fA-F]{66}$/);
   });

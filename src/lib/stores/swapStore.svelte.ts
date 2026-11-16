@@ -129,8 +129,7 @@ export async function quoteSwap(
   toToken: WalletToken,
   amountRaw: string
 ): Promise<void> {
-  const port = statusState.backendPort;
-  if (!port || !walletState.address) return;
+  if (!statusState.backendRunning || !walletState.address) return;
 
   // `checkAmountAgainstBalance` returns an error code instead of throwing:
   // parsing the amount and comparing it with the balance are both needed, and
@@ -156,7 +155,6 @@ export async function quoteSwap(
       provider: string;
     }>('get_swap_quote', {
       // Names are camelCase: Tauri converts command arguments to this form.
-      port,
       chainId: fromToken.chainId,
       from: walletState.address,
       fromToken: fromToken.tokenAddress,
@@ -197,8 +195,7 @@ export async function performSwap(
   toToken: WalletToken,
   amountRaw: string
 ): Promise<boolean> {
-  const port = statusState.backendPort;
-  if (!port || !walletState.address) {
+  if (!statusState.backendRunning || !walletState.address) {
     swapState.error = 'Wallet is not ready';
     swapState.step = 'failed';
     return false;
@@ -224,7 +221,6 @@ export async function performSwap(
     const result = await invoke<{ tx_hash: string; approval_tx_hash: string }>('swap_tokens', {
       request: {
         // Inside `request` names stay snake_case: it is the serde `SwapRequest`.
-        port,
         chain_id: fromToken.chainId,
         from: walletState.address,
         from_token: fromToken.tokenAddress,

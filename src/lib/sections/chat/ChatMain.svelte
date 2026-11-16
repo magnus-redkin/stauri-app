@@ -71,8 +71,7 @@
    */
   $effect(() => {
     const chat = chatsState.selected;
-    const port = statusState.backendPort;
-    if (!chat || chat.type !== 'community' || !chat.communityId || !port) {
+    if (!chat || chat.type !== 'community' || !chat.communityId || !statusState.backendRunning) {
       joinRequests = [];
       return;
     }
@@ -80,7 +79,7 @@
       joinRequests = [];
       return;
     }
-    pendingJoinRequests(port, chat.communityId).then((list) => (joinRequests = list));
+    pendingJoinRequests(chat.communityId).then((list) => (joinRequests = list));
   });
 
   /**
@@ -90,14 +89,13 @@
    * @param accept - `true` to accept, `false` to decline.
    */
   async function decide(request: PendingJoinRequest, accept: boolean) {
-    const port = statusState.backendPort;
-    if (!port || !chatsState.selected?.communityId) return;
+    if (!statusState.backendRunning || !chatsState.selected?.communityId) return;
     try {
       const decision = accept ? 'accept' : 'decline';
       scenarioLog('create-request', `owner-${decision}`, { request: short(request.id) });
-      if (accept) await acceptJoinRequest(port, request.id);
-      else await declineJoinRequest(port, request.id);
-      joinRequests = await pendingJoinRequests(port, chatsState.selected.communityId);
+      if (accept) await acceptJoinRequest(request.id);
+      else await declineJoinRequest(request.id);
+      joinRequests = await pendingJoinRequests(chatsState.selected.communityId);
       scenarioLog('create-request', `owner-${decision}-done`, { left: joinRequests.length });
     } catch (e) {
       error(`[chat] decide join request failed`, e);
@@ -316,11 +314,10 @@
    */
   $effect(() => {
     const chat = chatsState.selected;
-    const port = statusState.backendPort;
-    if (!chat || chat.isPendingRequest || chat.type === 'external' || !port) return;
+    if (!chat || chat.isPendingRequest || chat.type === 'external' || !statusState.backendRunning) return;
     const reload = () =>
       untrack(() => {
-        getChatMessages(port, chat.id)
+        getChatMessages(chat.id)
           .then((res) => {
             const next = res.messages;
             const lastNow = messages[messages.length - 1]?.id;
@@ -339,14 +336,14 @@
 
   $effect(() => {
     const chat = chatsState.selected;
-    if (!chat || chat.isPendingRequest || chat.type === 'external' || !statusState.backendPort) {
+    if (!chat || chat.isPendingRequest || chat.type === 'external' || !statusState.backendRunning) {
       messages = [];
       return;
     }
     isLoading = true;
     messages = [];
 
-    getChatMessages(statusState.backendPort, chat.id)
+    getChatMessages(chat.id)
       .then(res => {
         setMessages(res.messages);
         scrollToEnd();
@@ -367,8 +364,7 @@
   $effect(() => {
     const signal = statusState.lastMessageSignal;
     const chat = chatsState.selected;
-    const port = statusState.backendPort;
-    if (signal === 0 || !chat || chat.type === 'external' || chat.isPendingRequest || !port) return;
+    if (signal === 0 || !chat || chat.type === 'external' || chat.isPendingRequest || !statusState.backendRunning) return;
 
     // Reload only when the message landed in the open chat. Signals from other
     // chats arrive constantly (channels absent from the list), so without this check
@@ -378,7 +374,7 @@
     untrack(() => {
       statusState.pendingChatIds.delete(chat.id);
       scenarioLog('reply-sync', 'signal', { signal, chat: short(chat.id) });
-      getChatMessages(port, chat.id)
+      getChatMessages(chat.id)
         .then((res) => {
           const before = messages.length;
    setMessages(res.messages);
@@ -434,12 +430,11 @@
 
   async function send() {
     const chat = chatsState.selected;
-    if (!inputText.trim() || !chat || !canWrite || !statusState.backendPort) return;
+    if (!inputText.trim() || !chat || !canWrite || !statusState.backendRunning) return;
     const text = inputText;
     inputText = '';
     try {
       const res = await sendChatMessage(
-        statusState.backendPort,
         chat.id,
  text,
         communityId,
@@ -464,10 +459,10 @@
 
   async function declineRequest() {
     const chat = chatsState.selected;
-    if (!chat || !statusState.backendPort) return;
+    if (!chat || !statusState.backendRunning) return;
     isAccepting = true;
     try {
-      await rejectRequest(chat, statusState.backendPort, chat.id);
+      await rejectRequest(chat, chat.id);
     } catch (e: any) {
       statusState.errorMsg = `Failed to reject request: ${formatError(e)}`;
     } finally {
@@ -477,10 +472,10 @@
 
   async function acceptRequest() {
     const chat = chatsState.selected;
-    if (!chat || !statusState.backendPort) return;
+    if (!chat || !statusState.backendRunning) return;
     isAccepting = true;
     try {
-      await acceptRequestAndOpen(chat, statusState.backendPort, chat.id);
+      await acceptRequestAndOpen(chat, chat.id);
     } catch (e: any) {
       statusState.errorMsg = `Failed to accept request: ${formatError(e)}`;
     } finally {

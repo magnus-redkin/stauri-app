@@ -2,8 +2,10 @@
 # lib.sh — shared code for the integration tests (chat, channel, wallet, contact).
 #
 # Sourced from the tests: `source "$(dirname "$0")/lib.sh"`.
-# Runs against a real status-backend: needs network (a Waku fleet) and time for
-# delivery.
+# Runs against the real libstatus: needs network (a Waku fleet) and time for
+# delivery. Each "node" is a small HTTP facade (libstatus_node.py) over the
+# library in its own process, so the tests drive the same code the application
+# loads.
 #
 # Environment:
 #   BASE_PORT  — first node port (node i listens on BASE_PORT+i), default 34500
@@ -15,11 +17,16 @@ set -uo pipefail
 
 INT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$INT_DIR/../.." && pwd)"
-BACKEND="$ROOT/src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu"
+LIBSTATUS="$ROOT/src-tauri/binaries/libstatus.so"
+FACADE="$INT_DIR/libstatus_node.py"
 LIBS="$ROOT/src-tauri/binaries"
 BASE_PORT="${BASE_PORT:-34500}"
 TIMEOUT="${TIMEOUT:-120}"
 PASSWORD="${PASSWORD:-integration-pass-123}"
+# WARMUP — seconds after the messenger starts, before a node sends anything. A
+# message sent before the node has relay peers is dropped silently: status-go
+# logs "not enough peers to publish" and the RPC still returns success.
+WARMUP="${WARMUP:-60}"
 RUN="$(date +%H%M%S)"   # unique suffix: texts and channel names cannot collide with a previous run
 
 WORK="$(mktemp -d)"
@@ -31,7 +38,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ -x "$BACKEND" ]] || { echo "нет $BACKEND (см. docs/BUILDING.md)" >&2; exit 1; }
+[[ -f "$LIBSTATUS" ]] || { echo "нет $LIBSTATUS (см. docs/BUILDING.md)" >&2; exit 1; }
 
 PASSED=0
 step() { echo; echo "=== $* ==="; }
@@ -85,13 +92,18 @@ wait_until() {
   return 1
 }
 
-# start_node <port> <dir> — starts status-backend and waits for it to answer.
+# start_node <port> <dir> — starts the libstatus facade and waits for it to answer.
+#
+# The library needs `libsds.so` at runtime, hence LD_LIBRARY_PATH. Each node is
+# its own process: two profiles in one process would share the library's global
+# state, which only the application can do (it has exactly one profile per run).
 start_node() {
   local port="$1" dir="$2"
   mkdir -p "$dir"
-  LD_LIBRARY_PATH="$LIBS" "$BACKEND" -address "127.0.0.1:$port" >"$dir/node.out" 2>&1 &
+  LD_LIBRARY_PATH="$LIBS" STAURI_LIBSTATUS="$LIBSTATUS" \
+    python3 "$FACADE" "127.0.0.1:$port" >"$dir/node.out" 2>&1 &
   PIDS+=($!)
-  wait_until 30 node_answers "$port" || fail "нода на порту $port не поднялась (лог: $dir/node.out)"
+  wait_until 60 node_answers "$port" || fail "нода на порту $port не поднялась (лог: $dir/node.out)"
 }
 
 # node_answers <port> — the node answers over HTTP (the method does not matter:
@@ -130,6 +142,8 @@ print(r.get("error") or "")' "$res")"
   wait_until "$TIMEOUT" settings_key_ready "$port" || fail "профиль $name не вошёл за $TIMEOUT с"
   call "$port" wakuext_startMessenger >/dev/null 2>&1 || true
   wait_until 60 call "$port" wakuext_chats || fail "мессенджер $name не запустился"
+  # No RPC reports relay peers, so the wait is a fixed delay (see WARMUP).
+  sleep "$WARMUP"
 }
 
 # settings_key_ready <port> — the profile has logged in: settings now carry a key-uid.

@@ -34,8 +34,6 @@ use crate::error::{AppError, AppResult};
 /// Transfer request.
 #[derive(Debug, Deserialize)]
 pub struct TransferRequest {
-    /// Port of the authenticating proxy.
-    pub port: u16,
     pub chain_id: u64,
     /// Sender address — the wallet of this profile.
     pub from: String,
@@ -81,15 +79,12 @@ pub struct FeeEstimate {
 /// they see the full picture of the transfer, fee included, and then decide.
 ///
 /// # Errors
-/// `ErrorKind::Config` for a missing backend port, a zero `chain_id`, a bad
+/// `ErrorKind::Config` for a zero `chain_id`, a bad
 /// address or a non-integer amount; `ErrorKind::Backend` when the backend call
 /// fails, or when the node omits `txArgs` or returns unparsable
 /// `gas`/`gasPrice`.
 #[tauri::command]
 pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate> {
-    if request.port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
     if request.chain_id == 0 {
         return Err(AppError::config("chain id is required"));
     }
@@ -108,7 +103,7 @@ pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate
 
     // Built through the same path as sending (`send_args`), so the figures on
     // the confirmation screen match the signed transaction.
-    let built = Backend::from_port(request.port)?
+    let built = Backend::new()
         .call(
             "wallet_buildTransaction",
             json!([request.chain_id, args.to_string()]),
@@ -133,7 +128,6 @@ pub async fn estimate_transfer_fee(request: FeeRequest) -> AppResult<FeeEstimate
 /// Fee estimate request: the same as a send, without the password.
 #[derive(Debug, Deserialize)]
 pub struct FeeRequest {
-    pub port: u16,
     pub chain_id: u64,
     pub from: String,
     pub to: String,
@@ -157,7 +151,7 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     let amount = parse_amount(&request.amount)?;
     let args = send_args(&request.from, &request.to, &request.token_address, amount);
 
-    let built = Backend::from_port(request.port)?
+    let built = Backend::new()
         .call(
             "wallet_buildTransaction",
             json!([request.chain_id, args.to_string()]),
@@ -184,7 +178,7 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     //
     //    `message` is passed as is, with `0x`: the parameter is declared as
     //    `types.HexBytes`, whose JSON decoder expects a prefixed hex string.
-    let signature = Backend::from_port(request.port)?
+    let signature = Backend::new()
         .call(
             "wallet_signMessage",
             json!([message, request.from, request.password]),
@@ -209,7 +203,7 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
     //
     // The signature is therefore obtained successfully but the transaction is
     // never sent. The prefix is stripped here rather than relying on the node.
-    let hash = Backend::from_port(request.port)?
+    let hash = Backend::new()
         .call(
             "wallet_sendTransactionWithSignature",
             json!([
@@ -235,12 +229,9 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
 /// non-numeric amount, a wrong `chainId`.
 ///
 /// # Errors
-/// `ErrorKind::Config` for a missing backend port, a zero `chain_id`, a bad
+/// `ErrorKind::Config` for a zero `chain_id`, a bad
 /// address, an empty password, a non-integer amount or a zero amount.
 fn validate(request: &TransferRequest) -> AppResult<()> {
-    if request.port == 0 {
-        return Err(AppError::config("backend is not running"));
-    }
 
     // chainId 0 is not a network. The upper bound is generous: real networks
     // fit in u64, so 0 and garbage are rejected here.
@@ -381,11 +372,10 @@ fn parse_amount(raw: &str) -> AppResult<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend_rpc::describe_rpc_error;
+    use crate::inprocess::describe_rpc_error;
 
     fn request() -> TransferRequest {
         TransferRequest {
-            port: 1234,
             chain_id: 11155111,
             from: "0xcd8fd2a9f9726729d19f9be57d959942d7eb578c".to_string(),
             to: "0x0000000000000000000000000000000000000001".to_string(),
@@ -425,13 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zero_chain_and_port() {
+    fn rejects_zero_chain() {
         let mut r = request();
         r.chain_id = 0;
-        assert!(validate(&r).is_err());
-
-        let mut r = request();
-        r.port = 0;
         assert!(validate(&r).is_err());
     }
 

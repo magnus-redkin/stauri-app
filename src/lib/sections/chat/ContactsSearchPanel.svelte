@@ -161,7 +161,7 @@
         >{i18n.t('Accept')}</button>
         <button
           type="button"
-          onclick={() => statusState.backendPort && rejectRequest({ id: c.id } as any, statusState.backendPort, c.id)}
+          onclick={() => statusState.backendRunning && rejectRequest({ id: c.id } as any, c.id)}
           class="shrink-0 h-9 px-3 rounded-md border border-border text-sm"
         >{i18n.t('Reject')}</button>
       </div>

@@ -35,12 +35,11 @@
 
   async function send() {
     const chat = chatsState.selected;
-    const port = statusState.backendPort;
-    if (!text.trim() || !chat || !port || isSending) return;
+    if (!text.trim() || !chat || !statusState.backendRunning || isSending) return;
     isSending = true;
     const body = text;
     try {
-      const res = await sendComment(port, chat.id, chat.communityId || '', post.id, body);
+      const res = await sendComment(chat.id, chat.communityId || '', post.id, body);
       const sent = (res as any)?.result?.messages?.find(
         (m: any) => m.text === body && m.responseTo === post.id
       );

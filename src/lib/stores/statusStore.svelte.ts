@@ -1,6 +1,7 @@
 import { SvelteSet } from 'svelte/reactivity';
-import type { StatusEvent, NodeLoginEvent } from '$lib/status/types';
+import type { StatusEvent, NodeLoginEvent, MessagesNewEvent, GenericEvent } from '$lib/status/types';
 import { logout as apiLogout } from '$lib/status/api';
+import { info } from '$lib/utils/log';
 
 export const statusState = $state({
   isConnected: false,
@@ -12,7 +13,8 @@ export const statusState = $state({
   compressedKey: '',
   alias: '',
   chainId: 1,
-  backendPort: null as number | null,
+  /** True while status-go runs in this process (set by connect, cleared on disconnect). */
+  backendRunning: false,
   backendDataDir: '',
   networkName: 'mainnet',
   rpcUrl: '',
@@ -39,10 +41,42 @@ let loginTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let stoppedResolver: (() => void) | null = null;
 let stoppedTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * One-line summary of a signal for the trace: counts and flags only.
+ *
+ * @param parsed - Signal as it arrived from status-go.
+ * @returns Text to log, or an empty string when the type needs no summary.
+ *
+ * @remarks
+ * No message text, public keys or addresses are included: the log is written to
+ * disk and shared when something goes wrong. The chat id is left out too, but
+ * its presence is reported, which is enough to tell a contact request from a
+ * message in an existing chat.
+ */
+function signalSummary(parsed: StatusEvent): string {
+  if (parsed.type === 'messages.new') {
+    const messages: any[] = (parsed as MessagesNewEvent).event?.messages ?? [];
+    const request = messages[0] ?? {};
+    const fields = Object.keys(messages[0] ?? {}).join(',');
+    return `count=${messages.length} hasChatId=${messages.some((m) => !!m?.chatId)} contactRequest=${request.contactRequestState ?? 'n/a'} fields=[${fields}]`;
+  }
+  if (parsed.type === 'waku.connection.status.change') {
+    const event = (parsed as GenericEvent).event ?? {};
+    return `state=${event.state ?? '?'} online=${event.isOnline ?? '?'}`;
+  }
+  if (parsed.type === 'envelope.sent' || parsed.type === 'history.request.completed') {
+    return `count=${(parsed as GenericEvent).event?.messages?.length ?? (parsed as GenericEvent).event?.count ?? 0}`;
+  }
+  return '';
+}
+
 export function processSignal(rawJson: string) {
   if (!rawJson) return;
   try {
     const parsed = JSON.parse(rawJson) as StatusEvent;
+    // Summary only (see signalSummary): the payload can carry profile data.
+    const summary = signalSummary(parsed);
+    info(`[signal] ${parsed.type ?? 'unknown'}${summary ? ` ${summary}` : ''}`);
     statusState.events.push(parsed);
     if (statusState.events.length > 100) statusState.events.shift();
 
@@ -162,9 +196,9 @@ export function setSeedSaved(saved: boolean) {
 }
 
 export async function logout() {
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
   try {
-    await apiLogout(statusState.backendPort);
+    await apiLogout();
   } catch (e: any) {
     console.warn("Logout API call failed:", e);
   }
@@ -189,7 +223,7 @@ export function resetState() {
   statusState.compressedKey = '';
   statusState.alias = '';
   statusState.events = [];
-  statusState.backendPort = null;
+  statusState.backendRunning = false;
   statusState.backendDataDir = '';
   statusState.errorMsg = '';
   statusState.accounts = [];

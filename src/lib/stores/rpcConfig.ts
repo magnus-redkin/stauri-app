@@ -36,8 +36,6 @@ export type ConfigureResult = { wroteProviders: boolean };
  * from its pool (see `src-tauri/src/rpc_proxy.rs`), so the provider points at a
  * local forwarder instead of the network: `http://127.0.0.1:<port>/<chainId>`.
  *
- * @param port - Port of the authenticating proxy. Defaults to the current
- * backend port.
  * @returns Whether any provider had to be written.
  * @remarks
  * Must be called after login and before the first wallet access: RPC clients
@@ -50,10 +48,8 @@ export type ConfigureResult = { wroteProviders: boolean };
  * first. For mainnet status-go ignores this provider and keeps its built-in
  * endpoints.
  */
-export async function configureWalletRpc(
-  port: number | null = statusState.backendPort
-): Promise<ConfigureResult> {
-  if (!port) return { wroteProviders: false };
+export async function configureWalletRpc(): Promise<ConfigureResult> {
+  if (!statusState.backendRunning) return { wroteProviders: false };
 
   // 1. Start the forwarder FIRST, without status-go. Its API registers only in
   // initServices, i.e. after node start, so network calls fail before login.
@@ -87,7 +83,7 @@ export async function configureWalletRpc(
   // 2. Refine URLs from the active networks in status-go, if the node is up.
   let chains: any[];
   try {
-    chains = await getFlatEthereumChains(port);
+    chains = await getFlatEthereumChains();
   } catch (e) {
     // Before node start the networks service is not registered yet. That is not
     // an error — the forwarder already runs with the static table.
@@ -156,7 +152,7 @@ export async function configureWalletRpc(
     if (existing && existing.url === url) continue;
 
     try {
-      await setChainUserRpcProvider(port, chainId, USER_PROVIDER_NAME, url);
+      await setChainUserRpcProvider(chainId, USER_PROVIDER_NAME, url);
       wroteProviders = true;
       debug(
         `[configureWalletRpc] chain ${chainId}: provider ` +

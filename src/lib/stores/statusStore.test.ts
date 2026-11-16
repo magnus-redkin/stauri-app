@@ -69,7 +69,7 @@ describe('statusStore', () => {
       statusState.isConnected = true;
       statusState.isConnecting = true; // also reset by resetState
       statusState.isLoggedIn = true;
-      statusState.backendPort = 12345;
+      statusState.backendRunning = true;
       statusState.backendDataDir = '/tmp/test';
       statusState.accountKeyUid = 'uid-1';
       statusState.errorMsg = 'Some error';
@@ -83,7 +83,7 @@ describe('statusStore', () => {
       expect(statusState.isConnected).toBe(false);
       expect(statusState.isConnecting).toBe(false); // resetState clears isConnecting too
       expect(statusState.isLoggedIn).toBe(false);
-      expect(statusState.backendPort).toBeNull();
+      expect(statusState.backendRunning).toBe(false);
       expect(statusState.backendDataDir).toBe('');
       expect(statusState.accountKeyUid).toBe('');
       expect(statusState.errorMsg).toBe('');
@@ -95,7 +95,7 @@ describe('statusStore', () => {
       // The messenger starts from connectionStore after configureWalletRpc: RPC clients are cached
       // per chainID, and starting it before the providers are set would leave them pointing at
       // dead URLs.
-      statusState.backendPort = 12345;
+      statusState.backendRunning = true;
 
       const loginSignal = JSON.stringify({
         type: 'node.login',

@@ -2,6 +2,7 @@
   import { i18n } from '$lib/i18n';
   import PasswordInput from '$lib/sections/auth/PasswordInput.svelte';
   import { checkNewPassword, passwordRules, PASSWORD_MIN_LENGTH } from '$lib/utils/password';
+  import { info } from '$lib/utils/log';
 
   let {
     password = $bindable(''),
@@ -31,9 +32,11 @@
   const showRules = $derived(password.length > 0);
 
   function submit() {
+    info(`[boot] create submit: passwordLength=${password.length}`);
     const { error } = checkNewPassword(password, confirmation);
     submitError = error;
     if (!error) onCreate();
+    else info(`[boot] create submit refused: ${error}`);
   }
 </script>
 

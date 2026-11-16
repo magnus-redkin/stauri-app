@@ -4,8 +4,9 @@
 # Usage (from stauri-app/):
 #   ./scripts/release.sh 0.2.0
 #
-# Expects src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu and
-# src-tauri/binaries/libsds.so to be built in Nix already (see docs/BUILDING.md).
+# Expects src-tauri/binaries/libstatus.so and src-tauri/binaries/libsds.so to be
+# built in Nix already (see docs/BUILDING.md). status-go runs inside the app as a
+# library; there is no status-backend process any more.
 # The script only builds the frontend, the Rust binary, the AppDir and the
 # AppImage.
 
@@ -164,9 +165,9 @@ if [[ ! -f "$ROOT/src-tauri/binaries/libsds.so" ]]; then
   echo "       Соберите status-backend и libsds.so в Nix (см. docs/BUILDING.md)." >&2
   exit 1
 fi
-if [[ ! -f "$ROOT/src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu" ]]; then
-  echo "ERROR: src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu not found." >&2
-  echo "       Соберите status-backend в Nix (см. docs/BUILDING.md)." >&2
+if [[ ! -f "$ROOT/src-tauri/binaries/libstatus.so" ]]; then
+  echo "ERROR: src-tauri/binaries/libstatus.so not found." >&2
+  echo "       Соберите libstatus.so в Nix (см. docs/BUILDING.md)." >&2
   exit 1
 fi
 
@@ -291,19 +292,19 @@ export NO_STRIP=1
 pnpm tauri build
 
 TAURI_BIN="$ROOT/src-tauri/target/release/tauri-app"
-STATUS_BIN="$ROOT/src-tauri/binaries/status-backend-x86_64-unknown-linux-gnu"
+STATUS_LIB="$ROOT/src-tauri/binaries/libstatus.so"
 LIBSDS="$ROOT/src-tauri/binaries/libsds.so"
 
-for f in "$TAURI_BIN" "$STATUS_BIN" "$LIBSDS"; do
+for f in "$TAURI_BIN" "$STATUS_LIB" "$LIBSDS"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR: $f not found" >&2
     exit 1
   fi
 done
 
-echo "  tauri-app:      OK"
-echo "  status-backend: OK"
-echo "  libsds.so:      OK"
+echo "  tauri-app:  OK"
+echo "  libstatus:  OK"
+echo "  libsds.so:  OK"
 
 # ---------- 5. Manual AppDir ----------
 echo
@@ -322,12 +323,14 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
 
 # Binaries
 cp "$TAURI_BIN"   "$APPDIR/usr/bin/stauri-app"
-cp "$STATUS_BIN"  "$APPDIR/usr/bin/status-backend"
+# libstatus is loaded by name from the executable's directory (`library_path`
+# in inprocess.rs), and libsds sits in usr/lib, reached through its RUNPATH.
+cp "$STATUS_LIB"  "$APPDIR/usr/bin/libstatus.so"
 cp "$LIBSDS"      "$APPDIR/usr/lib/libsds.so"
 
 # ---------- Stripping Nix dependencies ----------
 #
-# status-backend and libsds.so are built in Nix, so they carry:
+# libstatus.so and libsds.so are built in Nix, so they carry:
 #   * an INTERP pointing at /nix/store/.../ld-linux-x86-64.so.2 — on a machine
 #     without that store, execve returns ENOENT and the AppImage does not start
 #     at all;
@@ -343,23 +346,22 @@ if [[ ! -e "$SYSTEM_LOADER" ]]; then
   exit 1
 fi
 
-echo "  INTERP before: $(patchelf --print-interpreter "$APPDIR/usr/bin/status-backend" 2>/dev/null || true)"
-echo "  RUNPATH before: $(patchelf --print-rpath "$APPDIR/usr/bin/status-backend" 2>/dev/null || true)"
+echo "  RUNPATH before: $(patchelf --print-rpath "$APPDIR/usr/bin/libstatus.so" 2>/dev/null || true)"
 
-# status-backend: libsds.so lives in usr/lib, the binary in usr/bin.
-patchelf --set-interpreter "$SYSTEM_LOADER" "$APPDIR/usr/bin/status-backend"
-patchelf --set-rpath '$ORIGIN/../lib'       "$APPDIR/usr/bin/status-backend"
+# libstatus.so: libsds.so lives in usr/lib, the library in usr/bin. There is no
+# INTERP to rewrite — a shared library is mapped by libsds' own loader, which is
+# the system one.
+patchelf --set-rpath '$ORIGIN/../lib' "$APPDIR/usr/bin/libstatus.so"
 
 # libsds.so: all its NEEDED entries are system libraries, but the Nix glibc has
 # to come out of the RUNPATH.
-patchelf --set-rpath '$ORIGIN'              "$APPDIR/usr/lib/libsds.so"
+patchelf --set-rpath '$ORIGIN'        "$APPDIR/usr/lib/libsds.so"
 
-echo "  INTERP after:  $(patchelf --print-interpreter "$APPDIR/usr/bin/status-backend")"
-echo "  RUNPATH after: $(patchelf --print-rpath "$APPDIR/usr/bin/status-backend")"
-echo "  libsds RUNPATH after: $(patchelf --print-rpath "$APPDIR/usr/lib/libsds.so")"
+echo "  libstatus RUNPATH after: $(patchelf --print-rpath "$APPDIR/usr/bin/libstatus.so")"
+echo "  libsds RUNPATH after:    $(patchelf --print-rpath "$APPDIR/usr/lib/libsds.so")"
 
 # Verify that no Nix path leaked into the dynamic section.
-for f in "$APPDIR/usr/bin/status-backend" "$APPDIR/usr/lib/libsds.so"; do
+for f in "$APPDIR/usr/bin/libstatus.so" "$APPDIR/usr/lib/libsds.so"; do
   if readelf -d "$f" | grep -q '/nix/store'; then
     echo "ERROR: /nix/store still present in dynamic section of $f" >&2
     readelf -d "$f" | grep '/nix/store' >&2
@@ -471,8 +473,8 @@ echo "  AppDir: $APPDIR"
 echo
 echo "[6/8] Running linuxdeploy"
 
-# No ldd workaround for status-backend: once the interpreter is patched, the
-# binary is linked by the system loader and ldd runs normally.
+# No ldd workaround: status-go is a shared library now, and linuxdeploy resolves
+# its dependencies against the system loader.
 mkdir -p /tmp/bin
 rm -f /tmp/bin/ldd
 
@@ -525,23 +527,27 @@ trap 'rm -rf "$TMP"' EXIT
   if [[ -x squashfs-root/AppRun ]]; then
     echo "  ✓ AppRun present"
   fi
-  RPATH=$(patchelf --print-rpath squashfs-root/usr/bin/status-backend 2>/dev/null || true)
-  echo "  status-backend RPATH: '$RPATH'"
-  INTERP=$(patchelf --print-interpreter squashfs-root/usr/bin/status-backend 2>/dev/null || true)
-  echo "  status-backend INTERP: '$INTERP'"
-
-  if [[ "$INTERP" == /nix/store/* ]]; then
-    echo "  ERROR: interpreter still points into /nix/store" >&2
+  LIB=$(find squashfs-root -name libstatus.so | head -1)
+  if [[ -z "$LIB" ]]; then
+    echo "  ERROR: libstatus.so not found inside AppImage" >&2
+    exit 1
+  fi
+  echo "  ✓ libstatus.so found: $LIB"
+  RPATH=$(patchelf --print-rpath "$LIB" 2>/dev/null || true)
+  echo "  libstatus RPATH: '$RPATH'"
+  if [[ "$RPATH" == */nix/store* ]]; then
+    echo "  ERROR: RUNPATH still points into /nix/store" >&2
     exit 1
   fi
 
-  # Start under a "dirty" environment, reproducing a machine with an inherited
-  # LD_LIBRARY_PATH from the shell.
+  # Load the library the way the app does: with the system loader and a dirty
+  # LD_LIBRARY_PATH inherited from the shell. A Nix glibc in the RUNPATH would
+  # put two incompatible libcs in one process and crash before main().
   if LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu \
-     squashfs-root/usr/bin/status-backend --help >/dev/null 2>&1; then
-    echo "  ✓ status-backend starts under inherited LD_LIBRARY_PATH"
+     python3 -c "import ctypes,sys; ctypes.CDLL(sys.argv[1])" "$LIB" >/dev/null 2>&1; then
+    echo "  ✓ libstatus.so loads under inherited LD_LIBRARY_PATH"
   else
-    echo "  ERROR: status-backend crashed on startup" >&2
+    echo "  ERROR: libstatus.so failed to load" >&2
     exit 1
   fi
 )

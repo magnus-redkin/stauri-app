@@ -13,12 +13,12 @@ export const contactsState = $state({
 });
 
 export async function loadContacts(force = false) {
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
   if (contactsState.loaded && !force) return;
 
   contactsState.isLoading = true;
   try {
-    const res = await getContacts(statusState.backendPort);
+    const res = await getContacts();
     contactsState.items = res.result || [];
     const pendingCount = contactsState.items.filter((c: any) => isIncomingRequest(c)).length;
     setPendingRequestsCount(pendingCount);
@@ -35,9 +35,9 @@ export function selectContact(contact: any | null) {
 }
 
 export async function acceptRequest(contactId: string) {
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
   try {
-    await acceptContactRequest(statusState.backendPort, contactId);
+    await acceptContactRequest(contactId);
     await loadContacts(true);
   } catch (e) {
     console.warn("Failed to accept:", e);

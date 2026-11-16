@@ -7,21 +7,6 @@ import type { StartBackendResponse } from "./types";
 debug('[api] INFURA_KEY loaded:', !!INFURA_KEY);
 
 /**
- * Token of the authenticating proxy.
- *
- * Cached for the lifetime of the page: Rust hands out the same token for as long
- * as the application runs. It is requested lazily, only when the first call
- * actually needs it.
- */
-let authToken: string | null = null;
-
-export async function getAuthToken(): Promise<string> {
-  if (authToken) return authToken;
-  authToken = await invoke<string>('auth_proxy_token');
-  return authToken;
-}
-
-/**
  * Secrets passed to LoginAccount and CreateAccountAndLogin.
  *
  * @returns The secret fields the backend understands.
@@ -74,7 +59,6 @@ function walletConfig(): Record<string, boolean> {
 /**
  * Logs into an existing account.
  *
- * @param port - Auth proxy port.
  * @param password - Profile password.
  * @param keyUid - Key uid of the profile to log into.
  * @returns The backend's response.
@@ -84,7 +68,6 @@ function walletConfig(): Record<string, boolean> {
  * (`https://mainnet.api.status.im/...`) and RPC clients are never created.
  */
 export async function loginAccount(
-  port: number,
   password: string,
   keyUid: string
 ): Promise<any> {
@@ -96,7 +79,7 @@ export async function loginAccount(
     ...walletSecrets(),
   };
   debug('[Login] payload keys:', Object.keys(payload));
-  return await statusFetch(port, "LoginAccount", payload);
+  return await statusFetch("LoginAccount", payload);
 }
 
 /**
@@ -127,7 +110,6 @@ function loggingConfig(dataDir: string): Record<string, unknown> {
 /**
  * Creates an account and logs into it.
  *
- * @param port - Auth proxy port.
  * @param dataDir - Root data directory for the profile.
  * @param password - Profile password.
  * @returns The backend's response.
@@ -138,7 +120,6 @@ function loggingConfig(dataDir: string): Record<string, unknown> {
  * `WalletSecretsConfig` as flat fields at the top level of the payload.
  */
 export async function createAccountAndLogin(
-  port: number,
   dataDir: string,
   password: string
 ): Promise<any> {
@@ -154,7 +135,7 @@ export async function createAccountAndLogin(
     ...walletSecrets(),
   };
   debug('[CreateAccount] payload keys:', Object.keys(payload));
-  return await statusFetch(port, "CreateAccountAndLogin", payload);
+  return await statusFetch("CreateAccountAndLogin", payload);
 }
 
 
@@ -210,15 +191,15 @@ export async function stopRpcProxy(): Promise<void> {
   await invoke('stop_rpc_proxy');
 }
 
-export async function initializeApplication(port: number, dataDir: string, networkId: number): Promise<any> {
-  return await statusFetch(port, "InitializeApplication", {
+export async function initializeApplication(dataDir: string, networkId: number): Promise<any> {
+  return await statusFetch("InitializeApplication", {
     dataDir: dataDir,
     NetworkID: networkId,
   });
 }
 
-export async function startMessenger(port: number): Promise<any> {
-  return await statusFetch(port, "CallRPC", {
+export async function startMessenger(): Promise<any> {
+  return await statusFetch("CallRPC", {
     jsonrpc: "2.0",
     id: 1,
     method: "wakuext_startMessenger",
@@ -267,7 +248,6 @@ export {
 /**
  * Logs out of the account.
  *
- * @param port - Auth proxy port.
  * @returns The backend's response.
  * @remarks
  * This is the `/statusgo/Logout` endpoint, not `wakuext_logout`: that method does
@@ -276,12 +256,12 @@ export {
  * (cmd/status-backend/server/endpoints.go), so its handler does not read a body
  * and none needs to be sent.
  */
-export async function logout(port: number): Promise<any> {
-  return await statusFetch(port, 'Logout', {});
+export async function logout(): Promise<any> {
+  return await statusFetch('Logout', {});
 }
 
-export async function getAccountsList(port: number, dataDir: string, networkId: number): Promise<any[]> {
-  const data = await initializeApplication(port, dataDir, networkId);
+export async function getAccountsList(dataDir: string, networkId: number): Promise<any[]> {
+  const data = await initializeApplication(dataDir, networkId);
   return data.accounts || [];
 }
 

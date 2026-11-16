@@ -204,7 +204,7 @@ let inFlight: Promise<void> | null = null;
 let pendingReload = false;
 
 export async function loadChats(force = false): Promise<void> {
-  if (!statusState.backendPort) return;
+  if (!statusState.backendRunning) return;
   if (chatsState.loaded && !force) return;
 
   if (inFlight) {
@@ -216,18 +216,17 @@ export async function loadChats(force = false): Promise<void> {
   inFlight = (async () => {
     // The port was checked above, but TypeScript cannot see it: narrowing does not survive a
     // closure boundary. Capture the value once.
-    const port = statusState.backendPort as number;
     chatsState.isLoading = true;
     try {
       const [previews, contactsRes, communities] = await Promise.all([
-        getChats(port),
-        getContacts(port),
+        getChats(),
+        getContacts(),
         // `getCommunities` (`wakuext_communities` = `All()`), not `getJoinedCommunities`: the
         // latter is `WHERE c.joined`, so channels of a spectated community are absent from it.
         // Their chats do live in `wakuext_chats` and are read, so without this the channels of a
         // Logos community before joining drop out of the grouping and look like ordinary channels
         // with no community header.
-        getCommunities(port).catch((e) => {
+        getCommunities().catch((e) => {
           warn('[chats] communities failed:', e);
           return [] as Community[];
         }),
@@ -288,8 +287,7 @@ export async function loadChats(force = false): Promise<void> {
 export async function createAndOpenChannel(
   params: CreateChannelParams
 ): Promise<{ ok: boolean; error?: string }> {
-  const port = statusState.backendPort;
-  if (!port) return { ok: false, error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { ok: false, error: 'Backend is not running' };
 
   const invalid = validateChannelInput(params.name, params.description);
   if (invalid) return { ok: false, error: invalid };
@@ -298,7 +296,7 @@ export async function createAndOpenChannel(
   scenarioLog(scenario, '1-start', { name: params.name, kind: params.kind });
 
   try {
-    const created = await createChannel(port, params);
+    const created = await createChannel(params);
     scenarioLog(scenario, '2-created', {
       communityId: short(created.communityId),
       chatId: short(created.chatId),
@@ -340,15 +338,14 @@ export function selectChat(chatId: string) {
  * Accepts an incoming 1-1 request and opens that chat.
  *
  * @param item - Chat row that carried the request.
- * @param port - Backend port.
  * @param publicKey - Contact key the request came from.
  * @remarks
  * Accept makes the contact active, but neither the list nor the selection updates by itself:
  * without an explicit `setSelectedChat` the right panel would stay on the request screen while the
  * chat appeared on the left unselected.
  */
-export async function acceptRequestAndOpen(item: ChatItem, port: number, publicKey: string): Promise<void> {
-  await acceptContactRequestRpc(port, publicKey);
+export async function acceptRequestAndOpen(item: ChatItem, publicKey: string): Promise<void> {
+  await acceptContactRequestRpc(publicKey);
   await loadChats(true);
   const fresh = chatsState.items.find((c) => c.id === item.id) ?? null;
   setSelectedChat(fresh);
@@ -363,8 +360,8 @@ export async function acceptRequestAndOpen(item: ChatItem, port: number, publicK
  * Used from the contact list, which shows pending requests first.
  */
 export async function acceptIncomingAndOpen(contactId: string): Promise<void> {
-  if (!statusState.backendPort) return;
-  await acceptContactRequestRpc(statusState.backendPort, contactId);
+  if (!statusState.backendRunning) return;
+  await acceptContactRequestRpc(contactId);
   await loadChats(true);
   const fresh = chatsState.items.find((c) => c.id === contactId) ?? null;
   setSelectedChat(fresh);
@@ -379,11 +376,10 @@ export async function acceptIncomingAndOpen(contactId: string): Promise<void> {
  * Declines an incoming request and returns the right panel to the initial "select a chat" state.
  *
  * @param item - Chat row that carried the request.
- * @param port - Backend port.
  * @param publicKey - Contact key the request came from.
  */
-export async function rejectRequest(item: ChatItem, port: number, publicKey: string): Promise<void> {
-  await declineContactRequestRpc(port, publicKey);
+export async function rejectRequest(item: ChatItem, publicKey: string): Promise<void> {
+  await declineContactRequestRpc(publicKey);
   if (chatsState.selected?.id === item.id) setSelectedChat(null);
   await loadChats(true);
   scenarioLog('reply-sync', 'rejected', { chat: short(item.id) }, 'info');
@@ -400,8 +396,8 @@ export function setSelectedChat(chat: ChatItem | null) {
   if (chat) chatsState.rightPanel = 'chat';
   // Opening a chat means it is read: reset the unread counter on the backend. Otherwise the "1"
   // stays until the list reloads and comes back with it.
-  if (chat && chat.unreadCount && statusState.backendPort) {
-    markChatRead(statusState.backendPort, chat.id).catch(() => {});
+  if (chat && chat.unreadCount && statusState.backendRunning) {
+    markChatRead(chat.id).catch(() => {});
     chatsState.items = chatsState.items.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
   }
 }
@@ -440,7 +436,7 @@ export function selectedCommunity(): Community | null {
  * @returns `contact` when the request was sent, `failed` with the reason otherwise.
  */
 export async function requestContactById(rawKey: string): Promise<JoinResult> {
-  if (!statusState.backendPort) return { status: 'failed', error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { status: 'failed', error: 'Backend is not running' };
 
   const publicKey = communityIdFromInvite(`#${rawKey}`);
   if (!/^0x[0-9a-fA-F]{66}$/.test(publicKey)) {
@@ -449,7 +445,7 @@ export async function requestContactById(rawKey: string): Promise<JoinResult> {
 
   scenarioLog('reply-sync', 'contact-request-1-start', { contact: short(publicKey) });
   try {
-    await sendContactRequest(statusState.backendPort, publicKey, '');
+    await sendContactRequest(publicKey, '');
     scenarioLog('reply-sync', 'contact-request-2-sent', { contact: short(publicKey) });
     await loadChats(true);
     return { status: 'contact', name: short(publicKey) };
@@ -480,7 +476,7 @@ export async function spectateCommunityById(
   rawId: string,
   channelId?: string | null
 ): Promise<JoinResult> {
-  if (!statusState.backendPort) return { status: 'failed', error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { status: 'failed', error: 'Backend is not running' };
 
   const communityId = rawId.trim();
   if (!communityId) return { status: 'failed', error: 'Empty community id' };
@@ -490,9 +486,9 @@ export async function spectateCommunityById(
   try {
     // The community must be known locally or spectate answers "not found". `waitForResponse:
     // false` skips the network: the id usually already came from the catalog.
-    const community = await fetchCommunity(statusState.backendPort, communityId).catch(() => null);
+    const community = await fetchCommunity(communityId).catch(() => null);
 
-    await spectateCommunity(statusState.backendPort, communityId);
+    await spectateCommunity(communityId);
     await loadChats(true);
 
     // Open the channel if the link names one. A list `chatId` is the concatenation of
@@ -510,8 +506,8 @@ export async function spectateCommunityById(
       // channel of the community, so it happens only when the wanted channel is not listed.
       if (!chatsState.items.some((i) => i.id === targetId)) {
         scenarioLog('create-request', 'reopen-1-leave', { community: short(communityId) });
-        await leaveCommunity(statusState.backendPort, communityId);
-        await spectateCommunity(statusState.backendPort, communityId);
+        await leaveCommunity(communityId);
+        await spectateCommunity(communityId);
         await loadChats(true);
       }
 
@@ -572,7 +568,7 @@ export async function requestJoinCommunity(
   addresses: JoinAddresses,
   password: string
 ): Promise<JoinResult> {
-  if (!statusState.backendPort) return { status: 'failed', error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { status: 'failed', error: 'Backend is not running' };
   if (!addresses.addressesToReveal.length) {
     return { status: 'failed', error: 'Select at least one address' };
   }
@@ -580,12 +576,11 @@ export async function requestJoinCommunity(
     return { status: 'failed', error: 'Select an airdrop address' };
   }
 
-  const port = statusState.backendPort;
   chatsState.isJoining = true;
   chatsState.joinError = '';
   scenarioLog('create-request', 'join-1-start', { community: short(communityId) });
   try {
-    const community = await fetchCommunity(port, communityId).catch(() => null);
+    const community = await fetchCommunity(communityId).catch(() => null);
     const name = community?.name || communityId;
     scenarioLog('create-request', 'join-2-fetched', {
       name,
@@ -594,7 +589,6 @@ export async function requestJoinCommunity(
     });
 
     const toSign = await generateJoiningRequestsForSigning(
-      port,
       statusState.publicKey || '',
       communityId,
       addresses.addressesToReveal
@@ -608,7 +602,7 @@ export async function requestJoinCommunity(
       throw new Error('No address can be revealed: watch-only and chat accounts cannot sign');
     }
 
-    const signatures = await signJoinRequestData(port, signable, password);
+    const signatures = await signJoinRequestData(signable, password);
     if (signatures.length !== signable.length) {
       throw new Error('Signature count does not match address count');
     }
@@ -621,7 +615,7 @@ export async function requestJoinCommunity(
       : revealed[0];
 
     scenarioLog('create-request', 'join-3-signed', { addresses: revealed.length });
-    const reqRes = await requestToJoinCommunity(port, communityId, revealed, signatures, airdrop);
+    const reqRes = await requestToJoinCommunity(communityId, revealed, signatures, airdrop);
     scenarioLog('create-request', 'join-4-sent', {
       ok: !!reqRes,
       error: reqRes?.error?.message ?? null,
@@ -656,11 +650,10 @@ export async function checkJoinEligibility(
   communityId: string,
   addresses: string[] = []
 ): Promise<{ satisfied: boolean; addresses: string[]; networksNotSupported: boolean }> {
-  if (!statusState.backendPort) {
+  if (!statusState.backendRunning) {
     return { satisfied: false, addresses: [], networksNotSupported: false };
   }
   const res = await checkPermissionsToJoinCommunity(
-    statusState.backendPort,
     communityId,
     addresses
   );
@@ -766,11 +759,11 @@ export async function removeChat(item: ChatItem): Promise<{ ok: boolean; error?:
   // `deactivateChat` here would be irreversible, since `preserveHistory` does not keep history by
   // default.
   if (item.type === 'community') {
-    if (!statusState.backendPort) return { ok: false, error: 'Backend is not running' };
+    if (!statusState.backendRunning) return { ok: false, error: 'Backend is not running' };
     // Deactivation in status-go: the channel stops arriving and leaves the list. History is not
     // kept and not fetched again.
     try {
-      await deactivateChat(statusState.backendPort, item.id, false);
+      await deactivateChat(item.id, false);
     } catch (e) {
       const error = formatError(e);
       scenarioLog('create-auto', 'remove-failed', { channel: short(item.id), error }, 'warn');
@@ -782,10 +775,10 @@ export async function removeChat(item: ChatItem): Promise<{ ok: boolean; error?:
     return { ok: true };
   }
 
-  if (!statusState.backendPort) return { ok: false, error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { ok: false, error: 'Backend is not running' };
 
   try {
-    await deactivateChat(statusState.backendPort, item.id);
+    await deactivateChat(item.id);
     // Remove at once rather than waiting for a reload: it can take long and the user expects an
     // immediate result.
     chatsState.items = chatsState.items.filter((c) => c.id !== item.id);
@@ -814,10 +807,10 @@ export async function removeChat(item: ChatItem): Promise<{ ok: boolean; error?:
 export async function leaveCommunityById(
   communityId: string
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!statusState.backendPort) return { ok: false, error: 'Backend is not running' };
+  if (!statusState.backendRunning) return { ok: false, error: 'Backend is not running' };
 
   try {
-    await leaveCommunity(statusState.backendPort, communityId);
+    await leaveCommunity(communityId);
     chatsState.items = chatsState.items.filter((c) => c.communityId !== communityId);
     if (chatsState.selected?.communityId === communityId) chatsState.selected = null;
     chatsState.loaded = false;
