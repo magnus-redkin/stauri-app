@@ -133,7 +133,7 @@
     </p>
 
   {:else if ensState.step === 'done'}
-    <div class="p-3 rounded-lg border border-green-300 bg-green-100 text-green-900">
+    <div class="p-3 rounded-lg border border-success/30 bg-success/10 text-success">
       <p class="text-sm font-medium">{i18n.t('Name registered')}</p>
       <p class="text-sm font-mono break-all mt-1">{ensState.fullName}</p>
       {#if ensState.txHash}

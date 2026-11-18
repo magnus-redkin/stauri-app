@@ -18,9 +18,9 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Mainnet must be highlighted (bg-green-50 or border-green-500).
+    // Mainnet must be highlighted (success token: border-success).
     const mainnetButton = screen.getByText('Mainnet').closest('button');
-    expect(mainnetButton).toHaveClass('border-green-500');
+    expect(mainnetButton).toHaveClass('border-success');
   });
 
   it('должен раскрывать список тестнетов при клике на Testnet', async () => {
@@ -81,8 +81,8 @@ describe('NetworkPicker', () => {
       },
     });
 
-    // Testnet must be highlighted (bg-orange-50 or border-orange-500).
+    // Testnet must be highlighted (warning token: border-warning).
     const testnetButton = screen.getByText('Testnet').closest('button');
-    expect(testnetButton).toHaveClass('border-orange-500');
+    expect(testnetButton).toHaveClass('border-warning');
   });
 });

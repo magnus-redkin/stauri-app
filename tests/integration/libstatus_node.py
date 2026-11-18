@@ -21,13 +21,18 @@ The library path comes from `STAURI_LIBSTATUS`, defaulting to
 `src-tauri/binaries/libstatus.so` next to this repository. `libsds.so` is a
 runtime dependency, so the caller sets `LD_LIBRARY_PATH` (see `lib.sh`).
 
-Signals are not forwarded: the tests poll the RPC instead of waiting for them.
+Signals are captured through `SetSignalEventCallback` and served from
+`POST /statusgo/_signals` (body `{"since": N}`), so a test can assert that an
+event arrived as a signal instead of inferring it from a later RPC read. The
+application itself gets the same signals through the same C callback; see
+`src-tauri/src/lib.rs`.
 """
 
 import ctypes
 import json
 import os
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -38,12 +43,53 @@ ENDPOINTS = (
     "InitializeApplication",
     "CreateAccountAndLogin",
     "LoginAccount",
+    "RestoreAccountAndLogin",
+    # Profile management, used by the recovery screen: the phrase identifies the
+    # profile, and a profile whose password is forgotten can be dropped and rebuilt.
+    "ValidateMnemonicV2",
+    "DeleteMultiaccount",
+    "ChangeDatabasePasswordV2",
 )
 # `Logout(void)` takes no argument and ignores any body.
 NO_ARG_ENDPOINTS = ("Logout",)
+# Local extension of this facade: the captured signals, not a status-go endpoint.
+LOCAL_ENDPOINTS = ("_signals",)
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_LIB = os.path.join(REPO, "src-tauri", "binaries", "libstatus.so")
+
+# Signals are appended by Go threads and read by the HTTP thread.
+_SIGNALS = []
+_SIGNALS_LOCK = threading.Lock()
+
+
+def install_signal_capture(lib) -> None:
+    """Registers a C callback that keeps every signal status-go emits.
+
+    The signature is `void (*)(const char*)`, see `internal/signal/signals.c`.
+    The reference to the callback object is kept at module level: ctypes does
+    not own the trampoline, and a collected one would crash the process on the
+    next signal.
+    """
+    setter = lib.SetSignalEventCallback
+    setter.argtypes = [ctypes.c_void_p]
+    setter.restype = None
+
+    global _CALLBACK
+    _CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_char_p)(_on_signal)
+    setter(ctypes.cast(_CALLBACK, ctypes.c_void_p))
+
+
+def _on_signal(raw: bytes) -> None:
+    """Callback body: parse and store one signal. Never raises into Go code."""
+    try:
+        text = raw.decode("utf-8", "replace") if raw else ""
+        if text:
+            with _SIGNALS_LOCK:
+                _SIGNALS.append(text)
+    except Exception:  # a raising callback would abort the Go side
+        pass
+
 
 
 def load_library(path: str) -> ctypes.CDLL:
@@ -77,6 +123,28 @@ def call_string(fn, payload: str) -> str:
     return raw.decode("utf-8", "replace")
 
 
+def signals_since(body: str) -> list:
+    """Signals captured after a given index.
+
+    @param body - JSON `{"since": N}`; the index a caller already saw. Missing or
+      malformed bodies mean "everything".
+    @returns The signal payloads, already parsed, from index `since` onwards.
+    """
+    try:
+        since = int(json.loads(body or "{}").get("since") or 0)
+    except (ValueError, AttributeError, TypeError):
+        since = 0
+    with _SIGNALS_LOCK:
+        chunk = _SIGNALS[since:]
+    parsed = []
+    for text in chunk:
+        try:
+            parsed.append(json.loads(text))
+        except ValueError:
+            continue
+    return parsed
+
+
 def make_handler(lib):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -88,8 +156,12 @@ def make_handler(lib):
             prefix = "/statusgo/"
             name = path[len(prefix):] if path.startswith(prefix) else ""
 
-            if name not in ENDPOINTS and name not in NO_ARG_ENDPOINTS:
+            if name not in ENDPOINTS and name not in NO_ARG_ENDPOINTS and name not in LOCAL_ENDPOINTS:
                 self.reply(404, f'{{"error":"unknown endpoint {name}"}}')
+                return
+
+            if name == "_signals":
+                self.reply(200, json.dumps(signals_since(body), ensure_ascii=False))
                 return
 
             started = time.monotonic()
@@ -145,6 +217,9 @@ def main() -> int:
 
     lib = load_library(path)
     log(f"loaded {path}")
+    # Before the server answers: signals start arriving as soon as a profile logs in,
+    # and a callback registered later would miss the first ones.
+    install_signal_capture(lib)
     server = ThreadingHTTPServer((host, int(port)), make_handler(lib))
     log(f"listening on {address}")
     server.serve_forever()

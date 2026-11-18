@@ -149,10 +149,10 @@
   {#if narrow}
   <ScrollArea class="flex-1 min-h-0">
     {#each incoming as c (c.id)}
-      <div class="mx-2 mt-2 p-3 rounded-md border border-orange-300 bg-orange-50 flex items-center gap-2">
+      <div class="mx-2 mt-2 p-3 rounded-md border border-warning/30 bg-warning/10 flex items-center gap-2">
         <div class="min-w-0 flex-1">
           <div class="font-medium truncate">{getDisplayName(c)}</div>
-          <div class="text-xs text-orange-700">{i18n.t('Contact request')}</div>
+          <div class="text-xs text-warning">{i18n.t('Contact request')}</div>
         </div>
         <button
           type="button"
@@ -187,7 +187,7 @@
      </div>
      {#if row.kind === 'contact'}
        {#if isRejected(row.contact)}
-         <span class="shrink-0 text-red-600 font-bold" aria-label={i18n.t('Not accepted')} title={i18n.t('Not accepted')}>✕</span>
+         <span class="shrink-0 text-destructive font-bold" aria-label={i18n.t('Not accepted')} title={i18n.t('Not accepted')}>✕</span>
        {/if}
        <span class="shrink-0 text-muted-foreground" aria-label={i18n.t('Contact')} title={i18n.t('Contact')}>👤</span>
      {/if}

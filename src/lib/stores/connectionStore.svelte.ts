@@ -18,5 +18,10 @@ export {
   changeNetwork,
   login,
   createAccount,
+  restoreAccount,
+  resetLocalProfileAndRestore,
   disconnect,
 } from './connection.svelte';
+
+export type { RestoreOutcome } from './connection.svelte';
+export { LocalProfileLockedError } from './connection.svelte';

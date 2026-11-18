@@ -45,22 +45,38 @@ pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
     // never passes through here.
     let parsed = crate::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
 
-    let mnemonic = parsed
-        .get("result")
-        .and_then(|r| r.get("mnemonic"))
-        .and_then(|m| m.as_str())
-        .ok_or_else(|| AppError::backend("mnemonic is not available"))?;
-
-    let words: Vec<String> = mnemonic.split_whitespace().map(|w| w.to_string()).collect();
-
-    if words.is_empty() {
-        return Err(AppError::backend("mnemonic is empty"));
-    }
+    let words = mnemonic_words(&parsed)?;
 
     let count = words.len();
     *PHRASE.lock().map_err(|_| AppError::poisoned())? = Some(words);
 
     Ok(SeedInfo { word_count: count })
+}
+
+/// Extracts the seed words from a `settings_getSettings` reply.
+///
+/// @param reply - Reply of [`crate::inprocess::call_rpc`], which has already
+///   unwrapped the JSON-RPC envelope and returned the settings object itself.
+/// @returns The words, in order.
+/// @remarks
+/// Looking for a `result` field here is the bug this function exists to prevent:
+/// it was correct while calls went through the sidecar, where the envelope was
+/// still present, and silently produced "mnemonic is not available" afterwards.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Backend`] when the reply has no `mnemonic`
+/// string or the phrase is empty.
+fn mnemonic_words(reply: &serde_json::Value) -> AppResult<Vec<String>> {
+    let mnemonic = reply
+        .get("mnemonic")
+        .and_then(|m| m.as_str())
+        .ok_or_else(|| AppError::backend("mnemonic is not available"))?;
+
+    let words: Vec<String> = mnemonic.split_whitespace().map(|w| w.to_string()).collect();
+    if words.is_empty() {
+        return Err(AppError::backend("mnemonic is empty"));
+    }
+    Ok(words)
 }
 
 /// One word by index, for display to the user.
@@ -156,5 +172,34 @@ pub fn clear_seed() {
             }
         }
         *guard = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_words_from_an_unwrapped_reply() {
+        // The shape `call_rpc` returns: the settings object itself.
+        let reply = json!({ "mnemonic": "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima" });
+        let words = mnemonic_words(&reply).expect("words");
+        assert_eq!(words.len(), 12);
+        assert_eq!(words[0], "alpha");
+    }
+
+    #[test]
+    fn rejects_an_envelope_shaped_reply() {
+        // What the sidecar returned. Reading it here means the caller skipped the
+        // envelope unwrapping, and the phrase must not be taken from it silently.
+        let reply = json!({ "result": { "mnemonic": "alpha bravo" } });
+        assert!(mnemonic_words(&reply).is_err());
+    }
+
+    #[test]
+    fn rejects_a_reply_without_a_phrase() {
+        assert!(mnemonic_words(&json!({})).is_err());
+        assert!(mnemonic_words(&json!({ "mnemonic": "" })).is_err());
     }
 }

@@ -229,6 +229,38 @@ report_summary() {
   echo "=== ИТОГ: пройдено проверок: $PASSED ==="
 }
 
+# signal_count <port> — how many signals the node has captured so far.
+#
+# Used as a cursor: take the count, do something, then look only at what arrived
+# afterwards. The application reads the same signals through the same callback,
+# so what a test sees here is what the UI receives.
+signal_count() {
+  curl -s -m 10 -X POST "http://127.0.0.1:$1/statusgo/_signals" \
+    -H 'Content-Type: application/json' -d '{"since": 0}' \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin) or []))'
+}
+
+# signals_contact_names <port> <since> — display names in the `contacts` field of
+# `messages.new` signals that arrived after index <since>.
+#
+# A rename from the other side arrives as a contact update, and status-go puts the
+# record into the signal rather than only into the next `wakuext_contacts` reply.
+signals_contact_names() {
+  curl -s -m 10 -X POST "http://127.0.0.1:$1/statusgo/_signals" \
+    -H 'Content-Type: application/json' -d "{\"since\": $2}" \
+  | python3 -c '
+import json, sys
+names = []
+for sig in json.load(sys.stdin) or []:
+    if sig.get("type") != "messages.new":
+        continue
+    for c in (sig.get("event") or {}).get("contacts") or []:
+        name = c.get("displayName") or ""
+        if name:
+            names.append(name)
+print("\n".join(names))'
+}
+
 # ---------------------------------------------------------------------------
 # CHANNELS (a Stauri channel is a community with a single channel, see docs/ru/akk_scheme.md)
 # ---------------------------------------------------------------------------

@@ -27,8 +27,8 @@ export const FONT_MAX = 24;
 /** Default font size, in pixels. */
 export const FONT_DEFAULT = 17;
 
-export type ThemeName = 'maroon' | 'light' | 'dark';
-const THEMES: ThemeName[] = ['maroon', 'light', 'dark'];
+export type ThemeName = 'maroon' | 'light' | 'dark' | 'green';
+const THEMES: ThemeName[] = ['maroon', 'light', 'dark', 'green'];
 
 export const uiState = $state({
   fontSize: FONT_DEFAULT,

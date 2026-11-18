@@ -161,7 +161,7 @@
             type="text"
             value={testAnswers[i]}
             oninput={(e) => handleInput(e, i)}
-            class="flex-1 h-10 border rounded-md px-3 font-mono transition-colors {wordStatus[i] === true ? 'border-green-500 bg-green-50 text-green-700' : wordStatus[i] === false ? 'border-red-500 bg-red-50 text-red-700' : 'border-input bg-background'}"
+            class="flex-1 h-10 border rounded-md px-3 font-mono transition-colors {wordStatus[i] === true ? 'border-success bg-success/10 text-success' : wordStatus[i] === false ? 'border-destructive bg-destructive/10 text-destructive' : 'border-input bg-background'}"
             placeholder={i18n.t('Enter word')}
           />
         </div>

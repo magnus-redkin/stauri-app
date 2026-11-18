@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { statusState, setNetworkInfo, setAccounts, resetState, processSignal } from './statusStore.svelte';
+import { statusState, setNetworkInfo, setAccounts, resetState, processSignal, waitForLogin } from './statusStore.svelte';
 import { startMessenger } from '$lib/status/api';
 
 // Mocks the API so processSignal makes no real requests.
@@ -111,6 +111,71 @@ describe('statusStore', () => {
       expect(statusState.isLoggedIn).toBe(true);
       expect(statusState.accountKeyUid).toBe('test-uid-123');
       expect(startMessenger).not.toHaveBeenCalled();
+    });
+
+    it('должен брать имя из display-name, а не из сгенерированного alias', () => {
+      // `alias` is generated from the public key ("Perfumed Fearless Marten"), not chosen
+      // by the user. Reading it instead of `display-name` showed a name nobody set and
+      // lost the real one at every restart.
+      statusState.backendRunning = true;
+      processSignal(JSON.stringify({
+        type: 'node.login',
+        event: {
+          settings: {
+            'key-uid': 'uid-1',
+            'display-name': 'Константин_1',
+            alias: 'Perfumed Fearless Marten'
+          }
+        }
+      }));
+
+      expect(statusState.alias).toBe('Константин_1');
+    });
+
+    it('должен брать сгенерированный alias, если имя не задано', () => {
+      statusState.backendRunning = true;
+      processSignal(JSON.stringify({
+        type: 'node.login',
+        event: {
+          settings: {
+            'key-uid': 'uid-2',
+            'display-name': '',
+            alias: 'Perfumed Fearless Marten'
+          }
+        }
+      }));
+
+      expect(statusState.alias).toBe('Perfumed Fearless Marten');
+    });
+
+    it('должен отклонять waitForLogin с причиной из ошибки node.login', async () => {
+      // status-go reports a failed sign-in inside the signal, and the RPC call that
+      // started it answers {"error":""}. Without settling the pending promise the
+      // caller waited out the whole timeout and reported "no response from backend",
+      // hiding the reason it was given in the first place.
+      statusState.backendRunning = true;
+      const waiting = waitForLogin(30_000);
+
+      processSignal(JSON.stringify({
+        type: 'node.login',
+        event: { error: 'envelope: invalid key-encryption key' }
+      }));
+
+      await expect(waiting).rejects.toThrow('envelope: invalid key-encryption key');
+      expect(statusState.isLoggedIn).toBe(false);
+    });
+
+    it('должен разрешать waitForLogin по успешному node.login', async () => {
+      statusState.backendRunning = true;
+      const waiting = waitForLogin(30_000);
+
+      processSignal(JSON.stringify({
+        type: 'node.login',
+        event: { settings: { 'key-uid': 'uid-3', 'public-key': '0xabc' } }
+      }));
+
+      await expect(waiting).resolves.toBeUndefined();
+      expect(statusState.isLoggedIn).toBe(true);
     });
 
     it('должен обрабатывать ошибку входа', () => {

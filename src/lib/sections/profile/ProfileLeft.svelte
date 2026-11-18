@@ -4,6 +4,7 @@
   import { User } from "lucide-svelte";
   import { statusState } from '$lib/stores/statusStore.svelte';
   import { ensState } from '$lib/stores/ensStore.svelte';
+  import { profileAvatarState } from '$lib/stores/profileStore.svelte';
   import NetworkInfo from './NetworkInfo.svelte';
 
   let {
@@ -61,17 +62,17 @@
     <div class="p-4 border-b border-border bg-secondary/30">
       {#if statusState.isConnecting}
         <div class="flex items-center gap-2 text-sm text-muted-foreground">
-          <div class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
+          <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
           {i18n.t('Connecting...')}
         </div>
       {:else if statusState.isConnected}
-        <div class="flex items-center gap-2 text-green-600 font-semibold text-sm">
-          <div class="w-2 h-2 rounded-full bg-green-500"></div>
+        <div class="flex items-center gap-2 text-success font-semibold text-sm">
+          <div class="w-2 h-2 rounded-full bg-success"></div>
           {i18n.t('Connected')}
         </div>
         <button
           onclick={onDisconnect}
-          class="mt-1 text-xs text-red-500 hover:underline"
+          class="mt-1 text-xs text-destructive hover:underline"
         >
           {i18n.t('Disconnect')}
         </button>
@@ -84,7 +85,7 @@
             title={i18n.t('Click to copy')}
           >
             {statusState.accountKeyUid ? statusState.accountKeyUid.substring(0, 6) + '...' : '...'}
-            {#if copiedProfileId}<span class="ml-1 text-green-600 font-sans font-bold">✓ Copied!</span>{/if}
+            {#if copiedProfileId}<span class="ml-1 text-success font-sans font-bold">✓ Copied!</span>{/if}
           </button>
         </div>
 
@@ -96,7 +97,7 @@
             title={i18n.t('Click to copy')}
           >
             {statusState.publicKey ? statusState.publicKey.substring(0, 6) + '...' : '(loading...)'}
-            {#if copiedPubKey}<span class="ml-1 text-green-600 font-sans font-bold">✓ Copied!</span>{/if}
+            {#if copiedPubKey}<span class="ml-1 text-success font-sans font-bold">✓ Copied!</span>{/if}
           </button>
         </div>
 
@@ -110,8 +111,19 @@
 
     {#if statusState.isLoggedIn}
       <div class="p-4 flex flex-col items-center gap-3">
-        <div class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-          <User size={32} />
+        <!--
+          The same picture the editing pane shows. Both read `profileAvatarState`: an
+          upload happens in one pane, and without a shared source the other keeps the
+          placeholder until the window is reloaded.
+        -->
+        <div
+          class="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center text-primary overflow-hidden"
+        >
+          {#if profileAvatarState.url}
+            <img src={profileAvatarState.url} alt="" class="w-full h-full object-cover" />
+          {:else}
+            <User size={32} />
+          {/if}
         </div>
         <div class="text-center">
           <div class="font-bold text-lg">{statusState.alias || displayName}</div>
@@ -133,7 +145,7 @@
         {#if !statusState.isSeedSaved}
           <button
             onclick={() => onCreateSeed?.()}
-                                                      class="w-full p-2 bg-red-100 text-red-700 rounded-md text-xs font-semibold text-center border border-red-300 hover:bg-red-200 transition-colors cursor-pointer"
+                                                      class="w-full p-2 bg-destructive/10 text-destructive rounded-md text-xs font-semibold text-center border border-destructive/30 hover:bg-destructive/20 transition-colors cursor-pointer"
                                                       >
               ⚠️ {i18n.t('Seed-фраза не сохранена')}
           </button>

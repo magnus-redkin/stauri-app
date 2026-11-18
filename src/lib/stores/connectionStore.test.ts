@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { configureWalletRpc, login, createAccount } from './connectionStore.svelte';
-import { statusState, waitForNodeStopped, waitForLogin } from './statusStore.svelte';
+import {
+  configureWalletRpc,
+  login,
+  createAccount,
+  restoreAccount,
+  resetLocalProfileAndRestore,
+  LocalProfileLockedError,
+} from './connectionStore.svelte';
+import {
+  statusState,
+  setAccounts,
+  waitForNodeStopped,
+  waitForLogin,
+} from './statusStore.svelte';
 import {
   getFlatEthereumChains,
   setChainUserRpcProvider,
@@ -11,6 +23,9 @@ import {
   logout,
   startMessenger,
   createAccountAndLogin,
+  restoreAccountAndLogin,
+  keyUidFromMnemonic,
+  deleteProfile,
 } from '$lib/status/api';
 
 vi.mock('$lib/status/api', () => ({
@@ -19,6 +34,9 @@ vi.mock('$lib/status/api', () => ({
   initializeApplication: vi.fn(),
   loginAccount: vi.fn(),
   createAccountAndLogin: vi.fn(),
+  restoreAccountAndLogin: vi.fn(),
+  keyUidFromMnemonic: vi.fn(),
+  deleteProfile: vi.fn(),
   getFlatEthereumChains: vi.fn(),
   setChainUserRpcProvider: vi.fn(),
   startRpcProxy: vi.fn(),
@@ -297,5 +315,221 @@ describe('перезапуск ноды после записи провайде
     expect(logout).toHaveBeenCalledTimes(1);
     expect(loginAccount).toHaveBeenCalledTimes(1);
     expect(startMessenger).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Restore of an existing profile.
+ *
+ * The phrase always derives the same key uid, so a match with a profile on this device
+ * means it is already here. Calling `RestoreAccountAndLogin` in that case is what
+ * produced `keypair already added`; the way in is a login.
+ */
+describe('restoreAccount', () => {
+  const PHRASE = 'one two three four five six seven eight nine ten eleven twelve';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    statusState.backendRunning = true;
+    statusState.accountKeyUid = '';
+    (startRpcProxy as any).mockResolvedValue(PROXY_PORT);
+    (getRpcProxySecret as any).mockResolvedValue(PROXY_SECRET);
+    (setRpcUpstreams as any).mockResolvedValue(undefined);
+    (setChainUserRpcProvider as any).mockResolvedValue({ result: null });
+    (getFlatEthereumChains as any).mockResolvedValue([
+      network(1, 'Ethereum', {
+        rpcProviders: [{ type: 'user', name: 'stauri-rpc', enabled: true, url: proxyUrl(1) }],
+      }),
+    ]);
+    (loginAccount as any).mockResolvedValue({});
+    (restoreAccountAndLogin as any).mockResolvedValue({});
+    (waitForLogin as any).mockResolvedValue(undefined);
+    (startMessenger as any).mockResolvedValue({});
+  });
+
+  /** A profile list containing the profile the phrase belongs to. */
+  function profileOnDevice(keyUid = 'key-uid-1') {
+    (statusState as any).accounts = [{ 'key-uid': keyUid, name: 'Existing' }];
+    (statusState as any).backendDataDir = '/data/mainnet';
+  }
+
+  it('входит в существующий профиль вместо восстановления', async () => {
+    profileOnDevice();
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+
+    const outcome = await restoreAccount(PHRASE, 'Passw0rd!');
+
+    expect(outcome).toBe('opened');
+    expect(loginAccount).toHaveBeenCalledWith('Passw0rd!', 'key-uid-1');
+    // The whole point: restore would be refused with `keypair already added`.
+    expect(restoreAccountAndLogin).not.toHaveBeenCalled();
+    expect(startMessenger).toHaveBeenCalledTimes(1);
+  });
+
+  it('восстанавливает профиль, которого на устройстве нет', async () => {
+    profileOnDevice('key-uid-other');
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+
+    const outcome = await restoreAccount(PHRASE, 'Passw0rd!');
+
+    expect(outcome).toBe('restored');
+    expect(restoreAccountAndLogin).toHaveBeenCalledWith('/data/mainnet', 'Passw0rd!', PHRASE);
+    expect(loginAccount).not.toHaveBeenCalled();
+  });
+
+  it('восстанавливает профиль, когда список профилей пуст', async () => {
+    (statusState as any).accounts = [];
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+
+    await restoreAccount(PHRASE, 'Passw0rd!');
+
+    expect(restoreAccountAndLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('идёт по пути восстановления, когда фраза не распознана', async () => {
+    profileOnDevice();
+    (keyUidFromMnemonic as any).mockResolvedValue(null);
+
+    await restoreAccount(PHRASE, 'Passw0rd!');
+
+    // Without a key uid there is nothing to match against, so the restore path is the
+    // only one left; status-go answers with its own error if the phrase is bad.
+    expect(restoreAccountAndLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('сообщает о запертом локальном профиле, а не о непонятной ошибке', async () => {
+    profileOnDevice();
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+    // The exact text the real library reports for a wrong password (measured).
+    (waitForLogin as any).mockRejectedValue(
+      new Error('failed to open database: [keystore] incorrect password provided')
+    );
+
+    const failure = restoreAccount(PHRASE, 'Passw0rd!');
+
+    await expect(failure).rejects.toBeInstanceOf(LocalProfileLockedError);
+    // The message is the type's, not status-go's: the screen matches on it.
+    await expect(failure).rejects.toMatchObject({ name: 'LocalProfileLockedError', keyUid: 'key-uid-1' });
+    expect(startMessenger).not.toHaveBeenCalled();
+    expect(restoreAccountAndLogin).not.toHaveBeenCalled();
+  });
+
+  it('считает запертым профиль с неразвёрнутым ключом', async () => {
+    // The second shape of the same problem: the envelope cannot be unwrapped with this
+    // password at all, which happens when the profile was created by another build.
+    profileOnDevice();
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+    (waitForLogin as any).mockRejectedValue(
+      new Error('envelope: invalid key-encryption key')
+    );
+
+    await expect(restoreAccount(PHRASE, 'Passw0rd!')).rejects.toBeInstanceOf(
+      LocalProfileLockedError
+    );
+  });
+
+  it('не предлагает удалить копию при посторонней ошибке входа', async () => {
+    // The reset offer is destructive. A stopped node or a broken library must surface as
+    // an ordinary error, not as "delete your local copy": that would destroy data and
+    // leave the user in exactly the same place.
+    profileOnDevice();
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+    (waitForLogin as any).mockRejectedValue(new Error('node is stopping'));
+
+    const failure = restoreAccount(PHRASE, 'Passw0rd!');
+
+    await expect(failure).rejects.toThrow('node is stopping');
+    await expect(failure).rejects.not.toBeInstanceOf(LocalProfileLockedError);
+  });
+
+  it('переводит ошибку восстановления на понятный язык', async () => {
+    (statusState as any).accounts = [];
+    (keyUidFromMnemonic as any).mockResolvedValue(null);
+    (waitForLogin as any).mockRejectedValue(new Error('keypair already added'));
+
+    await expect(restoreAccount(PHRASE, 'Passw0rd!')).rejects.toThrow(
+      'This profile is already on this device'
+    );
+  });
+
+  it('требует ровно двенадцать слов', async () => {
+    await expect(restoreAccount('one two three', 'Passw0rd!')).rejects.toThrow(
+      'twelve words'
+    );
+    expect(restoreAccountAndLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe('resetLocalProfileAndRestore', () => {
+  const PHRASE = 'one two three four five six seven eight nine ten eleven twelve';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    statusState.backendRunning = true;
+    (statusState as any).backendDataDir = '/data/mainnet';
+    (statusState as any).accounts = [
+      { 'key-uid': 'key-uid-1', name: 'Existing' },
+      { 'key-uid': 'key-uid-2', name: 'Other' },
+    ];
+    // The real `setAccounts` writes the list back into the state; the restore path
+    // reads it right after, so a bare spy would leave the deleted profile in place
+    // and the reset would take the "profile is here, log in" branch.
+    (setAccounts as any).mockImplementation((accounts: any[]) => {
+      (statusState as any).accounts = accounts;
+    });
+    (keyUidFromMnemonic as any).mockResolvedValue('key-uid-1');
+    (deleteProfile as any).mockResolvedValue(undefined);
+    (restoreAccountAndLogin as any).mockResolvedValue({});
+    (waitForLogin as any).mockResolvedValue(undefined);
+    (setChainUserRpcProvider as any).mockResolvedValue({ result: null });
+    (getFlatEthereumChains as any).mockResolvedValue([
+      network(1, 'Ethereum', {
+        rpcProviders: [{ type: 'user', name: 'stauri-rpc', enabled: true, url: proxyUrl(1) }],
+      }),
+    ]);
+    (startRpcProxy as any).mockResolvedValue(PROXY_PORT);
+    (getRpcProxySecret as any).mockResolvedValue(PROXY_SECRET);
+    (setRpcUpstreams as any).mockResolvedValue(undefined);
+    (startMessenger as any).mockResolvedValue({});
+  });
+
+  it('удаляет локальную копию и восстанавливает профиль', async () => {
+    const outcome = await resetLocalProfileAndRestore(PHRASE, 'NewPass1!');
+
+    expect(outcome).toBe('restored');
+    // The keystore lives under the profile directory, one folder per profile.
+    expect(deleteProfile).toHaveBeenCalledWith('key-uid-1', '/data/mainnet/keystore/key-uid-1');
+    expect(restoreAccountAndLogin).toHaveBeenCalledWith('/data/mainnet', 'NewPass1!', PHRASE);
+  });
+
+  it('убирает удалённый профиль из списка до восстановления', async () => {
+    await resetLocalProfileAndRestore(PHRASE, 'NewPass1!');
+
+    // Otherwise restoreAccount would find the deleted profile and try to log into it
+    // again, failing on the same locked database.
+    expect(setAccounts).toHaveBeenCalledWith([{ 'key-uid': 'key-uid-2', name: 'Other' }]);
+    const removed = (setAccounts as any).mock.invocationCallOrder[0];
+    const restored = (restoreAccountAndLogin as any).mock.invocationCallOrder[0];
+    expect(removed).toBeLessThan(restored);
+  });
+
+  it('не восстанавливает, если фраза не распознана', async () => {
+    (keyUidFromMnemonic as any).mockResolvedValue(null);
+
+    await expect(resetLocalProfileAndRestore(PHRASE, 'NewPass1!')).rejects.toThrow(
+      'seed phrase is not valid'
+    );
+    expect(deleteProfile).not.toHaveBeenCalled();
+  });
+
+  it('останавливается, если удаление не удалось', async () => {
+    // Restoring after a failed delete would hit the same locked database, and the
+    // screen would show a restore error instead of "the local copy was not removed".
+    (deleteProfile as any).mockRejectedValue(new Error('keystore is in use'));
+
+    await expect(resetLocalProfileAndRestore(PHRASE, 'NewPass1!')).rejects.toThrow(
+      'keystore is in use'
+    );
+    expect(restoreAccountAndLogin).not.toHaveBeenCalled();
   });
 });

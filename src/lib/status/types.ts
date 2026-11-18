@@ -191,5 +191,15 @@ export interface MessagesNewEvent extends StatusEventBase {
   type: 'messages.new';
   event: {
     messages: ChatMessage[];
+    /**
+     * Contacts changed by the message that produced this signal.
+     *
+     * A contact update (`CONTACT_UPDATE`) is not a chat message: status-go marks the
+     * contact as modified and puts the record here, so a rename arrives in a signal
+     * whose `messages` array is empty. Reading only `messages` loses it.
+     *
+     * @see `saveDataAndPrepareResponse` and `HandleContactUpdate` in status-go
+     */
+    contacts?: any[];
   };
 }

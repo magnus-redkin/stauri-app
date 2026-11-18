@@ -533,12 +533,12 @@
         </span>
       {/if}
       {#if joinRequests.length > 0}
-        <span class="ml-auto text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">
+        <span class="ml-auto text-xs bg-warning/10 text-warning px-2 py-0.5 rounded">
           {i18n.t('Join requests')}: {joinRequests.length}
         </span>
       {/if}
       {#if chatsState.selected.isPendingRequest}
-        <span class="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded">{i18n.t('Contact Request')}</span>
+        <span class="text-xs bg-warning/10 text-warning px-2 py-0.5 rounded">{i18n.t('Contact Request')}</span>
       {/if}
     </div>
 
@@ -566,7 +566,7 @@
 
     {#if chatsState.selected.isPendingRequest}
       <div class="flex-1 flex flex-col items-center justify-center p-6 gap-6">
-        <div class="w-16 h-16 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-3xl">!</div>
+        <div class="w-16 h-16 rounded-full bg-warning/10 text-warning flex items-center justify-center font-bold text-3xl">!</div>
         <p class="text-center text-sm text-muted-foreground">"{chatsState.selected.lastMessage}"</p>
         <div class="flex gap-3">
           <button onclick={acceptRequest} disabled={isAccepting} class="px-4 py-2 bg-primary text-primary-foreground rounded-md">
@@ -693,7 +693,7 @@
                     <span class="text-xs font-semibold text-muted-foreground">{i18n.t('Request')}</span>
                     <span class="font-medium truncate">{authorNameOf(msg)}</span>
                     {#if Number(msg.contactRequestState) === 2}
-                      <span class="ml-auto text-green-600 font-bold" title={i18n.t('Accepted')} aria-label={i18n.t('Accepted')}>✓</span>
+                      <span class="ml-auto text-success font-bold" title={i18n.t('Accepted')} aria-label={i18n.t('Accepted')}>✓</span>
                     {/if}
                   </div>
                   <div class="whitespace-pre-wrap break-words">{formatMessageText(msg.text, chatsState.contacts)}</div>

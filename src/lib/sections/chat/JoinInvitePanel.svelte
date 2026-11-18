@@ -64,7 +64,7 @@
       class="w-full max-w-xl px-3 py-2 text-sm rounded-md {message.kind === 'error'
         ? 'bg-destructive/10 text-destructive'
  : message.kind === 'pending'
-          ? 'bg-orange-100 text-orange-700'
+          ? 'bg-warning/10 text-warning'
    : 'bg-secondary text-foreground'}"
     >
       {message.text}

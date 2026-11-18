@@ -156,6 +156,40 @@ html, body {
   --ring: #a83232;
 }
 
+/* =========================================
+   GREEN — лесная зелёная
+   ========================================= */
+[data-theme="green"] {
+  --background: #f7faf7;
+  --foreground: #14201a;
+  --card: #ffffff;
+  --card-foreground: #14201a;
+  --popover: #ffffff;
+  --popover-foreground: #14201a;
+  --primary: #166534;
+  --primary-foreground: #ffffff;
+  --secondary: #e8f0e8;
+  --secondary-foreground: #14201a;
+  --muted: #e8f0e8;
+  --muted-foreground: #4b5f52;
+  --accent: #e8f0e8;
+  --accent-foreground: #166534;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --success: #16a34a;
+  --success-foreground: #ffffff;
+  --warning: #ea580c;
+  --warning-foreground: #ffffff;
+  --info: #2563eb;
+  --info-foreground: #ffffff;
+  --surface: #eef4ee;
+  --surface-raised: #ffffff;
+  --overlay: rgb(0 0 0 / 0.1);
+  --border: #d4e0d4;
+  --input: #d4e0d4;
+  --ring: #166534;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

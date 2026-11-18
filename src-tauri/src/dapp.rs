@@ -118,6 +118,54 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
     Ok(label)
 }
 
+/// Documents the app may open from the Home section.
+///
+/// A whitelist, not a path: the frontend names a document and Rust resolves it
+/// to a fixed file under `docs/` in the bundle. A path from the webview would
+/// let it read any file the app can see.
+#[cfg(desktop)]
+const DOC_WHITELIST: &[&str] = &[
+    "ru/web3im.md",
+    "ru/architecture.md",
+    "ru/comparison.md",
+    "en/architecture.md",
+];
+
+/// Opens a bundled document in its own window.
+///
+/// The window loads the app's own asset (`WebviewUrl::App`), not a foreign page,
+/// and it is not listed in any capability: it can read the document, but it
+/// cannot call a Tauri command. It is not a dApp, so it carries no dApp menu
+/// and its title says what it is.
+///
+/// # Errors
+/// Returns [`crate::error::ErrorKind::Config`] for a name outside the whitelist,
+/// and [`crate::error::ErrorKind::Internal`] when the window cannot be built.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn open_doc(app: tauri::AppHandle, name: String) -> AppResult<String> {
+    if !DOC_WHITELIST.contains(&name.as_str()) {
+        return Err(AppError::config(format!("document not allowed: {name}")));
+    }
+    let label = format!("doc-{}", name.replace(['/', '.'], "-"));
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return Ok(label);
+    }
+    let title = name.rsplit('/').next().unwrap_or(&name).to_string();
+    // Each document has a small generated page next to it (scripts/sync-docs.sh);
+    // it loads the viewer with the document name in the script tag.
+    let page = format!("{}.html", name.strip_suffix(".md").unwrap_or(&name));
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(format!("docs/{page}").into()))
+        .title(format!("Stauri — {title}"))
+        .inner_size(900.0, 760.0)
+        .min_inner_size(480.0, 360.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| AppError::internal(format!("cannot open document window: {e}")))?;
+    Ok(label)
+}
+
 /// Rejects dApp opening on mobile.
 ///
 /// Mobile platforms have no separate window with a menu, so opening a dApp is

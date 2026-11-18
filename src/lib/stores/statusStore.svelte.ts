@@ -33,10 +33,28 @@ export const statusState = $state({
    * a channel that was hidden).
    */
   pendingChatIds: new SvelteSet<string>(),
+  /**
+   * Contact records received in `messages.new` signals, waiting to be applied.
+   *
+   * A rename comes from the other side as a contact update, not as a chat message, and
+   * status-go delivers it in the same `messages.new` signal under `contacts`. They are
+   * queued rather than held as the latest value: two updates in one flush (two renamed
+   * contacts, for instance) would otherwise overwrite each other and one rename would be
+   * lost. The queue is drained by an effect in `+page.svelte`.
+   */
+  pendingContactUpdates: [] as any[],
   isSeedSaved: false,
 });
 
-let loginResolver: (() => void) | null = null;
+/**
+ * Pending `waitForLogin`, with both outcomes.
+ *
+ * The rejection is needed: status-go reports a failed login as a `node.login` signal
+ * carrying `event.error`, not as a failed call. Without a way to settle the promise
+ * from that signal the caller waited out the full timeout and reported "no response
+ * from backend", hiding the actual reason.
+ */
+let loginPending: { resolve: () => void; reject: (e: Error) => void } | null = null;
 let loginTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let stoppedResolver: (() => void) | null = null;
 let stoppedTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -55,10 +73,19 @@ let stoppedTimeoutId: ReturnType<typeof setTimeout> | null = null;
  */
 function signalSummary(parsed: StatusEvent): string {
   if (parsed.type === 'messages.new') {
-    const messages: any[] = (parsed as MessagesNewEvent).event?.messages ?? [];
+    const event = (parsed as MessagesNewEvent).event ?? ({} as MessagesNewEvent['event']);
+    const messages: any[] = event.messages ?? [];
     const request = messages[0] ?? {};
     const fields = Object.keys(messages[0] ?? {}).join(',');
-    return `count=${messages.length} hasChatId=${messages.some((m) => !!m?.chatId)} contactRequest=${request.contactRequestState ?? 'n/a'} fields=[${fields}]`;
+    // A contact update carries no message, only the record: without the names here a
+    // rename and an empty signal look the same in the trace.
+    const contacts: any[] = event.contacts ?? [];
+    const names = contacts.map((c: any) => c?.displayName || '-').join(',');
+    return (
+      `count=${messages.length} hasChatId=${messages.some((m) => !!m?.chatId)} ` +
+      `contactRequest=${request.contactRequestState ?? 'n/a'} fields=[${fields}]` +
+      (contacts.length ? ` contacts=${contacts.length} names=[${names}]` : '')
+    );
   }
   if (parsed.type === 'waku.connection.status.change') {
     const event = (parsed as GenericEvent).event ?? {};
@@ -84,20 +111,42 @@ export function processSignal(rawJson: string) {
       const loginEvent = parsed as NodeLoginEvent;
       if (loginEvent.event?.error) {
         statusState.errorMsg = `Login failed: ${loginEvent.event.error}`;
+        // Settle the pending wait with the real reason. Returning without this left
+        // the caller waiting out the whole timeout and reporting "no response from
+        // backend" 30 seconds later, hiding what status-go actually said.
+        if (loginPending) {
+          if (loginTimeoutId) clearTimeout(loginTimeoutId);
+          const pending = loginPending;
+          loginPending = null;
+          loginTimeoutId = null;
+          pending.reject(new Error(loginEvent.event.error));
+        }
         return;
       }
       statusState.accountKeyUid = loginEvent.event?.settings?.['key-uid'] || statusState.accountKeyUid;
       statusState.publicKey = loginEvent.event?.settings?.['public-key'] || statusState.publicKey;
       statusState.compressedKey = loginEvent.event?.settings?.['compressedKey'] || statusState.compressedKey;
-      statusState.alias = loginEvent.event?.settings?.['alias'] || statusState.alias;
+      // `display-name` is the name the user chose; `alias` is the three-word name
+      // status-go generates from the public key ("Perfumed Fearless Marten"). Reading
+      // the alias here would show a name the user never set, and the chosen one would
+      // survive only until the next restart, because `EditProfile` writes it to state
+      // directly. The generated alias is the fallback for a profile with no name.
+      statusState.alias =
+        loginEvent.event?.settings?.['display-name'] ||
+        loginEvent.event?.settings?.['alias'] ||
+        statusState.alias;
+      // The phrase is the same on every login, so a profile that was told to have
+      // saved it keeps saying so after a restart instead of warning again.
+      statusState.isSeedSaved = readSeedSaved(statusState.accountKeyUid);
       statusState.isLoggedIn = true;
       statusState.errorMsg = '';
 
-      if (loginResolver) {
+      if (loginPending) {
         if (loginTimeoutId) clearTimeout(loginTimeoutId);
-        loginResolver();
-        loginResolver = null;
+        const pending = loginPending;
+        loginPending = null;
         loginTimeoutId = null;
+        pending.resolve();
       }
 
       // startMessenger is deliberately NOT called here.
@@ -123,6 +172,15 @@ export function processSignal(rawJson: string) {
       statusState.lastMessageSignal++;
       for (const m of parsed.event?.messages ?? []) {
         if (m?.chatId) statusState.pendingChatIds.add(m.chatId);
+      }
+
+      // A contact update travels in the same signal but not as a message, so the
+      // `messages` loop above skips it. Queueing the records here means the chat list
+      // can show a rename from the other side at once, instead of at the next poll.
+      // The names are already in the trace line (see `signalSummary`).
+      const contacts = (parsed as MessagesNewEvent).event?.contacts ?? [];
+      if (contacts.length > 0) {
+        statusState.pendingContactUpdates.push(...contacts);
       }
     }
   } catch (e) {
@@ -159,12 +217,12 @@ export function waitForNodeStopped(timeoutMs = 15000): Promise<void> {
 export function waitForLogin(timeoutMs = 30000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (statusState.isLoggedIn) return resolve();
-    loginResolver = resolve;
+    loginPending = { resolve, reject };
     loginTimeoutId = setTimeout(() => {
-      if (loginResolver === resolve) {
-        loginResolver = null;
+      if (loginPending?.resolve === resolve) {
+        loginPending = null;
         loginTimeoutId = null;
-        reject(new Error("Login timeout: no response from backend"));
+        reject(new Error('Login timeout: no response from backend'));
       }
     }, timeoutMs);
   });
@@ -188,10 +246,35 @@ export function setPendingRequestsCount(count: number) {
   statusState.pendingRequestsCount = count;
 }
 
+/**
+ * `localStorage` key for the "seed phrase written down" flag of a profile.
+ *
+ * Keyed by key-uid: several profiles can share one installation, and a phrase
+ * confirmed for one says nothing about another.
+ *
+ * @param keyUid - Profile identifier from settings.
+ */
+function seedSavedKey(keyUid: string): string {
+  return `stauri_seed_saved:${keyUid}`;
+}
+
+/** Whether the phrase of the signed-in profile was confirmed, per `localStorage`. */
+function readSeedSaved(keyUid: string): boolean {
+  if (typeof localStorage === 'undefined' || !keyUid) return false;
+  try {
+    return localStorage.getItem(seedSavedKey(keyUid)) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function setSeedSaved(saved: boolean) {
   statusState.isSeedSaved = saved;
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem('stauri_seed_saved', saved ? 'true' : 'false');
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(seedSavedKey(statusState.accountKeyUid), saved ? 'true' : 'false');
+  } catch {
+    // Storage unavailable: the flag then lives only for this session.
   }
 }
 
@@ -235,5 +318,6 @@ export function resetState() {
   statusState.pendingRequestsCount = 0;
   statusState.lastMessageSignal = 0;
   statusState.pendingChatIds.clear();
+  statusState.pendingContactUpdates = [];
   statusState.isSeedSaved = false;
 }

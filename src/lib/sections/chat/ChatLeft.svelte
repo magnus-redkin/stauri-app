@@ -175,7 +175,7 @@
               >
                 <div class="flex items-center gap-2">
                   {#if item.isPendingRequest}
-                    <div class="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-lg">!</div>
+                    <div class="w-8 h-8 rounded-full bg-warning/10 text-warning flex items-center justify-center font-bold text-lg">!</div>
                   {:else if item.type === 'channel'}
                     <div class="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold">#</div>
                   {:else if item.type === 'community'}

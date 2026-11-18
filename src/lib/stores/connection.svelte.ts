@@ -14,7 +14,7 @@ import {
   waitForNodeStopped,
 } from './statusStore.svelte';
 import { invoke } from '@tauri-apps/api/core';
-import { debug, info, error } from '$lib/utils/log';
+import { debug, info, error, warn } from '$lib/utils/log';
 import { formatError, errorTag } from '$lib/utils/errors';
 import {
   startBackend,
@@ -22,6 +22,9 @@ import {
   initializeApplication,
   loginAccount,
   createAccountAndLogin,
+  restoreAccountAndLogin,
+  keyUidFromMnemonic,
+  deleteProfile,
   startMessenger,
   logout as apiLogout,
 } from '$lib/status/api';
@@ -261,6 +264,213 @@ export async function createAccount(password: string) {
   // `node.login` through the signal callback.
   await waitForLogin(30000);
 
+  const keyUid = statusState.accountKeyUid;
+  const modeChanged = await applyNetworkMode();
+  const { wroteProviders } = await configureWalletRpc();
+  if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
+
+  await startMessenger();
+}
+
+/**
+ * Turns a restore failure into something the user can act on.
+ *
+ * @param reason - Message status-go reported in the `node.login` signal.
+ * @returns A message for the restore screen.
+ * @remarks
+ * Both status-go messages mean the same thing: the profile this phrase belongs to is
+ * already in this data directory, so the restore is not a restore but a second copy.
+ * status-go refuses it, and rightly so — the databases are encrypted with a key that
+ * only the existing password unwraps. The screen promises "set a new password", which
+ * reads as if it could replace the old one; it cannot, and saying so is the whole point
+ * of this mapping. Anything else is passed through unchanged.
+ */
+function restoreFailureHint(reason: string): string {
+  if (reason.includes('keypair already added')) {
+    return 'This profile is already on this device. Enter its password to log in instead of restoring it.';
+  }
+  if (reason.includes('invalid key-encryption key')) {
+    return 'This profile is already on this device under a different password. Log in with the password you chose when the profile was created.';
+  }
+  return reason;
+}
+
+/**
+ * Raised when the phrase belongs to a profile that is already on this device but the
+ * password does not open it.
+ *
+ * @remarks
+ * A separate type rather than a message: the screen offers a destructive action on it
+ * ("remove the local copy and restore"), and matching on text would make that button
+ * appear for unrelated failures.
+ */
+export class LocalProfileLockedError extends Error {
+  /** Profile that is on the device and could not be opened. */
+  readonly keyUid: string;
+
+  constructor(keyUid: string) {
+    super('The profile on this device is protected by another password');
+    this.name = 'LocalProfileLockedError';
+    this.keyUid = keyUid;
+  }
+}
+
+/** How the restore screen ended: opened an existing profile, or created a new one. */
+export type RestoreOutcome = 'opened' | 'restored';
+
+/**
+ * Whether a failed login of a local profile means its password is wrong.
+ *
+ * @param reason - Message status-go reported in the `node.login` signal.
+ * @returns `true` for the wrong-password outcomes.
+ * @remarks
+ * Measured against the real library: a wrong password answers
+ * `failed to open database: [keystore] incorrect password provided`, and a database
+ * whose key cannot be unwrapped answers `envelope: invalid key-encryption key`.
+ *
+ * The distinction is what keeps the reset offer honest. It is destructive, so it must
+ * appear for a forgotten password and not for an unrelated failure — a stopped node, a
+ * broken library or a network problem would otherwise be answered with "delete your
+ * local copy", which would not help and could not be undone.
+ */
+function isWrongPassword(reason: string): boolean {
+  return (
+    reason.includes('incorrect password') ||
+    reason.includes('invalid key-encryption key')
+  );
+}
+
+/**
+ * Opens the profile of a seed phrase, restoring it only when it is not here yet.
+ *
+ * @param mnemonic - The twelve words, in order.
+ * @param password - Password of the local database.
+ * @returns `opened` when an existing profile was logged into, `restored` when the
+ *   profile was created from the phrase on this device.
+ *
+ * @remarks
+ * The phrase identifies the profile: the same words always derive the same key uid, so
+ * a match with a profile in `statusState.accounts` means it is already here and the way
+ * in is a login, not a restore. Calling `RestoreAccountAndLogin` in that case is what
+ * produced `keypair already added`: it creates the account, and an existing profile
+ * cannot be created twice.
+ *
+ * A profile that is here is encrypted with the password it was created with. The phrase
+ * gives the wallet and chat keys, not the key that opens the local database, so a
+ * different password cannot open it — that is why [LocalProfileLockedError] exists
+ * instead of silently retrying.
+ *
+ * @throws LocalProfileLockedError when the profile is here and the password does not
+ *   open it; the caller may offer [resetLocalProfileAndRestore].
+ */
+export async function restoreAccount(
+  mnemonic: string,
+  password: string
+): Promise<RestoreOutcome> {
+  const words = mnemonic.trim().split(/\s+/);
+  // Length only: the phrase itself never reaches the log.
+  info(`[boot] restoreAccount: words=${words.length} passwordLength=${password.length}`);
+  if (!statusState.backendRunning) {
+    error('[boot] restoreAccount: backend is not running, nothing sent');
+    return 'restored';
+  }
+  if (words.length !== 12) throw new Error('A seed phrase has twelve words');
+  if (!isWsOpen()) await openWs();
+
+  // Which profile this phrase is. Without it the two cases below cannot be told apart.
+  const phraseKeyUid = await keyUidFromMnemonic(mnemonic);
+  const local = phraseKeyUid
+    ? statusState.accounts.find((a: any) => a?.['key-uid'] === phraseKeyUid)
+    : undefined;
+
+  if (local) {
+    info('[boot] restoreAccount: profile is already on this device, logging in');
+    await traceSecret('restore-open', password);
+    try {
+      await loginAccount(password, phraseKeyUid!);
+      await waitForLogin(30000);
+    } catch (e) {
+      // status-go reports a wrong password through the `node.login` signal; the reason
+      // is in the message now that `waitForLogin` rejects with it.
+      const reason = formatError(e);
+      warn(`[boot] restoreAccount: local profile did not open: ${reason}`);
+      if (isWrongPassword(reason)) throw new LocalProfileLockedError(phraseKeyUid!);
+      // Anything else is not a password problem, and offering to delete the local copy
+      // for it would destroy data without solving anything.
+      throw new Error(reason);
+    }
+    await finishSignIn(password);
+    return 'opened';
+  }
+
+  await traceSecret('restore', password);
+  const result = await restoreAccountAndLogin(statusState.backendDataDir, password, mnemonic);
+  if (result?.error) throw new Error(result.error);
+  info('[boot] restoreAccount: RestoreAccountAndLogin ok, waiting for node.login');
+  try {
+    await waitForLogin(30000);
+  } catch (e) {
+    const reason = formatError(e);
+    warn(`[boot] restoreAccount failed: ${reason}`);
+    throw new Error(restoreFailureHint(reason));
+  }
+
+  await finishSignIn(password);
+  return 'restored';
+}
+
+/**
+ * Removes the local copy of a profile and restores it from its phrase.
+ *
+ * @param mnemonic - The twelve words of the profile to bring back.
+ * @param password - New password for the fresh local database.
+ * @returns `restored`.
+ *
+ * @remarks
+ * This is the only way to get back into a profile whose local password is forgotten:
+ * the phrase cannot open an existing database, but it can create a new one with the
+ * same keys. The wallet and the profile itself come back, since they derive from the
+ * phrase; the local message history and settings do not, and no code path can bring
+ * them back.
+ *
+ * The caller asks for confirmation first — the deletion cannot be undone.
+ *
+ * @throws Error when the phrase does not identify a profile, or when its local copy
+ *   cannot be removed.
+ */
+export async function resetLocalProfileAndRestore(
+  mnemonic: string,
+  password: string
+): Promise<RestoreOutcome> {
+  if (!statusState.backendRunning) {
+    error('[boot] resetLocalProfileAndRestore: backend is not running, nothing sent');
+    return 'restored';
+  }
+  const keyUid = await keyUidFromMnemonic(mnemonic);
+  if (!keyUid) throw new Error('The seed phrase is not valid');
+
+  info('[boot] resetLocalProfileAndRestore: deleting the local copy');
+  // The keystore lives under the profile directory, one folder per profile; `DeleteMultiaccount`
+  // removes exactly that folder together with the databases and the wrapped key.
+  const keyStoreDir = `${statusState.backendDataDir}/keystore/${keyUid}`;
+  await deleteProfile(keyUid, keyStoreDir);
+
+  // The account list still contains the deleted profile: without this the next
+  // `restoreAccount` would find it and try to log in again.
+  setAccounts(statusState.accounts.filter((a: any) => a?.['key-uid'] !== keyUid));
+
+  return restoreAccount(mnemonic, password);
+}
+
+/**
+ * Shared tail of every sign-in: network mode, providers, messenger.
+ *
+ * @param password - Password used for this session, needed by a node restart.
+ * @remarks
+ * Kept in one place because all three entry points (login, create, restore) ended with
+ * the same three steps, and they drifted apart once already.
+ */
+async function finishSignIn(password: string): Promise<void> {
   const keyUid = statusState.accountKeyUid;
   const modeChanged = await applyNetworkMode();
   const { wroteProviders } = await configureWalletRpc();

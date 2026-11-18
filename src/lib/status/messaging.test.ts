@@ -84,11 +84,21 @@ describe('hexToBase58Key', () => {
 describe('sendContactUpdates', () => {
   beforeEach(() => fetchMock.mockReset());
 
-  it('рассылает новое экранное имя (а не заглушку) через wakuext_sendContactUpdates', async () => {
+  it('передаёт имя ENS, а не экранное имя', async () => {
+    // `SendContactUpdates(ctx, ensName, profileImage, …)` in status-go reads the display
+    // name from settings itself. Passing the display name in this slot sent it to
+    // contacts as their ENS name.
     fetchMock.mockResolvedValue({} as any);
-    await sendContactUpdates('Михаил');
+    await sendContactUpdates('magnus-redkin.stateofus.eth');
     const call = fetchMock.mock.calls.at(-1)!;
     expect((call[1] as any).method).toBe('wakuext_sendContactUpdates');
-    expect((call[1] as any).params[0]).toBe('Михаил');
+    expect((call[1] as any).params[0]).toBe('magnus-redkin.stateofus.eth');
+  });
+
+  it('по умолчанию сообщает пустое имя ENS', async () => {
+    fetchMock.mockResolvedValue({} as any);
+    await sendContactUpdates();
+    const call = fetchMock.mock.calls.at(-1)!;
+    expect((call[1] as any).params[0]).toBe('');
   });
 });

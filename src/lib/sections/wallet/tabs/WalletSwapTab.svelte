@@ -142,7 +142,7 @@
 
   {:else if swapState.step === 'done'}
     <div class="space-y-4 max-w-md">
-      <div class="p-4 rounded-md border border-green-300 bg-green-50 text-green-900">
+      <div class="p-4 rounded-md border border-success/30 bg-success/10 text-success">
         <p class="font-medium">{i18n.t('Swap executed')}</p>
         {#if swapState.txHash}
           <p class="text-xs font-mono break-all mt-2">{swapState.txHash}</p>

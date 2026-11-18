@@ -954,22 +954,27 @@ export async function markChatRead(chatId: string): Promise<any> {
 }
 
 /**
- * Sends the updated display name to contacts that were already added.
+ * Pushes the profile's identity to contacts that were already added.
  *
- * @param displayName - New display name.
+ * @param ensName - The profile's ENS name; empty when it has none.
  * @returns The backend's response.
  * @remarks
- * A contact request carries the name from settings at the time it was sent, and a
- * contact that already received it keeps seeing the old name until an update
- * arrives. Call this after the name is saved to the profile.
+ * A contact request carries the identity from settings at the time it was sent, and a
+ * contact that already received it keeps the old one until an update arrives. Call this
+ * after the name is saved to the profile, and after an ENS name is registered.
+ *
+ * The parameter is the *ENS* name, not the display name: `SendContactUpdates(ctx,
+ * ensName, profileImage, …)` in status-go reads the display name from settings itself
+ * (`m.settings.DisplayName()`). Passing the display name here sent it to contacts as an
+ * ENS name, which is why nobody received the right value for either field.
  */
-export async function sendContactUpdates(displayName: string): Promise<any> {
+export async function sendContactUpdates(ensName = ''): Promise<any> {
   return await statusFetch('CallRPC', {
     jsonrpc: '2.0',
     id: 1,
     method: 'wakuext_sendContactUpdates',
-    // status-go arguments: name, picture, customizationColor (as at profile creation).
-    params: [displayName, '', 'primary'],
+    // status-go arguments: ensName, profileImage, customizationColor.
+    params: [ensName, '', 'primary'],
   });
 }
 

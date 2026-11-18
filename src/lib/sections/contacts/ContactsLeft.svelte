@@ -63,7 +63,7 @@
                 {i18n.t('Accept')}
               </button>
             {:else if contact.mutual}
-              <span class="text-xs text-green-600">✓</span>
+              <span class="text-xs text-success">✓</span>
             {/if}
           </div>
         {/each}

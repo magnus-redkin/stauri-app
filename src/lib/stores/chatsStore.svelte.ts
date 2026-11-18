@@ -45,6 +45,13 @@ export const chatsState = $state({
   items: [] as ChatItem[],
   contacts: [] as any[],
   communities: [] as Community[],
+  /**
+   * Raw replies the current list was built from.
+   *
+   * Kept so a rename can rebuild the list without three network calls: names
+   * come from the contacts, everything else is unchanged.
+   */
+  previews: [] as any[],
   selected: null as ChatItem | null,
   loaded: false,
   isLoading: false,
@@ -248,6 +255,7 @@ export async function loadChats(force = false): Promise<void> {
 
       chatsState.contacts = contactsRes.result || [];
       chatsState.communities = communities;
+      chatsState.previews = previews;
       chatsState.items = buildItems(previews, chatsState.contacts, communities);
 
       info(`[chats] items after merge: ${chatsState.items.length}`);
@@ -823,7 +831,54 @@ export async function leaveCommunityById(
   }
 }
 
+/**
+ * Rebuilds the chat list after the contact list changed.
+ *
+ * @param contacts - Fresh `wakuext_contacts` reply.
+ * @remarks
+ * A contact's display name is not part of a chat record: it arrives with the
+ * contact update and lands in the contacts table. The list is built from those
+ * names, so without this call a rename by the other side stays invisible until a
+ * full reload. Only the displayed names change here; no RPC is made.
+ */
+export function applyContacts(contacts: any[]): void {
+  chatsState.contacts = contacts;
+  if (!chatsState.loaded) return;
+  chatsState.items = buildItems(chatsState.previews, contacts, chatsState.communities);
+
+  // The open conversation is a copy of a list row, not a live reference: without
+  // replacing it the header keeps the old name after a rename.
+  const openId = chatsState.selected?.id;
+  if (openId) {
+    const fresh = chatsState.items.find((c) => c.id === openId);
+    if (fresh) chatsState.selected = fresh;
+  }
+}
+
+/**
+ * Merges contacts delivered inside a `messages.new` signal and rebuilds the list.
+ *
+ * @param incoming - Contact records from `event.contacts`.
+ * @remarks
+ * This is the immediate path for a rename made by the other side: status-go puts the
+ * changed contact record into the signal, so the new name is already here and no RPC is
+ * needed. Before this, a rename was visible only at the next `wakuext_contacts` poll.
+ *
+ * The list is merged rather than replaced: the signal carries only what changed, and
+ * replacing would drop every name it did not mention. `applyContacts` then rebuilds the
+ * list and the open conversation, the same way a full reload does.
+ */
+export function mergeSignalContacts(incoming: any[]): void {
+  if (incoming.length === 0) return;
+  const byId = new Map<string, any>(chatsState.contacts.map((c: any) => [String(c.id), c]));
+  for (const contact of incoming) {
+    if (contact?.id) byId.set(String(contact.id), contact);
+  }
+  applyContacts([...byId.values()]);
+}
+
 export function resetChats() {
+  chatsState.previews = [];
   chatsState.items = [];
   chatsState.contacts = [];
   chatsState.communities = [];

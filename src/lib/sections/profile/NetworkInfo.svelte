@@ -52,14 +52,14 @@
 
   {#if statusState.isTestnet}
     <div class="pt-2">
-      <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.5625rem] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">
+      <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.5625rem] font-medium bg-warning/10 text-warning">
         <span>⚠️</span>
         <span>Testnet</span>
       </div>
     </div>
   {:else}
     <div class="pt-2">
-      <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.5625rem] font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+      <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.5625rem] font-medium bg-success/10 text-success">
         <span>🟢</span>
         <span>Mainnet</span>
       </div>

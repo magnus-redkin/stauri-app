@@ -66,7 +66,7 @@
                   </div>
                 </td>
                 <td class="px-4 py-4 text-right font-mono">{formatUsd(coin.current_price)}</td>
-                <td class="px-4 py-4 text-right font-mono {coin.price_change_percentage_24h && coin.price_change_percentage_24h >= 0 ? 'text-green-600' : 'text-red-500'}">
+                <td class="px-4 py-4 text-right font-mono {coin.price_change_percentage_24h && coin.price_change_percentage_24h >= 0 ? 'text-success' : 'text-destructive'}">
                   {#if coin.price_change_percentage_24h !== null}
                     {coin.price_change_percentage_24h >= 0 ? '▲' : '▼'}
                     {Math.abs(coin.price_change_percentage_24h).toFixed(2)}%

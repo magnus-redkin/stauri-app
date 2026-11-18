@@ -36,13 +36,13 @@
   {#each navItems as item (item.id)}
     <div class="relative group">
       <button
-        class="p-3 rounded-lg transition-colors {activeSection === item.id ? 'bg-primary text-primary-foreground shadow-md' : 'hover:bg-black/5 text-muted-foreground'}"
+        class="p-3 rounded-lg transition-colors {activeSection === item.id ? 'bg-primary text-primary-foreground shadow-md' : 'hover:bg-foreground/5 text-muted-foreground'}"
         onclick={() => { activeSection = item.id; onSelect?.(item.id); }}
       >
         <item.icon size={22} />
 
         {#if item.id === 'chat' && statusState.pendingRequestsCount > 0}
-          <span class="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[0.625rem] font-bold text-white">
+          <span class="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[0.625rem] font-bold text-destructive-foreground">
             {statusState.pendingRequestsCount}
           </span>
         {/if}
@@ -58,7 +58,7 @@
 
   <div class="relative group">
     <button
-      class="p-3 rounded-lg transition-colors {activeSection === 'settings' ? 'bg-primary text-primary-foreground shadow-md' : 'hover:bg-black/5 text-muted-foreground'}"
+      class="p-3 rounded-lg transition-colors {activeSection === 'settings' ? 'bg-primary text-primary-foreground shadow-md' : 'hover:bg-foreground/5 text-muted-foreground'}"
       onclick={() => { activeSection = 'settings'; onSelect?.('settings'); }}
     >
       <Settings size={22} />

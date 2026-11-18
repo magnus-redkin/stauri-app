@@ -67,6 +67,23 @@ pub struct InProcessBackend {
     initialize: CStrFn,
     login: CStrFn,
     create_and_login: CStrFn,
+    restore_and_login: CStrFn,
+    /// Re-wraps the profile's encryption key with a new password.
+    ///
+    /// A direct export rather than an RPC method: `ChangeDatabasePasswordV2` is not
+    /// part of any RPC namespace, so it is called like `LoginAccount`.
+    ///
+    /// `None` on a build that does not export it; the caller then reports that the
+    /// password cannot be changed instead of failing to load the library at all.
+    change_password: Option<CStrFn>,
+    /// Derives the profile key uid from a seed phrase.
+    ///
+    /// The restore screen needs it to tell "first time on this device" from "this
+    /// profile is already here": the same phrase always yields the same key uid, so a
+    /// match means the profile exists and the way in is a login, not a restore.
+    validate_mnemonic: Option<CStrFn>,
+    /// Removes a profile from this device: its database, keystore and wrapped key.
+    delete_multiaccount: Option<CStrFn>,
     logout: unsafe extern "C" fn() -> *mut c_char,
     set_signal_callback: Option<SetSignalFn>,
 }
@@ -228,6 +245,27 @@ impl InProcessBackend {
             let create_and_login: Symbol<CStrFn> = lib
                 .get(b"CreateAccountAndLogin\0")
                 .map_err(|e| AppError::internal(format!("no CreateAccountAndLogin: {e}")))?;
+            let restore_and_login: Symbol<CStrFn> = lib
+                .get(b"RestoreAccountAndLogin\0")
+                .map_err(|e| AppError::internal(format!("no RestoreAccountAndLogin: {e}")))?;
+            // Optional: only builds that ship the DEK encryption scheme export it, and
+            // the profile screen keeps the password field hidden when it is missing
+            // rather than failing at the moment the user presses the button.
+            let change_password = lib
+                .get::<CStrFn>(b"ChangeDatabasePasswordV2\0")
+                .ok()
+                .map(|s| *s);
+            // Both are optional for the same reason: a library built without the
+            // profile-management exports still runs, it just cannot offer the
+            // "open an existing profile from its phrase" path.
+            let validate_mnemonic = lib
+                .get::<CStrFn>(b"ValidateMnemonicV2\0")
+                .ok()
+                .map(|s| *s);
+            let delete_multiaccount = lib
+                .get::<CStrFn>(b"DeleteMultiaccount\0")
+                .ok()
+                .map(|s| *s);
             let logout: Symbol<unsafe extern "C" fn() -> *mut c_char> = lib
                 .get(b"Logout\0")
                 .map_err(|e| AppError::internal(format!("no Logout: {e}")))?;
@@ -245,6 +283,8 @@ impl InProcessBackend {
             let initialize = *initialize;
             let login = *login;
             let create_and_login = *create_and_login;
+            let restore_and_login = *restore_and_login;
+            // `change_password` is already an owned `Option<CStrFn>`, so it needs no copy.
             let logout = *logout;
 
             Ok(Self {
@@ -253,6 +293,10 @@ impl InProcessBackend {
                 initialize,
                 login,
                 create_and_login,
+                restore_and_login,
+                change_password,
+                validate_mnemonic,
+                delete_multiaccount,
                 logout,
                 set_signal_callback,
             })
@@ -341,6 +385,25 @@ impl InProcessBackend {
             "InitializeApplication" => self.invoke(self.initialize, body_json),
             "LoginAccount" => self.invoke(self.login, body_json),
             "CreateAccountAndLogin" => self.invoke(self.create_and_login, body_json),
+            "RestoreAccountAndLogin" => self.invoke(self.restore_and_login, body_json),
+            "ChangeDatabasePasswordV2" => {
+                let f = self.change_password.ok_or_else(|| {
+                    AppError::internal("status-go does not export ChangeDatabasePasswordV2")
+                })?;
+                self.invoke(f, body_json)
+            }
+            "ValidateMnemonicV2" => {
+                let f = self.validate_mnemonic.ok_or_else(|| {
+                    AppError::internal("status-go does not export ValidateMnemonicV2")
+                })?;
+                self.invoke(f, body_json)
+            }
+            "DeleteMultiaccount" => {
+                let f = self.delete_multiaccount.ok_or_else(|| {
+                    AppError::internal("status-go does not export DeleteMultiaccount")
+                })?;
+                self.invoke(f, body_json)
+            }
             "Logout" => self.logout(),
             "CallRPC" => self.invoke(self.call_rpc, body_json),
             other => Err(AppError::internal(format!(

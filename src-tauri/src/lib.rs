@@ -30,6 +30,7 @@ mod invite;
 mod logging;
 mod market;
 mod opener;
+mod profile;
 mod providers;
 mod router;
 mod rpc_proxy;
@@ -117,10 +118,14 @@ pub fn run() {
             seed::seed_challenge,
             seed::verify_seed_answer,
             seed::clear_seed,
+            profile::store_avatar,
+            profile::get_avatar,
+            profile::change_password,
             invite::parse_invite_link,
             providers::fetch_feed,
             opener::open_external,
             dapp::open_dapp,
+            dapp::open_doc,
             transfer::send_transfer,
             transfer::estimate_transfer_fee,
             ens::get_ens_quote,

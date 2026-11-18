@@ -163,4 +163,66 @@ describe('Status API', () => {
       expect(api.isReply(undefined)).toBe(false);
     });
   });
+
+  describe('keyUidFromMnemonic', () => {
+    it('возвращает keyUID для правильной фразы', async () => {
+      vi.mocked(http.statusCall).mockResolvedValue({ keyUID: '0xabc' });
+
+      await expect(api.keyUidFromMnemonic('one two three')).resolves.toBe('0xabc');
+      expect(http.statusCall).toHaveBeenCalledWith('ValidateMnemonicV2', { mnemonic: 'one two three' });
+    });
+
+    it('нормализует пробелы и регистр перед отправкой', async () => {
+      // status-go matches words case-sensitively against its word list: the phrase
+      // typed with capitals or double spaces must still resolve to the same profile.
+      vi.mocked(http.statusCall).mockResolvedValue({ keyUID: '0xabc' });
+
+      await api.keyUidFromMnemonic('  One   TWO three \n');
+
+      expect(http.statusCall).toHaveBeenCalledWith('ValidateMnemonicV2', { mnemonic: 'one two three' });
+    });
+
+    it('возвращает null, когда бэкенд отверг фразу', async () => {
+      // `error` in the reply body is how this export reports a bad mnemonic; it does
+      // not throw, so the caller gets null instead of an exception.
+      vi.mocked(http.statusCall).mockResolvedValue({ error: 'invalid mnemonic' });
+
+      await expect(api.keyUidFromMnemonic('bad words')).resolves.toBeNull();
+    });
+
+    it('возвращает null, когда вызов упал', async () => {
+      // A wrong phrase is an ordinary typing outcome, not a failure to surface.
+      vi.mocked(http.statusCall).mockRejectedValue(new Error('boom'));
+
+      await expect(api.keyUidFromMnemonic('bad words')).resolves.toBeNull();
+    });
+
+    it('возвращает null без keyUID в ответе', async () => {
+      vi.mocked(http.statusCall).mockResolvedValue({});
+
+      await expect(api.keyUidFromMnemonic('one two three')).resolves.toBeNull();
+    });
+  });
+
+  describe('deleteProfile', () => {
+    it('передаёт keyUID и каталог keystore', async () => {
+      vi.mocked(http.statusCall).mockResolvedValue({ error: '' });
+
+      await api.deleteProfile('0xabc', '/data/keystore/0xabc');
+
+      expect(http.statusCall).toHaveBeenCalledWith('DeleteMultiaccount', {
+        keyUID: '0xabc',
+        keyStoreDir: '/data/keystore/0xabc',
+      });
+    });
+
+    it('пробрасывает ошибку бэкенда, не считая её успехом', async () => {
+      // The export answers `{"error": ""}` on success, so a non-empty `error` must
+      // stop the restore: continuing would then try to log into a profile that is
+      // still locked by the old password.
+      vi.mocked(http.statusCall).mockResolvedValue({ error: 'keystore is in use' });
+
+      await expect(api.deleteProfile('0xabc', '/tmp')).rejects.toThrow('keystore is in use');
+    });
+  });
 });

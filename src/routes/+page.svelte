@@ -20,13 +20,15 @@
     changeNetwork,
     login,
     createAccount,
+    restoreAccount,
+    resetLocalProfileAndRestore,
     disconnect
   } from '$lib/stores/connectionStore.svelte';
 
-  import { resetContacts, loadContacts } from '$lib/stores/contactsStore.svelte';
+  import { contactsState, resetContacts, loadContacts, mergeContacts } from '$lib/stores/contactsStore.svelte';
   import { getChats } from '$lib/status/messaging';
   import { scenarioLog, short } from '$lib/utils/scenario';
-  import { chatsState, loadChats, selectChat, resetChats, setRightPanel } from '$lib/stores/chatsStore.svelte';
+  import { chatsState, loadChats, selectChat, resetChats, setRightPanel, applyContacts, mergeSignalContacts } from '$lib/stores/chatsStore.svelte';
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
   import { loadFeeds, resetFeeds } from '$lib/stores/feedsStore.svelte';
@@ -55,6 +57,12 @@
   } from '$lib/stores/walletStore.svelte';
   import { resetSend } from '$lib/stores/sendStore.svelte';
   import { resetEns } from '$lib/stores/ensStore.svelte';
+  import {
+    ensureProfileAvatar,
+    setProfileAvatar,
+    setSessionPassword,
+    clearSessionPassword,
+  } from '$lib/stores/profileStore.svelte';
 
   // UI
   import { PaneGroup, Pane, PaneResizer } from "paneforge";
@@ -63,6 +71,8 @@
   import RecoveryScreen from '$lib/sections/auth/RecoveryScreen.svelte';
 
   import HomeMain from "$lib/sections/home/HomeMain.svelte";
+  import HomeLeft from "$lib/sections/home/HomeLeft.svelte";
+  import type { TopicId } from "$lib/sections/home/homeTopics";
   import ProfileLeft from "$lib/sections/profile/ProfileLeft.svelte";
   import EditProfile from "$lib/sections/profile/EditProfile.svelte";
   import CreateSeed from "$lib/sections/profile/CreateSeed.svelte";
@@ -95,6 +105,9 @@
   }
 
   let activeSection = $state('home');
+  // Open topic of the About menu on Home; the right panel follows it.
+  // null: Home shows only the two main buttons.
+  let homeTopic = $state<TopicId | null>(null);
   // Mobile layout uses a single panel and a bottom bar; the breakpoint is window width (≤ 768px).
   let isMobile = $state(false);
   // Which section panel the mobile layout shows: left or right.
@@ -247,6 +260,25 @@
   });
 
   /**
+   * Loads the profile picture after login.
+   *
+   * @remarks
+   * The left column shows the picture in every section, not only in the profile, so it
+   * has to be fetched once a profile is open. `ensureProfileAvatar` is idempotent and
+   * keeps the result in one store, which is what makes an upload visible in both panes.
+   *
+   * `untrack` is required: the call writes `profileAvatarState`, and an effect that
+   * reads state it also changes would restart itself.
+   */
+  $effect(() => {
+    const loggedIn = statusState.isLoggedIn;
+    if (!loggedIn) return;
+    untrack(() => {
+      ensureProfileAvatar();
+    });
+  });
+
+  /**
    * Loads the chat list when entering the Chat section.
    *
    * @remarks
@@ -287,6 +319,10 @@
     const tick = () => untrack(async () => {
       if (!statusState.backendRunning) return;
       await loadContacts(true);
+      // Names in the list come from the contacts, and a contact update from the
+      // other side changes them without touching any chat record. Rebuilding the
+      // list from the fresh contacts shows the new name without a reload.
+      applyContacts(contactsState.items);
       const chats = await getChats();
       const changed: string[] = [];
       for (const c of chats) {
@@ -312,6 +348,29 @@
     tick();
     const id = setInterval(tick, 10_000);
     return () => clearInterval(id);
+  });
+
+  /**
+   * Applies contact records that arrived inside a `messages.new` signal.
+   *
+   * @remarks
+   * A rename by the other side is a contact update, and status-go ships the changed
+   * record with the signal (`event.contacts`). Applying it here is what makes the new
+   * name appear at once, in every section: before this it waited for the 10-second poll,
+   * and the user saw the old name in the chat list and in the open conversation.
+   *
+   * The queue is read and emptied inside `untrack`: the merge writes `contactsState` and
+   * `chatsState`, and an effect that reads state it changes restarts itself.
+   */
+  $effect(() => {
+    if (statusState.pendingContactUpdates.length === 0) return;
+    untrack(() => {
+      const incoming = statusState.pendingContactUpdates;
+      statusState.pendingContactUpdates = [];
+      mergeContacts(incoming);
+      mergeSignalContacts(incoming);
+      scenarioLog('reply-sync', 'contact-signal', { count: incoming.length });
+    });
   });
 
   /**
@@ -431,10 +490,66 @@
 
     try {
       await login(password, selectedAccountKeyUid);
+      // The user is expected to remember the seed phrase, not the password. Keeping it
+      // for the session means the profile screen never has to ask for it again.
+      setSessionPassword(password);
       activeSection = 'home';
     } catch (e: any) {
       statusState.errorMsg = `Login failed: ${formatError(e)}`;
     }
+  }
+
+  /**
+   * Opens or restores a profile from its seed phrase.
+   *
+   * Errors are rethrown: the recovery screen shows them next to the button, so
+   * a wrong word or a rejected phrase is not hidden behind a generic message. A
+   * `LocalProfileLockedError` is one of them — it is what turns on the screen's offer
+   * to drop the local copy, so it must reach it unchanged.
+   *
+   * @param mnemonic - Twelve words in order.
+   * @param password - Password for the local database.
+   */
+  async function handleRestoreAccount(mnemonic: string, password: string): Promise<void> {
+    info('[boot] handleRestoreAccount called');
+    const outcome = await restoreAccount(mnemonic, password);
+    info(`[boot] handleRestoreAccount: ${outcome}`);
+    finishSignInUi(password);
+  }
+
+  /**
+   * Removes the local copy of the profile and restores it from the phrase.
+   *
+   * Reached only from the recovery screen's confirmation block, after it saw the
+   * local profile refuse the password. The message history and settings of this
+   * device are gone afterwards; wallet and profile return from the phrase.
+   *
+   * @param mnemonic - Twelve words in order.
+   * @param password - New password for the fresh local database.
+   */
+  async function handleResetProfile(mnemonic: string, password: string): Promise<void> {
+    info('[boot] handleResetProfile called');
+    const outcome = await resetLocalProfileAndRestore(mnemonic, password);
+    info(`[boot] handleResetProfile: ${outcome}`);
+    finishSignInUi(password);
+  }
+
+  /**
+   * Shared tail of both restore paths: select the profile and leave the auth screens.
+   *
+   * The selected key comes from the signed-in profile rather than from the list:
+   * after a reset the list is rewritten, and its first entry is not necessarily the
+   * one just restored.
+   *
+   * @param password - Password of this session, kept for the profile screen.
+   */
+  function finishSignInUi(password: string): void {
+    selectedAccountKeyUid =
+      statusState.accountKeyUid || statusState.accounts[0]?.['key-uid'] || '';
+    // Same reason as in handleLogin: the user remembers the phrase, not the password.
+    setSessionPassword(password);
+    showRecovery = false;
+    activeSection = 'home';
   }
 
   async function handleCreateAccount(password: string) {
@@ -504,6 +619,10 @@
     // on sign-out, otherwise the next profile on this machine inherits the previous
     // one's password in tab memory.
     resetSend();
+    // The password kept for the profile screen is the same kind of secret: the next
+    // profile on this machine must not inherit it.
+    clearSessionPassword();
+    setProfileAvatar(null);
     // Name registration state belongs to the profile: a foreign name in the field and
     // a foreign owner on screen must not be shown after an account switch.
     resetEns();
@@ -583,7 +702,9 @@
 
     {#snippet leftPane()}
       <SectionPane>
-        {#if activeSection === 'home' || activeSection === 'profile'}
+        {#if activeSection === 'home'}
+          <HomeLeft active={homeTopic} onSelect={(id) => (homeTopic = id)} />
+        {:else if activeSection === 'profile'}
    <ProfileLeft
      onDisconnect={handleDisconnect}
      onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
@@ -610,7 +731,7 @@
     {#snippet rightPane()}
       <SectionPane>
  {#if activeSection === 'home'}
-   <HomeMain onNavigate={(s) => activeSection = s} />
+   <HomeMain topic={homeTopic} onNavigate={(s) => activeSection = s} />
         {:else if activeSection === 'profile'}
           {#if showCreateSeed}
      <CreateSeed
@@ -634,7 +755,7 @@ onSave={() => {
  {:else if activeSection === 'dapps'}
           <DappsMain onOpenChat={handleOpenChat} />
  {:else}
-          <HomeMain onNavigate={(s) => activeSection = s} />
+          <HomeMain topic={homeTopic} onNavigate={(s) => activeSection = s} />
         {/if}
       </SectionPane>
     {/snippet}
@@ -642,7 +763,7 @@ onSave={() => {
 <div class="min-h-screen bg-background">
   <!-- Testnet banner -->
   {#if statusState.isTestnet}
-    <div class="bg-orange-500 text-white text-center py-2 px-4 font-semibold text-sm">
+    <div class="bg-warning text-warning-foreground text-center py-2 px-4 font-semibold text-sm">
       ⚠️ {statusState.networkName.toUpperCase()} TESTNET MODE — All balances and transactions are on testnets.
     </div>
   {/if}
@@ -659,10 +780,8 @@ onSave={() => {
     {#if showRecovery}
       <RecoveryScreen
         onBack={() => showRecovery = false}
-        onLogin={() => {
-          alert("Recovery not implemented yet.");
-          showRecovery = false;
-        }}
+        onRestore={handleRestoreAccount}
+        onReset={handleResetProfile}
       />
     {:else}
       <MainEntryScreen

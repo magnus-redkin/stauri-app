@@ -59,7 +59,7 @@
           <p class="text-xs text-muted-foreground mt-2">
             {i18n.t('Network')}: <span class="font-medium text-foreground">{statusState.networkName}</span>
             {#if statusState.isTestnet}
-              <span class="text-orange-600">({i18n.t('testnet')})</span>
+              <span class="text-warning">({i18n.t('testnet')})</span>
             {/if}
           </p>
         {/if}

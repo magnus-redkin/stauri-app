@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { debug } from '$lib/utils/log';
+import { formatError } from '$lib/utils/errors';
 import { INFURA_KEY, STATUS_LOG_LEVEL, STATUS_LOG_FILE } from '$lib/config/keys';
-import { statusFetch } from "./http";
+import { statusFetch, statusCall } from "./http";
 import type { StartBackendResponse } from "./types";
 
 debug('[api] INFURA_KEY loaded:', !!INFURA_KEY);
@@ -138,6 +139,85 @@ export async function createAccountAndLogin(
   return await statusFetch("CreateAccountAndLogin", payload);
 }
 
+
+/**
+ * Derives the profile key uid from a seed phrase.
+ *
+ * @param mnemonic - The twelve words, in order.
+ * @returns The key uid, or `null` when the phrase is not a valid mnemonic.
+ * @remarks
+ * The same phrase always yields the same key uid, and it matches the one a profile on
+ * this device has. That is what tells "first time here" from "already here", which
+ * decides between restoring and logging in.
+ */
+export async function keyUidFromMnemonic(mnemonic: string): Promise<string | null> {
+  const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
+  try {
+    const reply = await statusCall<{ keyUID?: string; error?: string }>(
+      'ValidateMnemonicV2',
+      { mnemonic: normalized }
+    );
+    if (reply?.error) return null;
+    return reply?.keyUID || null;
+  } catch (e) {
+    // An invalid phrase is an ordinary outcome of typing, not a failure to report.
+    debug('[Restore] phrase rejected:', formatError(e));
+    return null;
+  }
+}
+
+/**
+ * Removes a profile from this device.
+ *
+ * @param keyUid - Profile to delete.
+ * @param keyStoreDir - Its keystore directory.
+ * @remarks
+ * This is a reset of the local copy, not of the account: the seed phrase still
+ * restores the same keys and wallet, but the local message database and settings are
+ * gone. Only called with explicit confirmation.
+ */
+export async function deleteProfile(keyUid: string, keyStoreDir: string): Promise<void> {
+  const reply = await statusCall<{ error?: string }>('DeleteMultiaccount', {
+    keyUID: keyUid,
+    keyStoreDir,
+  });
+  if (reply?.error) throw new Error(reply.error);
+}
+
+/**
+ * Restores a profile from its seed phrase and logs in.
+ *
+ * @param dataDir - Profile directory of this network (same as at creation).
+ * @param password - New local password; it encrypts the restored database and
+ *   need not match the one the profile had before.
+ * @param mnemonic - The twelve words, in order.
+ * @returns The reply of `RestoreAccountAndLogin`.
+ * @remarks
+ * The account keeps its key pair: the seed phrase derives the same keys, so the
+ * profile, its contacts and its wallet address come back. Only the local
+ * database is new, which is why a new password is accepted.
+ */
+export async function restoreAccountAndLogin(
+  dataDir: string,
+  password: string,
+  mnemonic: string
+): Promise<any> {
+  const payload: Record<string, any> = {
+    rootDataDir: dataDir,
+    displayName: "Stauri User",
+    password,
+    mnemonic: mnemonic.trim().toLowerCase().replace(/\s+/g, ' '),
+    customizationColor: "primary",
+    thirdpartyServicesEnabled: true,
+    statusProxyStageName: 'prod',
+    ...loggingConfig(dataDir),
+    ...walletConfig(),
+    ...walletSecrets(),
+  };
+  // Length only; the words themselves must never reach a log.
+  debug('[RestoreAccount] words:', payload.mnemonic.split(' ').length);
+  return await statusFetch("RestoreAccountAndLogin", payload);
+}
 
 export async function startBackend(network?: string): Promise<StartBackendResponse> {
   return await invoke<StartBackendResponse>('start_backend', { network });

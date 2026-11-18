@@ -56,9 +56,9 @@
       </div>
 
       {#if contactsState.selected.mutual}
-        <p class="text-sm text-green-600">✓ {i18n.t('Contact is mutual')}</p>
+        <p class="text-sm text-success">✓ {i18n.t('Contact is mutual')}</p>
       {:else if isIncomingRequest(contactsState.selected)}
-        <p class="text-sm text-orange-600">⚠️ {i18n.t('Contact request pending')}</p>
+        <p class="text-sm text-warning">⚠️ {i18n.t('Contact request pending')}</p>
       {/if}
 
       {#if contactsState.selected.mutual || isIncomingRequest(contactsState.selected)}
@@ -71,10 +71,10 @@
       {/if}
 
       <div class="pt-4 border-t border-border space-y-2">
-        <button onclick={handleRemove} class="w-full py-2 border border-red-300 text-red-600 rounded-md text-sm hover:bg-red-50">
+        <button onclick={handleRemove} class="w-full py-2 border border-destructive/30 text-destructive rounded-md text-sm hover:bg-destructive/10">
           {i18n.t('Remove Contact')}
         </button>
-        <button onclick={handleBlock} class="w-full py-2 border border-red-300 text-red-600 rounded-md text-sm hover:bg-red-50">
+        <button onclick={handleBlock} class="w-full py-2 border border-destructive/30 text-destructive rounded-md text-sm hover:bg-destructive/10">
           {i18n.t('Block User')}
         </button>
       </div>
