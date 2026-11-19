@@ -158,7 +158,13 @@
 
 <div class="flex flex-col items-center justify-center min-h-screen gap-6 p-4 bg-background">
   <button
-    onclick={onBack}
+    onclick={() => {
+      // The twelve words are the profile, in clear, in a component's state. Leaving the
+      // screen is the moment to drop them: the component unmounts a moment later, but the
+      // array would otherwise survive until then — and no screen needs it after this.
+      words = Array(12).fill('');
+      onBack();
+    }}
     class="self-start text-sm text-muted-foreground hover:underline flex items-center gap-1"
   >
     ← {i18n.t('Back')}

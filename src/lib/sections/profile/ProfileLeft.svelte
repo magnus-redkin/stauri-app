@@ -11,13 +11,22 @@
     displayName = "Tauri User",
     onDisconnect,
     onCreateSeed,
-    onEditProfile
+    onEditProfile,
+    onSendProfile
   }: {
     displayName?: string,
     onDisconnect?: () => void,
     onCreateSeed?: () => void,
     /** Opens profile editing (the only route to it in the app). */
-    onEditProfile?: () => void
+    onEditProfile?: () => void,
+    /**
+     * Opens the pairing screen as the sending side.
+     *
+     * @remarks
+     * Sending needs a logged-in profile — the keys are what travels — so the entry point
+     * lives here rather than on the login screen.
+     */
+    onSendProfile?: () => void
   } = $props();
 
   let copiedProfileId = $state(false);
@@ -150,6 +159,18 @@
               ⚠️ {i18n.t('Seed-фраза не сохранена')}
           </button>
         {/if}
+
+        <!--
+          Copying the profile to another device. Shown always: pairing is how a second
+          device is set up, and hiding it behind a menu would make the feature invisible
+          to the person who needs it.
+        -->
+        <button
+          onclick={() => onSendProfile?.()}
+          class="w-full p-2 border border-border rounded-md text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+        >
+          {i18n.t("Show this device's code")}
+        </button>
       </div>
     {/if}
   </ScrollArea>

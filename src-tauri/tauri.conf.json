@@ -4,9 +4,9 @@
   "version": "0.4.1",
   "identifier": "com.magnus.stauri-app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "bash scripts/sync-android-native.sh && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "bash scripts/sync-android-native.sh && pnpm build",
     "frontendDist": "../build"
   },
   "app": {

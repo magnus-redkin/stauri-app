@@ -19,6 +19,12 @@ set -euo pipefail
 
 ADB="${ADB:-$HOME/Android/sdk/platform-tools/adb}"
 APP_ID="com.magnus.stauri_app"
+# Одна сборка на телефоне. Раньше отладочная ставилась рядом под суффиксом `.debug`,
+# и скрипт чистил только релизную: после `reset-test-clients.sh SA` на телефоне
+# оставался профиль второй копии, а рестарт показывал совсем не тот экран.
+# Суффикс убран, но проверка осталась: устройство, где ещё лежит старая отладочная
+# копия, иначе снова очистилось бы наполовину.
+LEGACY_APP_IDS=("com.magnus.stauri_app.debug")
 SD_DIRS=("$HOME/.local/share/com.magnus.stauri-app" "$HOME/.config/com.magnus.stauri-app")
 SIM_DIR="${SIM_DIR:-/home/michael/ETH/ImStatus/data_for_sim}"
 
@@ -79,10 +85,22 @@ if has SA; then
     say "телефон не подключён: пропускаю"
   elif (( DRY )); then
     say "будет выполнено: pm clear $APP_ID"
+    for legacy in "${LEGACY_APP_IDS[@]}"; do
+      say "если установлен, будет очищен: pm clear $legacy"
+    done
   else
     "$ADB" shell am force-stop "$APP_ID" || true
     "$ADB" shell pm clear "$APP_ID"
     say "данные приложения очищены (pm clear)"
+    # A profile left behind by an old build is the reason a "clean" run showed the
+    # wrong screen; clearing it is the whole point of the command.
+    for legacy in "${LEGACY_APP_IDS[@]}"; do
+      if "$ADB" shell pm path "$legacy" >/dev/null 2>&1; then
+        "$ADB" shell am force-stop "$legacy" || true
+        "$ADB" shell pm clear "$legacy" >/dev/null
+        say "данные $legacy очищены"
+      fi
+    done
   fi
 fi
 

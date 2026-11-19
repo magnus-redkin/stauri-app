@@ -186,6 +186,21 @@ pub async fn open_dapp(_url: String) -> AppResult<String> {
     Err(AppError::internal("dApp windows are not available on mobile yet"))
 }
 
+/// Opens a bundled document in a separate window.
+///
+/// Mobile has no second window to put it in, so the command answers with an error
+/// rather than being registered only on the desktop: the same frontend bundle runs on
+/// both, and an unregistered command fails in the webview with a message that says
+/// nothing about why.
+///
+/// # Errors
+/// Always returns [`crate::error::ErrorKind::Internal`].
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn open_doc(_name: String) -> AppResult<String> {
+    Err(AppError::internal("document windows are not available on mobile yet"))
+}
+
 /// Evaluates a navigation call inside the foreign page.
 ///
 /// See [`open_dapp`] for why the call goes through `eval` instead of a native

@@ -29,6 +29,12 @@ use crate::error::{AppError, AppResult};
 
 /// Signatures from `mobile/status.go`: one string in, one string out.
 type CStrFn = unsafe extern "C" fn(*mut c_char) -> *mut c_char;
+/// Two strings in, one string out.
+///
+/// The local-pairing clients take a connection string *and* a config
+/// (`InputConnectionStringForBootstrapping(cs, configJSON string) string`), so
+/// they need their own signature rather than {@link CStrFn}.
+type CStr2Fn = unsafe extern "C" fn(*mut c_char, *mut c_char) -> *mut c_char;
 /// `void SetSignalEventCallback(void* cb)`: the argument is a C function pointer.
 type SetSignalFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 
@@ -84,6 +90,30 @@ pub struct InProcessBackend {
     validate_mnemonic: Option<CStrFn>,
     /// Removes a profile from this device: its database, keystore and wrapped key.
     delete_multiaccount: Option<CStrFn>,
+    /// Local pairing, sending side: starts a server that hands the profile out.
+    ///
+    /// The device must be logged in — the keys are what it is sending. The call
+    /// returns a connection string for the other device to read.
+    connection_string_sender: Option<CStrFn>,
+    /// Local pairing, receiving side: starts a server that takes a profile in.
+    ///
+    /// Used by a device that is logged out or has no profile yet. Also returns a
+    /// connection string.
+    connection_string_receiver: Option<CStrFn>,
+    /// Local pairing, receiving side as a client: consumes a connection string.
+    ///
+    /// The device is logged out; the profile arrives from the other device and is
+    /// stored here.
+    bootstrap_receiver: Option<CStr2Fn>,
+    /// Local pairing, sending side as a client: consumes a connection string.
+    ///
+    /// The device is logged in and pushes its profile to the other one.
+    bootstrap_sender: Option<CStr2Fn>,
+    /// Checks a connection string without starting anything.
+    ///
+    /// The screens call it before a scan or a paste is accepted, so a mistyped
+    /// string is reported as such instead of failing halfway through a transfer.
+    validate_connection_string: Option<CStrFn>,
     logout: unsafe extern "C" fn() -> *mut c_char,
     set_signal_callback: Option<SetSignalFn>,
 }
@@ -266,6 +296,29 @@ impl InProcessBackend {
                 .get::<CStrFn>(b"DeleteMultiaccount\0")
                 .ok()
                 .map(|s| *s);
+            // Local pairing is optional as a group: a library built without it still
+            // runs every other flow, and the screens hide the sync option rather than
+            // offering a button that cannot work.
+            let connection_string_sender = lib
+                .get::<CStrFn>(b"GetConnectionStringForBootstrappingAnotherDevice\0")
+                .ok()
+                .map(|s| *s);
+            let connection_string_receiver = lib
+                .get::<CStrFn>(b"GetConnectionStringForBeingBootstrapped\0")
+                .ok()
+                .map(|s| *s);
+            let bootstrap_receiver = lib
+                .get::<CStr2Fn>(b"InputConnectionStringForBootstrapping\0")
+                .ok()
+                .map(|s| *s);
+            let bootstrap_sender = lib
+                .get::<CStr2Fn>(b"InputConnectionStringForBootstrappingAnotherDevice\0")
+                .ok()
+                .map(|s| *s);
+            let validate_connection_string = lib
+                .get::<CStrFn>(b"ValidateConnectionString\0")
+                .ok()
+                .map(|s| *s);
             let logout: Symbol<unsafe extern "C" fn() -> *mut c_char> = lib
                 .get(b"Logout\0")
                 .map_err(|e| AppError::internal(format!("no Logout: {e}")))?;
@@ -297,6 +350,11 @@ impl InProcessBackend {
                 change_password,
                 validate_mnemonic,
                 delete_multiaccount,
+                connection_string_sender,
+                connection_string_receiver,
+                bootstrap_receiver,
+                bootstrap_sender,
+                validate_connection_string,
                 logout,
                 set_signal_callback,
             })
@@ -344,6 +402,133 @@ impl InProcessBackend {
         // SAFETY: out is no longer used after the copy.
         unsafe { free(out as *mut std::ffi::c_void) };
         Ok(text)
+    }
+
+    /// Calls a two-string C function and returns its string reply.
+    ///
+    /// Same ownership rules as [`Self::invoke`]: both inputs are ours until the
+    /// call returns, the reply belongs to Go and is released here.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when either argument contains
+    /// a NUL byte, and [`crate::error::ErrorKind::Backend`] when status-go returns
+    /// a null pointer.
+    fn invoke2(&self, f: CStr2Fn, first: &str, second: &str) -> AppResult<String> {
+        let a = CString::new(first)
+            .map_err(|_| AppError::internal("first argument contains a NUL byte"))?;
+        let b = CString::new(second)
+            .map_err(|_| AppError::internal("second argument contains a NUL byte"))?;
+        let (ra, rb) = (a.into_raw(), b.into_raw());
+        // SAFETY: both pointers are our C strings until the call returns.
+        let out = unsafe { f(ra, rb) };
+        // SAFETY: each pointer is handed back to `CString` and released exactly once.
+        drop(unsafe { CString::from_raw(ra) });
+        drop(unsafe { CString::from_raw(rb) });
+        if out.is_null() {
+            return Err(AppError::backend("status-go returned no response"));
+        }
+        // SAFETY: out is a C string returned by status-go.
+        let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
+        // SAFETY: out is no longer used after the copy.
+        unsafe { free(out as *mut std::ffi::c_void) };
+        Ok(text)
+    }
+
+    /// Whether this build exports the local-pairing functions.
+    ///
+    /// @returns `true` when both directions are available; the screens use it to
+    /// hide the sync option instead of offering a button that cannot work.
+    pub fn supports_pairing(&self) -> bool {
+        self.connection_string_sender.is_some()
+            && self.connection_string_receiver.is_some()
+            && self.bootstrap_receiver.is_some()
+            && self.bootstrap_sender.is_some()
+    }
+
+    /// Starts a pairing server that sends this device's profile.
+    ///
+    /// @param config_json - `SenderServerConfig` (keystore path, device type, key
+    ///   uid, password).
+    /// @returns The connection string the other device has to read.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// pairing, and propagates status-go's error.
+    pub fn pairing_start_sender(&self, config_json: &str) -> AppResult<String> {
+        let f = self.connection_string_sender.ok_or_else(|| {
+            AppError::internal("status-go does not export GetConnectionStringForBootstrappingAnotherDevice")
+        })?;
+        self.invoke(f, config_json)
+    }
+
+    /// Starts a pairing server that receives a profile onto this device.
+    ///
+    /// @param config_json - `ReceiverServerConfig` (root data dir, KDF iterations).
+    /// @returns The connection string the other device has to read.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// pairing, and propagates status-go's error.
+    pub fn pairing_start_receiver(&self, config_json: &str) -> AppResult<String> {
+        let f = self.connection_string_receiver.ok_or_else(|| {
+            AppError::internal("status-go does not export GetConnectionStringForBeingBootstrapped")
+        })?;
+        self.invoke(f, config_json)
+    }
+
+    /// Consumes a connection string as the receiving side.
+    ///
+    /// @param connection_string - String read from the other device.
+    /// @param config_json - `ReceiverClientConfig`.
+    /// @returns status-go's JSON reply.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// pairing, and propagates status-go's error.
+    pub fn pairing_bootstrap_receiver(
+        &self,
+        connection_string: &str,
+        config_json: &str,
+    ) -> AppResult<String> {
+        let f = self.bootstrap_receiver.ok_or_else(|| {
+            AppError::internal("status-go does not export InputConnectionStringForBootstrapping")
+        })?;
+        self.invoke2(f, connection_string, config_json)
+    }
+
+    /// Consumes a connection string as the sending side.
+    ///
+    /// @param connection_string - String read from the other device.
+    /// @param config_json - `SenderClientConfig`.
+    /// @returns status-go's JSON reply.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// pairing, and propagates status-go's error.
+    pub fn pairing_bootstrap_sender(
+        &self,
+        connection_string: &str,
+        config_json: &str,
+    ) -> AppResult<String> {
+        let f = self.bootstrap_sender.ok_or_else(|| {
+            AppError::internal("status-go does not export InputConnectionStringForBootstrappingAnotherDevice")
+        })?;
+        self.invoke2(f, connection_string, config_json)
+    }
+
+    /// Checks a connection string without starting a transfer.
+    ///
+    /// @param connection_string - String to check.
+    /// @returns An empty string when valid, status-go's reason otherwise.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// validation.
+    pub fn pairing_validate(&self, connection_string: &str) -> AppResult<String> {
+        let f = self.validate_connection_string.ok_or_else(|| {
+            AppError::internal("status-go does not export ValidateConnectionString")
+        })?;
+        self.invoke(f, connection_string)
     }
 
     /// Application initialisation (`InitializeApplication`), once at startup.

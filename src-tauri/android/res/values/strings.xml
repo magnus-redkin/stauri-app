@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">"stauri-app"</string>
+    <string name="main_activity_title">"stauri-app"</string>
+    <!-- Shown by the system when it asks for the screen lock before the profile password
+         can be unsealed. -->
+    <string name="unlock_to_open_profile">"Unlock to open your profile"</string>
+</resources>

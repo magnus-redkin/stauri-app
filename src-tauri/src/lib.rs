@@ -21,6 +21,9 @@ mod trace;
 mod backend;
 mod commands;
 mod config;
+// Per-profile secrets for the mobile entry flow: the PIN and the password it protects.
+// See the module docs for what protects them on each platform.
+mod credentials;
 mod dapp;
 mod ens;
 mod env;
@@ -30,6 +33,7 @@ mod invite;
 mod logging;
 mod market;
 mod opener;
+mod pairing;
 mod profile;
 mod providers;
 mod router;
@@ -121,6 +125,22 @@ pub fn run() {
             profile::store_avatar,
             profile::get_avatar,
             profile::change_password,
+            credentials::credential_save_pin,
+            credentials::credential_open_pin,
+            credentials::credential_has_pin,
+            credentials::credential_pin_state,
+            credentials::credential_save_pin_from_pending,
+            credentials::credential_forget_pending,
+            credentials::credential_delete,
+            credentials::credential_available,
+            credentials::credential_pin_rules,
+            pairing::pairing_available,
+            pairing::pairing_validate,
+            pairing::pairing_confirmation_code,
+            pairing::pairing_start_sending,
+            pairing::pairing_start_receiving,
+            pairing::pairing_receive,
+            pairing::pairing_send,
             invite::parse_invite_link,
             providers::fetch_feed,
             opener::open_external,
