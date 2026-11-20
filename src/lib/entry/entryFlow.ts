@@ -55,6 +55,15 @@ export type EntryPhase =
    * `savePinFromPending` instead.
    */
   | { kind: 'set-pin'; profile: ProfileSummary; password?: string }
+  /**
+   * PIN for a profile that will be created when this pad is confirmed.
+   *
+   * @remarks
+   * The account is created *after* the PIN is chosen. Creating it first left a profile
+   * behind whose password nobody knew if the user quit before finishing the pad — an
+   * account that could never be opened and that looked like a real one on the next start.
+   */
+  | { kind: 'create-pin' }
   /** Seed phrase of a new profile is being shown. */
   | { kind: 'create-seed'; password: string }
   /** Choosing how to restore an existing profile. */

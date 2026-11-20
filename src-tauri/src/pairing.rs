@@ -250,11 +250,145 @@ fn confirmation_code(connection_string: &str) -> AppResult<String> {
 /// not parsed — the fields after it are optional, and a reader that insisted on all of
 /// them would break when status-go appends a parameter.
 fn aes_key_of(connection_string: &str) -> Option<Vec<u8>> {
-    let body = connection_string.trim().strip_prefix(CONNECTION_STRING_ID)?;
+    let cleaned = normalise(connection_string);
+    let body = cleaned.strip_prefix(CONNECTION_STRING_ID)?;
     let fields: Vec<&str> = body.split(':').collect();
     // version, ips, port, public key, AES key.
     let encoded = fields.get(4)?;
     bs58::decode(encoded).into_vec().ok().filter(|k| !k.is_empty())
+}
+
+/// Strips everything a copied string can pick up on the way.
+///
+/// @param input - Text from a clipboard, a field, or a QR scanner.
+/// @returns The string with surrounding quotes and every whitespace character removed.
+///
+/// @remarks
+/// A connection code is base58 separated by colons: it never contains a space, a tab or
+/// a newline. Anything of the sort came from wrapping, from a copy that dragged in the
+/// line breaks of a display, or from a messenger that reflowed the text. Removing them is
+/// safe; rejecting them is not — that is what turned a pasted code into "carries no key".
+fn normalise(input: &str) -> String {
+    input
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// Describes the addresses in a connection string, for traces.
+///
+/// @param connection_string - A string produced by either side.
+/// @returns The advertised IPs and port, or `unparsed`.
+/// @remarks
+/// The AES key and the public key stay out of the trace: the first is the secret of the
+/// transfer, the second is only useful together with it. The addresses are what a failed
+/// connection usually turns on — status-go refuses to dial an address that is not on one
+/// of the client's own subnets.
+pub(crate) fn describe(connection_string: &str) -> String {
+    let cleaned = normalise(connection_string);
+    let Some(body) = cleaned.strip_prefix(CONNECTION_STRING_ID) else {
+        return "unparsed".to_string();
+    };
+    let fields: Vec<&str> = body.split(':').collect();
+    let ips = fields
+        .get(1)
+        .and_then(|f| bs58::decode(f).into_vec().ok())
+        .map(|bytes| decode_ips(&bytes));
+    let port = fields
+        .get(2)
+        .and_then(|f| bs58::decode(f).into_vec().ok())
+        .map(|bytes| bytes.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b)));
+    format!("ips={ips:?} port={port:?}")
+}
+
+/// Decodes status-go's packed address list.
+///
+/// Layout (`connection.go`): one byte with the number of IPv4 addresses, then four bytes
+/// each; one byte with the number of IPv6 addresses, then sixteen bytes each.
+fn decode_ips(bytes: &[u8]) -> Vec<String> {
+    let mut addresses = Vec::new();
+    let mut index = 0;
+    if let Some(&count) = bytes.first() {
+        index = 1;
+        for _ in 0..count {
+            if index + 4 > bytes.len() {
+                break;
+            }
+            addresses.push(format!(
+                "{}.{}.{}.{}",
+                bytes[index],
+                bytes[index + 1],
+                bytes[index + 2],
+                bytes[index + 3]
+            ));
+            index += 4;
+        }
+    }
+    if index < bytes.len() {
+        let count = bytes[index] as usize;
+        index += 1;
+        for _ in 0..count {
+            if index + 16 > bytes.len() {
+                break;
+            }
+            let mut octets = [0u8; 16];
+            octets.copy_from_slice(&bytes[index..index + 16]);
+            addresses.push(std::net::Ipv6Addr::from(octets).to_string());
+            index += 16;
+        }
+    }
+    addresses
+}
+
+/// Reads the addresses and port a connection string advertises.
+///
+/// @param connection_string - A string produced by the sender.
+/// @returns The IPv4 addresses and the port, either possibly empty.
+/// @remarks
+/// These are the only addresses the transfer can use: status-go puts the same list into
+/// the server's certificate (`GenerateX509Cert(..., IPAddresses, ...)`), and the client
+/// verifies the certificate against the host name it dials. Dialling anything else — a
+/// different interface of the same device — fails the check inside `GET /pairing/challenge`
+/// without an error event, which is how "pairing failed" appeared with no reason. So the
+/// list is not a hint: it is the contract.
+pub(crate) fn addresses(connection_string: &str) -> (Vec<std::net::Ipv4Addr>, Option<u16>) {
+    let cleaned = normalise(connection_string);
+    let Some(body) = cleaned.strip_prefix(CONNECTION_STRING_ID) else {
+        return (Vec::new(), None);
+    };
+    let fields: Vec<&str> = body.split(':').collect();
+
+    let mut addresses = Vec::new();
+    if let Some(bytes) = fields.get(1).and_then(|f| bs58::decode(f).into_vec().ok()) {
+        if let Some(&count) = bytes.first() {
+            let mut index = 1;
+            for _ in 0..count {
+                if index + 4 > bytes.len() {
+                    break;
+                }
+                addresses.push(std::net::Ipv4Addr::new(
+                    bytes[index],
+                    bytes[index + 1],
+                    bytes[index + 2],
+                    bytes[index + 3],
+                ));
+                index += 4;
+            }
+        }
+    }
+
+    let port = fields
+        .get(2)
+        .and_then(|f| bs58::decode(f).into_vec().ok())
+        .and_then(|bytes| {
+            let value = bytes.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b));
+            u16::try_from(value).ok()
+        });
+
+    (addresses, port)
 }
 
 /// Checks a connection string typed or pasted by the user.
@@ -323,18 +457,44 @@ pub async fn bootstrap_receiver(
     .await
     .map_err(|e| AppError::internal(format!("pairing receive panicked: {e}")))??;
 
-    // The reply carries the installation id and key uid, so an error in it is
-    // final; anything after that arrives through the signals.
-    if let Some(err) = pairing_reply_error(&reply) {
-        return Err(AppError::backend(err));
+    // The reply carries the installation id and key uid, so a *textual* error in it is
+    // final. A message-less one is not: the mobile export finishes with
+    // `statusBackend.Logout()`, and on a device that is not logged in — which is exactly
+    // what a receiver is — that call fails every time, after the account has already been
+    // taken in. The account itself is the only proof that the payload arrived, so the
+    // caller waits for it instead of believing the reply.
+    let reply_error = pairing_reply_error(&reply);
+    if let Some(err) = &reply_error {
+        if !err.trim().is_empty() {
+            return Err(AppError::backend(err.clone()));
+        }
+        crate::trace::line("pairing reply reports a failure without a reason; waiting for the account");
     }
 
-    let account = wait_for_account(&mut signals).await?;
+    let account = match wait_for_account(&mut signals, ACCOUNT_TIMEOUT).await {
+        Ok(account) => account,
+        // The events were traced as they arrived; the trace line says what stopped it.
+        Err(e) => return Err(e),
+    };
     crate::trace::line(&format!(
         "pairing received account key={} passwordLen={}",
         short_key(&account.key_uid),
         account.password.len()
     ));
+    // The mobile export shuts the backend down after a successful bootstrap, and on this
+    // build the backend is the whole app. The profile has been handed over, so that
+    // teardown is not the caller's business: it runs on and the answer is returned with
+    // the account. Doing it inline could hold the call open for minutes.
+    let teardown = tokio::task::spawn_blocking(move || {
+        if let Some(_backend) = inprocess::backend().ok() {
+            let _ = _backend.logout();
+        }
+    });
+    crate::trace::line("pairing backend teardown scheduled");
+    tokio::spawn(async move {
+        let _ = teardown.await;
+        crate::trace::line("pairing backend teardown finished");
+    });
     Ok(account)
 }
 
@@ -402,8 +562,9 @@ pub async fn bootstrap_sender(
 /// Waits for the `received-account` event and builds [`PairedAccount`] from it.
 async fn wait_for_account(
     signals: &mut tokio::sync::broadcast::Receiver<String>,
+    timeout: std::time::Duration,
 ) -> AppResult<PairedAccount> {
-    let deadline = tokio::time::Instant::now() + ACCOUNT_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -419,39 +580,18 @@ async fn wait_for_account(
         let Some((event_type, data)) = pairing_event(&raw) else {
             continue;
         };
+        // The type and the reason only: `received-account` carries the password, and the
+        // password never goes anywhere near a log.
+        crate::trace::line(&format!(
+            "pairing event {event_type}{}",
+            data.get("error")
+                .and_then(|e| e.as_str())
+                .map(|e| format!(" error={e}"))
+                .unwrap_or_default()
+        ));
         match event_type.as_str() {
             "received-account" => {
-                let account = data
-                    .get("account")
-                    .ok_or_else(|| AppError::backend("pairing returned no account"))?;
-                let key_uid = account
-                    .get("keyUid")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| AppError::backend("pairing returned no key uid"))?
-                    .to_string();
-                let password = data
-                    .get("password")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                if password.is_empty() {
-                    // Without the password the profile cannot be opened afterwards,
-                    // and silently storing it would leave a dead profile on the
-                    // device. This is a hard failure, not a warning.
-                    return Err(AppError::backend(
-                        "pairing did not transfer the profile password",
-                    ));
-                }
-                let name = account
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(std::string::ToString::to_string);
-                return Ok(PairedAccount {
-                    key_uid,
-                    name,
-                    password,
-                });
+                return parse_received_account(&data);
             }
             "process-error" | "transfer-error" | "connection-error" => {
                 return Err(AppError::backend(event_error_message(&data)));
@@ -461,8 +601,56 @@ async fn wait_for_account(
     }
 }
 
+/// Builds [`PairedAccount`] from the data of a `received-account` event.
+///
+/// @param data - The `data` object of the event.
+/// @returns The uid, the display name and the password of the profile that arrived.
+///
+/// @remarks
+/// status-go's `Account` (multiaccounts) marshals the uid as `key-uid`, with a hyphen —
+/// the mobile export uses that struct, not its camelCase twin. Reading `keyUid` failed on
+/// every transfer that had actually succeeded.
+fn parse_received_account(data: &serde_json::Value) -> AppResult<PairedAccount> {
+    let account = data
+        .get("account")
+        .ok_or_else(|| AppError::backend("pairing returned no account"))?;
+    let key_uid = account
+        .get("key-uid")
+        .or_else(|| account.get("keyUid"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::backend("pairing returned no key uid"))?
+        .to_string();
+    let password = data
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if password.is_empty() {
+        // Without the password the profile cannot be opened afterwards, and silently
+        // storing it would leave a dead profile on the device. This is a hard failure,
+        // not a warning.
+        return Err(AppError::backend(
+            "pairing did not transfer the profile password",
+        ));
+    }
+    let name = account
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(std::string::ToString::to_string);
+    Ok(PairedAccount {
+        key_uid,
+        name,
+        password,
+    })
+}
+
 /// Waits for the sender's transfer to be confirmed.
-async fn wait_for_transfer(
+///
+/// @remarks
+/// Public within the crate because the LAN handshake (`lanpair.rs`) starts the server
+/// itself and then has to wait for the same event this function reads.
+pub(crate) async fn wait_for_transfer(
     signals: &mut tokio::sync::broadcast::Receiver<String>,
 ) -> AppResult<()> {
     let deadline = tokio::time::Instant::now() + ACCOUNT_TIMEOUT;
@@ -481,6 +669,13 @@ async fn wait_for_transfer(
         let Some((event_type, data)) = pairing_event(&raw) else {
             continue;
         };
+        crate::trace::line(&format!(
+            "pairing event {event_type}{}",
+            data.get("error")
+                .and_then(|e| e.as_str())
+                .map(|e| format!(" error={e}"))
+                .unwrap_or_default()
+        ));
         match event_type.as_str() {
             "transfer-success" | "process-success" | "received-account" => return Ok(()),
             "transfer-error" | "process-error" | "connection-error" => {
@@ -502,7 +697,23 @@ fn pairing_event(raw: &str) -> Option<(String, serde_json::Value)> {
     }
     let event = envelope.get("event")?;
     let kind = event.get("type").and_then(|t| t.as_str())?.to_string();
-    let data = event.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let mut data = event.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    // status-go writes the reason on the event itself —
+    // `{"type":"connection-error","error":"…"}` — not inside `data`. Reading only `data`
+    // left every failure as the generic "pairing failed", which is exactly what the
+    // receiving screen showed while the real reason was in the signal all along.
+    if let Some(reason) = event
+        .get("error")
+        .and_then(|e| e.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        match &mut data {
+            serde_json::Value::Object(map) => {
+                map.insert("error".to_string(), serde_json::Value::String(reason.to_string()));
+            }
+            _ => data = serde_json::json!({ "error": reason }),
+        }
+    }
     Some((kind, data))
 }
 
@@ -518,15 +729,21 @@ fn event_error_message(data: &serde_json::Value) -> String {
 /// Reads an error from a pairing call reply.
 ///
 /// @param reply - Raw reply of a bootstrap call.
-/// @returns The message when the reply reports a failure.
+/// @returns `None` when the reply reports success, an empty string when it reports a
+/// failure without a reason, and the reason otherwise.
 ///
 /// @remarks
 /// The bootstrap calls answer with a JSON object
-/// (`{"installationId": …, "keyUID": …}`) on success and with
-/// `{"error": "…"}` on failure. Anything that is not that object — a bare error text, an
-/// empty answer — is a failure too: treating an unparseable reply as success would send
-/// the caller on to wait five minutes for a signal that is never coming, and the user
-/// would see a timeout instead of the reason.
+/// (`{"installationId": …, "keyUID": …, "error": …}`) on success and with the same object
+/// on failure. The `Error` field is a Go `error`, which is an interface: a nil one
+/// marshals as `null`, and a non-nil one as `{}` — **without any text**, because the
+/// interface has no exported fields. Treating a present `error` as a failure made every
+/// successful transfer look broken; the reason, when status-go has one, is sent as an
+/// event instead.
+///
+/// Anything that is not that object — a bare error text, an empty answer — is a failure
+/// too: treating an unparseable reply as success would send the caller on to wait five
+/// minutes for a signal that is never coming.
 fn pairing_reply_error(reply: &str) -> Option<String> {
     let value: serde_json::Value = match serde_json::from_str(reply) {
         Ok(value) => value,
@@ -542,19 +759,19 @@ fn pairing_reply_error(reply: &str) -> Option<String> {
     let Some(err) = value.get("error") else {
         return None;
     };
+    // A nil Go error: this is the success case.
+    if err.is_null() {
+        return None;
+    }
     let message = if let Some(s) = err.as_str() {
         s.to_string()
     } else {
         err.get("message")
             .and_then(|m| m.as_str())
-            .unwrap_or("pairing failed")
+            .unwrap_or_default()
             .to_string()
     };
-    if message.is_empty() {
-        None
-    } else {
-        Some(message)
-    }
+    Some(message)
 }
 
 /// Shortens a message for an error surfaced to the user.
@@ -643,13 +860,63 @@ mod tests {
     }
 
     #[test]
+    fn the_uid_is_read_from_status_gos_field() {
+        // status-go's `Account` writes `key-uid` with a hyphen; the camelCase form is
+        // kept as a fallback in case a later release renames it.
+        let data = serde_json::json!({
+            "account": { "key-uid": "0x12345678", "name": "Work" },
+            "password": "pin"
+        });
+        let account = parse_received_account(&data).expect("uid from key-uid");
+        assert_eq!(account.key_uid, "0x12345678");
+        assert_eq!(account.name.as_deref(), Some("Work"));
+        assert_eq!(account.password, "pin");
+
+        let camel = serde_json::json!({
+            "account": { "keyUid": "0x98765432" },
+            "password": "pin"
+        });
+        let account = parse_received_account(&camel).expect("uid from keyUid");
+        assert_eq!(account.key_uid, "0x98765432");
+
+        let empty = serde_json::json!({ "password": "" });
+        assert!(parse_received_account(&empty).is_err());
+    }
+
+    #[test]
+    fn a_failure_event_keeps_its_reason() {
+        // The reason sits on the event, not in `data`: dropping it turned every failure
+        // into the generic "pairing failed" and hid the real cause from the screen.
+        let raw = r#"{"type":"localPairing","event":{"type":"connection-error","error":"dial tcp: refused","action":1}}"#;
+        let (kind, data) = pairing_event(raw).expect("event");
+        assert_eq!(kind, "connection-error");
+        assert_eq!(event_error_message(&data), "dial tcp: refused");
+
+        // A reason next to real data must not replace the data.
+        let raw = r#"{"type":"localPairing","event":{"type":"transfer-error","error":"boom","data":{"account":{"keyUid":"x"}}}}"#;
+        let (_, data) = pairing_event(raw).expect("event");
+        assert_eq!(event_error_message(&data), "boom");
+        assert_eq!(
+            data.get("account").and_then(|a| a.get("keyUid")).and_then(|k| k.as_str()),
+            Some("x")
+        );
+    }
+
+    #[test]
     fn reply_error_is_read_from_object() {
         assert_eq!(
             pairing_reply_error(r#"{"error":"boom"}"#),
             Some("boom".to_string())
         );
         assert_eq!(pairing_reply_error(r#"{"installationId":"x"}"#), None);
-        assert_eq!(pairing_reply_error(r#"{"error":""}"#), None);
+        // The success shape: Go's nil `error` marshals as `null`. Reading it as a failure
+        // made a working transfer look broken.
+        assert_eq!(
+            pairing_reply_error(r#"{"installationId":"x","keyUID":"0x1","error":null}"#),
+            None
+        );
+        // The failure shape: Go's non-nil `error` marshals as `{}`, with no text at all.
+        assert_eq!(pairing_reply_error(r#"{"error":{}}"#), Some(String::new()));
         // A bare reply is not JSON, so it cannot be the success object: treating it as
         // success would send the caller on to wait five minutes for a signal that is not
         // coming, and the user would see a timeout instead of the reason.
@@ -661,6 +928,45 @@ mod tests {
             pairing_reply_error("   "),
             Some("pairing returned no reply".to_string())
         );
+    }
+
+    #[test]
+    fn describe_reads_ips_and_port_without_the_key() {
+        // One IPv4 address, no IPv6, port 50000. The AES key must not appear: it is the
+        // secret of the whole transfer.
+        let mut ips = vec![1u8, 192, 168, 1, 7];
+        ips.push(0); // no IPv6 addresses
+        let cs = format!(
+            "cs{}:{}:{}:{}:{}",
+            bs58::encode([3u8]).into_string(),
+            bs58::encode(&ips).into_string(),
+            bs58::encode([0xC3u8, 0x50]).into_string(),
+            bs58::encode([9u8, 9]).into_string(),
+            bs58::encode([0x11u8; 32]).into_string(),
+        );
+        let text = describe(&cs);
+        assert!(text.contains("192.168.1.7"), "{text}");
+        assert!(text.contains("50000"), "{text}");
+        assert!(!text.contains(&bs58::encode([0x11u8; 32]).into_string()), "{text}");
+        assert_eq!(describe("nonsense"), "unparsed");
+    }
+
+    #[test]
+    fn addresses_are_read_from_the_string() {
+        let mut ips = vec![1u8, 192, 168, 1, 7, 0];
+        ips.truncate(6);
+        let cs = format!(
+            "cs{}:{}:{}:{}:{}",
+            bs58::encode([3u8]).into_string(),
+            bs58::encode(&ips).into_string(),
+            bs58::encode([0xC3u8, 0x50]).into_string(),
+            bs58::encode([9u8, 9]).into_string(),
+            bs58::encode([0x11u8; 32]).into_string(),
+        );
+        let (listed, port) = addresses(&cs);
+        assert_eq!(listed, vec!["192.168.1.7".parse::<std::net::Ipv4Addr>().expect("ip")]);
+        assert_eq!(port, Some(50000));
+        assert_eq!(addresses("nonsense"), (Vec::new(), None));
     }
 
     #[test]
@@ -725,6 +1031,16 @@ mod tests {
         assert!(confirmation_code("cs3:abc").is_err());
         assert!(confirmation_code("xx3:a:b:c:d").is_err());
         assert!(confirmation_code("cs3:a:b:c:!!!").is_err());
+    }
+
+    #[test]
+    fn a_real_captured_string_yields_digits() {
+        // Taken from a live sender during a manual test. If this stops parsing, the
+        // receiving screen shows no digits and the transfer button stays disabled, which
+        // is exactly what a user reported before this test existed.
+        let cs = "cs3:qJAg2W3:DBJ:kLPiKqW6BcNFRzcsptvDzf9Mp49FGrMaWv8TddMRgFab:23C6pQUh6nD4pCeJtssgcAiqK5RKGpNac72s6JmSP2KF:LT7MFdzSERTKmgTKbNv7gU:KszQ1yyephZqWDvTYLHrK5hdCY84dX5RG8EH8merwZH6xYTsYNwbSrKZaZuoTZ6ZSLPBsGZL93wpXSX8KKn4eFWiCk";
+        let code = confirmation_code(cs).expect("a real string must parse");
+        assert_eq!(code.len(), 6);
     }
 
     #[test]
@@ -828,7 +1144,23 @@ pub fn pairing_validate(connection_string: String) -> bool {
 /// right, and a mismatch between them would look like an attack.
 #[tauri::command]
 pub fn pairing_confirmation_code(connection_string: String) -> AppResult<String> {
-    confirmation_code(&connection_string)
+    match confirmation_code(&connection_string) {
+        Ok(code) => Ok(code),
+        Err(e) => {
+            // Never the string itself: its length and field layout are enough to tell a
+            // truncated paste from a format this build does not understand.
+            let normalised = normalise(&connection_string);
+            let fields: Option<Vec<usize>> = normalised
+                .strip_prefix(CONNECTION_STRING_ID)
+                .map(|body| body.split(':').map(str::len).collect());
+            crate::trace::line(&format!(
+                "pairing code unreadable len={} fields={:?}",
+                normalised.len(),
+                fields
+            ));
+            Err(e)
+        }
+    }
 }
 
 /// Receives a profile from the other device.

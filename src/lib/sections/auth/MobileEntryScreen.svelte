@@ -15,11 +15,11 @@
   import PinPad from '$lib/sections/auth/PinPad.svelte';
   import { statusState } from '$lib/stores/statusStore.svelte';
   import type { EntryPhase, Network, ProfileSummary } from '$lib/entry/entryFlow';
-  import { pairingMethods } from '$lib/entry/entryFlow';
 
   let {
     phase = $bindable<EntryPhase>({ kind: 'login' }),
     hasProfiles = false,
+    profileCount = 0,
     /** Digits entered on the PIN pad; the page submits them. */
     pin = $bindable(''),
     pinMin = 4,
@@ -38,6 +38,8 @@
   }: {
     phase: EntryPhase;
     hasProfiles: boolean;
+    /** How many profiles this device has; with one, the PIN is asked for directly. */
+    profileCount?: number;
     pin: string;
     pinMin: number;
     pinMax: number;
@@ -71,7 +73,7 @@
     onNetworkChange(networkOf(net));
   }
 
-  const methods = pairingMethods();
+  // The transport picker is gone: one path, on whatever local network both devices share.
 
   /** Profile label for the PIN screens. */
   function label(profile: ProfileSummary): string {
@@ -92,7 +94,7 @@
     {busy}
     {error}
     onSubmit={onSubmitPin}
-    onBack={onPinBack}
+    onBack={profileCount > 1 ? onPinBack : undefined}
   />
 
 {:else if phase.kind === 'password'}
@@ -131,11 +133,12 @@
     </button>
   </div>
 
-{:else if phase.kind === 'set-pin'}
+{:else if phase.kind === 'set-pin' || phase.kind === 'create-pin'}
   <!--
-    A new profile: the password already exists, the PIN is what the user will remember.
-    Confirmed twice by the page before it is saved, so a mistyped PIN cannot lock the
-    profile behind a value its owner does not know.
+    A new profile: the PIN is what the user will remember, and it is chosen *before* the
+    account exists. Confirmed twice by the page before it is saved, so a mistyped PIN
+    cannot lock the profile behind a value its owner does not know — and quitting before
+    the second entry leaves nothing behind to clean up.
   -->
   <PinPad
     bind:value={pin}
@@ -159,42 +162,44 @@
       <div class="w-full max-w-md h-px bg-border my-2"></div>
 
       <!--
-        Creation is the first action on a clean device: it is the only one that does not
-        need a profile to already exist.
+        The network, then the profile. Everything on this screen is about one question —
+        which profile to open — so the choices sit under one heading instead of being
+        spread over three separate screens with their own Back buttons.
       -->
-      <button
-        onclick={onCreate}
-        disabled={busy}
-        class="w-full max-w-md py-3 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
-      >
-        {i18n.t('Create Profile')}
-      </button>
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        {i18n.t('Profile')}
+      </h2>
 
-      {#if hasProfiles}
+      <div class="w-full max-w-md space-y-2">
+        {#if hasProfiles}
+          <button
+            onclick={() => (phase = { kind: 'pick-profile' })}
+            disabled={busy}
+            class="w-full py-3 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
+          >
+            {i18n.t('Select Profile & Log in')}
+          </button>
+        {/if}
+
+        <!--
+          Creation is the first action on a clean device: it is the only one that does not
+          need a profile to already exist.
+        -->
         <button
-          onclick={() => (phase = { kind: 'pick-profile' })}
+          onclick={onCreate}
           disabled={busy}
-          class="w-full max-w-md py-3 border border-border rounded-md text-sm font-medium hover:bg-secondary transition disabled:opacity-50"
+          class="{hasProfiles ? 'border border-border' : 'bg-primary text-primary-foreground'} w-full py-3 rounded-md text-sm font-medium transition hover:opacity-90 disabled:opacity-50"
         >
-          {i18n.t('Select Profile & Log in')}
+          {i18n.t('Create Profile')}
         </button>
-      {/if}
 
-      <div class="w-full max-w-md h-px bg-border my-2"></div>
-
-      <button
-        onclick={() => (phase = { kind: 'restore-method' })}
-        class="w-full max-w-md py-2 border border-border rounded-md text-sm font-medium hover:bg-secondary transition"
-      >
-        {i18n.t('I already have a profile')}
-      </button>
-
-      <button
-        disabled
-        class="w-full max-w-md py-2 border border-border rounded-md text-sm font-medium opacity-50 cursor-not-allowed"
-      >
-        {i18n.t('Log in with Keycard')} — {i18n.t('coming soon')}
-      </button>
+        <button
+          onclick={() => (phase = { kind: 'restore-method' })}
+          class="w-full py-3 border border-border rounded-md text-sm font-medium hover:bg-secondary transition"
+        >
+          {i18n.t('Restore or sync')}
+        </button>
+      </div>
 
     {:else if phase.kind === 'pick-profile'}
       <h1 class="text-2xl font-bold text-foreground">{i18n.t('Select Profile & Log in')}</h1>
@@ -251,7 +256,7 @@
       </button>
 
     {:else if phase.kind === 'restore-method'}
-      <h1 class="text-2xl font-bold text-foreground">{i18n.t('I already have a profile')}</h1>
+      <h1 class="text-2xl font-bold text-foreground">{i18n.t('Restore or sync')}</h1>
 
       <div class="w-full max-w-md space-y-2">
         <button
@@ -263,11 +268,11 @@
         </button>
 
         <button
-          onclick={() => (phase = { kind: 'pairing-method' })}
+          onclick={() => onPair('wifi')}
           class="w-full px-4 py-3 rounded-lg border border-border hover:bg-secondary transition text-left"
         >
-          <div class="text-sm font-medium text-foreground">{i18n.t('Sync with another device')}</div>
-          <div class="text-xs text-muted-foreground">{i18n.t('Copy the profile from a device you already use')}</div>
+          <div class="text-sm font-medium text-foreground">{i18n.t('Sync from another device')}</div>
+          <div class="text-xs text-muted-foreground">{i18n.t('Both devices on the same local network')}</div>
         </button>
 
         <button
@@ -287,48 +292,13 @@
       </button>
 
     {:else if phase.kind === 'pairing-method'}
-      <h1 class="text-2xl font-bold text-foreground">{i18n.t('Sync with another device')}</h1>
-
-      <div class="w-full max-w-md space-y-2">
-        {#each methods as method (method.id)}
-          <button
-            onclick={() => {
-              if (method.id !== 'qr') onPair(method.id);
-            }}
-            disabled={!method.enabled || busy}
-            class="w-full px-4 py-3 rounded-lg border border-border hover:bg-secondary transition text-left disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-          >
-            <div class="text-sm font-medium text-foreground">
-              {#if method.id === 'wifi'}{i18n.t('Over Wi-Fi (same network)')}
-              {:else if method.id === 'usb'}{i18n.t('Over USB')}
-              {:else}{i18n.t('QR code')}{/if}
-            </div>
-            {#if method.id === 'usb'}
-              <!--
-                USB needs USB debugging enabled on the phone. Kept for development and for
-                users who can turn it on; saying so is better than a transport that silently
-                does nothing.
-              -->
-              <div class="text-xs text-muted-foreground">
-                {i18n.t('May not work on every model. Needs USB debugging enabled in developer options.')}
-              </div>
-            {:else if method.id === 'qr'}
-              <div class="text-xs text-muted-foreground">{i18n.t('coming soon')}</div>
-            {:else}
-              <div class="text-xs text-muted-foreground">
-                {i18n.t('Both devices must be on the same Wi-Fi network.')}
-              </div>
-            {/if}
-          </button>
-        {/each}
-      </div>
-
-      <button
-        onclick={() => (phase = { kind: 'restore-method' })}
-        class="text-sm text-muted-foreground hover:underline"
-      >
-        ← {i18n.t('Back')}
-      </button>
+      <!--
+        No longer reached: the "Wi-Fi or USB" picker is gone. The transfer runs on
+        whatever local network both devices share, and a cable only matters when a modem
+        runs over it — offering a choice implied the cable did something by itself. The
+        branch stays so the phase union remains exhaustive.
+      -->
+      <p class="text-sm text-muted-foreground">{i18n.t('Sync from another device')}</p>
 
     {:else if phase.kind === 'restore-phrase'}
       <!--

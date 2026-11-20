@@ -81,7 +81,7 @@
     ProfileSummary,
   } from '$lib/entry/entryFlow';
   import { initialPhase, phaseAfterPinLookup, pinProblem } from '$lib/entry/entryFlow';
-  import { initializeApplication } from '$lib/status/api';
+  import { deleteProfile, initializeApplication } from '$lib/status/api';
   import {
     credentialsAvailable,
     forgetPendingPin,
@@ -92,13 +92,14 @@
     savePinFromPending,
   } from '$lib/status/credentials';
   import {
-    confirmationCode,
+    lanCancel,
+    lanConfirm,
+    lanLocalAddress,
+    lanReceiveStart,
+    lanSendStart,
+    lanStatus,
     pairingAvailable,
-    receiveAccount,
-    sendAccount,
-    startReceiving,
-    startSending,
-    validateConnectionString,
+    type LanStatus,
   } from '$lib/status/pairing';
   import PairingScreen from '$lib/sections/auth/PairingScreen.svelte';
 
@@ -158,6 +159,14 @@
   let selectedNetwork = $state('mainnet');
 
   const hasProfiles = $derived(statusState.accounts.length > 0);
+  /**
+   * How many profiles this device has for the selected network.
+   *
+   * @remarks
+   * One profile means the list is a screen with a single item and a row of Back buttons
+   * that lead nowhere: the PIN is asked for straight away instead.
+   */
+  const profileCount = $derived(statusState.accounts.length);
 
   // Ctrl+Q closes the window.
   $effect(() => {
@@ -591,6 +600,14 @@
    */
   let pinUpgrade = $state(false);
   /**
+   * Password for a profile that is about to be created.
+   *
+   * @remarks
+   * Generated before the PIN pad and used only after the PIN is confirmed: the account
+   * must not exist until there is a PIN to open it with.
+   */
+  let entryCreatePassword = $state('');
+  /**
    * Whether the PIN being chosen wraps a password that arrived over pairing.
    *
    * @remarks
@@ -600,7 +617,9 @@
    */
   let pendingPin = $state(false);
   /** Whether the pad is asking for the repeat of a new PIN. */
-  const pinConfirming = $derived(entryPhase.kind === 'set-pin' && entryPinFirst !== '');
+  const pinConfirming = $derived(
+    (entryPhase.kind === 'set-pin' || entryPhase.kind === 'create-pin') && entryPinFirst !== ''
+  );
   /** PIN bounds, read from the backend so the interface cannot drift from it. */
   let pinMin = $state(4);
   let pinMax = $state(12);
@@ -645,6 +664,26 @@
    * backgrounding reports `hidden` and locks at once, grace period or not.
    */
   let unlockedAt = 0;
+  /**
+   * Holds the interface on screen for a moment after a successful login.
+   *
+   * @remarks
+   * On the first start after an update the backend may stop and come back while it
+   * migrates, and `isLoggedIn` dips to `false` in between. Without this the entry flow —
+   * and with it the PIN pad — appeared for a moment after a perfectly good login. The
+   * flag is cleared by a timer, and immediately on an explicit logout.
+   */
+  let loginGrace = $state(false);
+  /**
+   * Whether a profile is open in this window.
+   *
+   * @remarks
+   * `statusState.isLoggedIn` follows the backend, and the backend can stop and come back
+   * while it migrates — on the first start after an update, for instance. Rendering the
+   * entry flow from that flag alone flashed the PIN pad after a perfectly good login.
+   * This one only changes when a session really opens or closes.
+   */
+  let sessionOpen = $state(false);
 
   /**
    * How long a `blur` after an unlock is ignored, in milliseconds.
@@ -662,36 +701,115 @@
   // and the sending screen opened from the profile section.
   /** Which side of the transfer this device is on. */
   let pairingRole = $state<'sender' | 'receiver'>('receiver');
-  /** String this device produced, empty until the server is started. */
-  let pairingString = $state('');
-  /** Whether a string was produced; the screen shows it only then. */
-  let pairingHasString = $state(false);
-  /** String the user pasted from the other device. */
-  let pairingInput = $state('');
-  let pairingBusy = $state(false);
+  /** Where the attempt is; the screen renders this and nothing else. */
+  let pairingPhase = $state<'idle' | 'waiting' | 'codes' | 'transferring' | 'done' | 'failed'>(
+    'idle'
+  );
+  /**
+   * Six digits both devices compare.
+   *
+   * @remarks
+   * Derived on the Rust side from a one-time exchange between the two devices, so an
+   * attacker relaying between them ends up with different digits on each screen. The
+   * digits are never typed anywhere; two people look at them.
+   */
+  let pairingDigits = $state('');
   let pairingError = $state('');
+  /** Display name of the profile that arrived, for the PIN screen. */
+  let pairingProfileName = $state<string | undefined>(undefined);
   /**
-   * Six digits both devices compare before the transfer starts.
+   * This device's address while it waits as the receiver.
    *
    * @remarks
-   * Derived from the key inside the connection string. A string swapped on its way across
-   * produces different digits here and on the other device, which is the moment to stop;
-   * the code does not help against someone who saw the whole string.
+   * Shown so it can be typed on the other device when the broadcast search finds
+   * nothing — the usual case behind a router that drops broadcast but allows unicast.
    */
-  let pairingCode = $state('');
-  /** Whether the code is on screen already; before that the screen offers to start. */
-  let pairingShowingCode = $state(false);
+  let pairingLocalAddress = $state('');
   /**
-   * Digits derived from the string the receiver pasted.
+   * Whether Sync was pressed on this device.
    *
    * @remarks
-   * The receiving device cannot compute this from its own server — it has no string of
-   * its own — so it reads the digits out of the sender's. Comparing them is the whole
-   * point: a string substituted on its way across yields different digits here.
+   * The transfer starts only when both sides have pressed, so the sending side waits
+   * after its own press. Without this the button simply sat there and looked broken.
    */
-  let pairingPastedCode = $state('');
+  let pairingConfirmed = $state(false);
+  /** Poll handle while an attempt is running. */
+  let pairingTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Stops polling the transfer. */
+  function stopPairingPolling(): void {
+    if (pairingTimer !== null) {
+      clearInterval(pairingTimer);
+      pairingTimer = null;
+    }
+  }
+
+  /**
+   * Starts polling the transfer.
+   *
+   * @remarks
+   * A transfer is one long operation on the Rust side: discovery, a handshake, a human
+   * comparison and then status-go's own server. Polling a small value keeps the screen
+   * stateless and survives a reload of the page; an event stream would have to be kept in
+   * step with the screen's lifecycle for no gain.
+   */
+  function startPairingPolling(): void {
+    stopPairingPolling();
+    pairingTimer = setInterval(() => {
+      void lanStatus()
+        .then(applyPairingStatus)
+        .catch((e) => {
+          stopPairingPolling();
+          pairingPhase = 'failed';
+          pairingError = formatError(e);
+        });
+    }, 500);
+  }
+
+  /** Folds one status answer into the page. */
+  async function applyPairingStatus(next: LanStatus): Promise<void> {
+    pairingDigits = next.digits ?? '';
+    if (next.error) pairingError = next.error;
+    if (next.phase !== 'codes') pairingConfirmed = false;
+    if (next.phase === 'done') {
+      stopPairingPolling();
+      await finishPairing(next);
+      return;
+    }
+    if (next.phase === 'failed' || next.phase === 'idle') stopPairingPolling();
+    pairingPhase = next.phase;
+  }
+
+  /**
+   * Leaves the pairing screen once the transfer ended.
+   *
+   * @remarks
+   * The receiver is the one that ends up with a new profile, so it is where the PIN
+   * appears: status-go ships the sender's password inside the payload, and the screen
+   * wraps it under a PIN the user chooses. A password that arrived but is not wrapped
+   * would leave a profile nobody can open once this screen is gone.
+   */
+  async function finishPairing(next: LanStatus): Promise<void> {
+    await lanCancel().catch(() => undefined);
+    pairingPhase = 'idle';
+    pairingDigits = '';
+    if (pairingRole === 'sender') {
+      mobileSendProfile = false;
+      activeSection = 'home';
+      return;
+    }
+    const keyUid = next.key_uid ?? '';
+    pairingProfileName = next.name ?? undefined;
+    await reloadAccounts();
+    entryPin = '';
+    entryPinFirst = '';
+    pendingPin = true;
+    entryPhase = {
+      kind: 'set-pin',
+      profile: { keyUid, name: pairingProfileName },
+    };
+  }
   /** Whether the sender is being asked for its PIN before it shows a code. */
-  let pairingPromptPin = $state(false);
   let pairingPin = $state('');
   let pairingPinError = $state('');
   /**
@@ -701,7 +819,7 @@
    * Off by default. status-go sends the whole message database with no date window, and
    * its own source calls that a privacy decision the user has to make deliberately.
    */
-  let pairingSyncHistory = $state(false);
+  let pairingSyncHistory = $state(true);
   /** Whether the sending screen replaces the profile section. */
   let mobileSendProfile = $state(false);
 
@@ -772,6 +890,10 @@
     // profile would look like it had none.
     entryNetwork = statusState.isTestnet ? 'testnet' : 'mainnet';
     syncEntryPhase();
+    // A single profile needs no choice: asking which one it is, only to answer "the only
+    // one", put a Back button in front of the PIN pad at every cold start.
+    const only = entryContext().profiles;
+    if (only.length === 1) await handleSelectProfile(only[0]);
   }
 
   async function handleEntryNetworkChange(network: Network): Promise<void> {
@@ -826,7 +948,12 @@
    */
   async function handleSubmitPin(): Promise<void> {
     const phase = entryPhase;
-    if (phase.kind !== 'enter-pin' && phase.kind !== 'set-pin' && phase.kind !== 'password') {
+    if (
+      phase.kind !== 'enter-pin' &&
+      phase.kind !== 'set-pin' &&
+      phase.kind !== 'password' &&
+      phase.kind !== 'create-pin'
+    ) {
       return;
     }
     entryError = '';
@@ -885,11 +1012,18 @@
         return;
       }
 
-      // Two kinds of profile reach this pad. One has its password here (a profile just
-      // created, or one being converted from the old scheme). The other arrived over
-      // pairing: its password stayed on the Rust side, and setting the PIN is the call
-      // that wraps it — the password is then read back out of the envelope it just
-      // produced, which is also the first proof that the PIN actually opens it.
+      // No account exists yet: the PIN is the one thing that has to be right before the
+      // profile is created at all.
+      if (phase.kind === 'create-pin') {
+        await createProfileAfterPin(entryPin);
+        return;
+      }
+
+      // Two kinds of profile reach the rest of this block. One has its password here (a
+      // profile being converted from the old scheme). The other arrived over pairing: its
+      // password stayed on the Rust side, and setting the PIN is the call that wraps it —
+      // the password is then read back out of the envelope it just produced, which is
+      // also the first proof that the PIN actually opens it.
       let password: string;
       if (pendingPin) {
         await savePinFromPending(entryNetwork, phase.profile.keyUid, entryPin);
@@ -953,6 +1087,7 @@
     entryPin = '';
     entryPinFirst = '';
     pinUpgrade = false;
+    entryCreatePassword = '';
     entryError = '';
     entryPhase = { kind: 'pick-profile' };
   }
@@ -982,6 +1117,12 @@
       // The keyboard used for the PIN is dismissed right about now, and that fires `blur`.
       // Recording the moment keeps the lock from asking for the same PIN a second time.
       unlockedAt = Date.now();
+      loginGrace = true;
+      sessionOpen = true;
+      // The pad must not be what a backend hiccup returns to: the session is open.
+      entryPhase = { kind: 'login' };
+      entrySelected = null;
+      setTimeout(() => (loginGrace = false), 2500);
       activeSection = 'home';
       return true;
     } catch (e) {
@@ -1000,35 +1141,58 @@
    * created the profile; the password waits in the phase until then and is never kept in
    * a component, so it does not linger after a reload.
    */
-  async function handleMobileCreate(): Promise<void> {
-    entryError = '';
-    entryBusy = true;
+  /**
+   * Creates the account once the PIN is known.
+   *
+   * @param pin - Digits the user entered twice; the envelope is saved under them.
+   * @remarks
+   * The order matters: `createAccount` logs in immediately, so the account exists before
+   * anything can fail. If saving the envelope fails after that, the local profile is
+   * deleted again — a profile without a PIN is one whose generated password nobody knows,
+   * and leaving it behind is what made an abandoned creation look like a real profile on
+   * the next start.
+   */
+  async function createProfileAfterPin(pin: string): Promise<void> {
+    const password = entryCreatePassword;
+    await createAccount(password);
+    const keyUid = statusState.accountKeyUid || statusState.accounts[0]?.['key-uid'] || '';
+    if (!keyUid) throw new Error('the backend created no profile');
     try {
-      const password = generatePassword();
-      await createAccount(password);
-      const keyUid = statusState.accountKeyUid || statusState.accounts[0]?.['key-uid'] || '';
-      if (!keyUid) throw new Error('the backend created no profile');
-      entryPin = '';
-      // The profile is open already; the PIN is what opens it next time.
-      entryPhase = { kind: 'set-pin', profile: { keyUid }, password };
-      selectedAccountKeyUid = keyUid;
+      await savePin(entryNetwork, keyUid, pin, password);
     } catch (e) {
-      entryError = i18n.t('Could not create the profile');
-      statusState.errorMsg = `Create account failed: ${formatError(e)}`;
-      activeSection = 'home';
-    } finally {
-      entryBusy = false;
+      await deleteProfile(keyUid, `${statusState.backendDataDir}/keystore/${keyUid}`).catch(() => {});
+      throw e;
     }
+    entryPin = '';
+    entryPinFirst = '';
+    entryCreatePassword = '';
+    selectedAccountKeyUid = keyUid;
+    setSessionPassword(password);
+    sessionHasPin = true;
+    sessionOpen = true;
+    entryPhase = { kind: 'login' };
+    // The phrase is the only way back if the PIN is forgotten: show it right away.
+    activeSection = 'profile';
+    showCreateSeed = true;
+  }
+
+  function handleMobileCreate(): void {
+    entryError = '';
+    entryPin = '';
+    entryPinFirst = '';
+    // Nothing is created yet. The account appears only after the PIN is confirmed, in
+    // `handleSubmitPin`: creating it first meant a profile whose password nobody knew if
+    // the user backed out, and the next start showed it as if it were a real one.
+    entryCreatePassword = generatePassword();
+    entryPhase = { kind: 'create-pin' };
   }
 
   /**
    * Opens the pairing screen as the receiving side.
    *
-   * @param _method - Transport chosen on the previous screen.
-   * @remarks
-   * The transport is not a parameter of the transfer: status-go always pairs over TCP on
-   * the local network, and the only thing the choice changes is how the string gets from
-   * one screen to the other. Both paths land here, and the screen offers copy and paste.
+   * @param _method - How the two devices are connected; the transfer itself does not
+   *   depend on it. Discovery runs on whatever local network both devices share, and a
+   *   USB cable with tethering on is one more such network.
    *
    * A device in the entry flow has no profile, so it is necessarily the receiver. The
    * sending side is reached from the profile section of a device that is logged in.
@@ -1037,61 +1201,56 @@
     entryError = '';
     entryPin = '';
     pairingRole = 'receiver';
-    pairingString = '';
-    pairingInput = '';
     pairingError = '';
+    pairingDigits = '';
+    pairingPhase = 'waiting';
     if (!(await pairingAvailable())) {
       entryError = i18n.t('Pairing is not available in this build yet');
       return;
     }
     entryPhase = { kind: 'pairing-enter', role: 'receiver' };
+    try {
+      pairingLocalAddress = (await lanLocalAddress()) ?? '';
+      const status = await lanReceiveStart(statusState.backendDataDir, entryNetwork);
+      void applyPairingStatus(status);
+      startPairingPolling();
+    } catch (e) {
+      pairingPhase = 'failed';
+      pairingError = formatError(e);
+    }
   }
 
   /**
-   * Asks this device to show the string the other one reads.
+   * Starts the search and the handshake; the sender gets here after the PIN check.
    *
-   * @remarks
-   * The sender only does this while the profile is open, and showing the code hands out
-   * a five-minute key to the profile: whoever reads the string can take it. So the PIN is
-   * asked for first — a phone left unlocked on a desk must not be enough on its own.
-   * The receiver has no profile to protect, so it starts its server directly.
+   * @param address - Address typed by the user, when the broadcast search found nothing.
    */
-  async function handlePairingStart(): Promise<void> {
+  async function showPairingCode(address?: string): Promise<void> {
     pairingError = '';
-    if (pairingRole === 'sender') {
-      pairingShowingCode = false;
-      pairingPromptPin = true;
-      pairingPin = '';
-      pairingPinError = '';
-      return;
+    pairingDigits = '';
+    pairingPhase = 'waiting';
+    try {
+      const status = await lanSendStart(
+        statusState.backendDataDir,
+        selectedAccountKeyUid,
+        getSessionPassword(),
+        pairingDeviceType(),
+        pairingSyncHistory,
+        address
+      );
+      void applyPairingStatus(status);
+      startPairingPolling();
+    } catch (e) {
+      pairingPhase = 'failed';
+      pairingError = formatError(e);
     }
-    await showPairingCode();
   }
 
-  /** Starts the server and shows the code; the sender gets here after the PIN check. */
-  async function showPairingCode(): Promise<void> {
-    pairingError = '';
-    pairingBusy = true;
-    try {
-      const dataDir = statusState.backendDataDir;
-      const result =
-        pairingRole === 'receiver'
-          ? await startReceiving(dataDir)
-          : await startSending(
-              dataDir,
-              selectedAccountKeyUid,
-              getSessionPassword(),
-              pairingDeviceType(),
-              pairingSyncHistory
-            );
-      pairingString = result.value;
-      pairingCode = result.confirmation_code;
-      pairingHasString = true;
-    } catch (e) {
-      pairingError = formatError(e);
-    } finally {
-      pairingBusy = false;
-    }
+  /** Retries the sender's search at the address typed on screen. */
+  async function handlePairingAddress(address: string): Promise<void> {
+    stopPairingPolling();
+    await lanCancel().catch(() => undefined);
+    await showPairingCode(address);
   }
 
   /**
@@ -1109,124 +1268,61 @@
       pairingPinError = i18n.t(problem);
       return;
     }
-    pairingBusy = true;
     try {
       const password = await openPin(entryNetwork, selectedAccountKeyUid, pairingPin);
       pairingPin = '';
-      // Not stored in the session: the code screen only has to prove who is holding the
-      // phone, and the transfer reads the password from the session at that point.
+      // The session password, because the transfer reads it when the other device
+      // connects. Proving the PIN here also proves the profile can be opened at all.
       setSessionPassword(password);
-      pairingPromptPin = false;
-      pairingShowingCode = true;
       await showPairingCode();
     } catch (e) {
       pairingPin = '';
       pairingPinError = formatError(e);
-    } finally {
-      pairingBusy = false;
     }
   }
 
-  /** Leaves the PIN prompt without showing a code. */
+  /** Leaves without showing a code. */
   function handlePairingPinCancel(): void {
-    pairingPromptPin = false;
     pairingPin = '';
     pairingPinError = '';
     if (pairingRole === 'sender') mobileSendProfile = false;
   }
 
   /**
-   * Runs the transfer with the string the other device showed.
+   * Presses Sync after the digits matched on both screens.
    *
    * @remarks
-   * The receiving side is the one that ends up with a new profile, so it is where the
-   * password appears: status-go ships the sender's password inside the payload, and the
-   * screen wraps it under a PIN the user chooses. A password that arrived but is not
-   * wrapped would leave a profile nobody can open once this screen is gone.
+   * Both devices press: the receiving side sends its confirmation, the sending side
+   * issues the transfer. The profile leaves only when both have agreed, which is what
+   * turns "whoever holds the code takes the profile" into a decision of two people.
    */
-  async function handlePairingTransfer(): Promise<void> {
+  async function handlePairingConfirm(): Promise<void> {
     pairingError = '';
-    if (!(await validateConnectionString(pairingInput))) {
-      pairingError = i18n.t('This code is not valid');
-      return;
-    }
-    // The receiver shows the digits of whatever it pasted, next to the sender's screen.
-    // Two presses rather than one: the first reveals the digits, the second — pressed
-    // only after they match — starts the transfer.
-    if (pairingRole === 'receiver') {
-      const pasted = await confirmationCode(pairingInput);
-      if (!pasted) {
-        pairingError = i18n.t('This code is not valid');
-        return;
-      }
-      if (pasted !== pairingPastedCode) {
-        pairingPastedCode = pasted;
-        return;
-      }
-    }
-    pairingBusy = true;
     try {
-      const dataDir = statusState.backendDataDir;
-      if (pairingRole === 'sender') {
-        await sendAccount(
-          dataDir,
-          pairingInput,
-          selectedAccountKeyUid,
-          getSessionPassword(),
-          pairingDeviceType()
-        );
-        pairingString = '';
-        pairingInput = '';
-        pairingHasString = false;
-        // The sending device keeps working as it did: the transfer is a copy, not a move.
-        entryError = '';
-        entryPhase = { kind: 'login' };
-        activeSection = 'home';
-        return;
-      }
-
-      const account = await receiveAccount(dataDir, pairingInput, entryNetwork);
-      // The profile list is reloaded so the new key is known to the backend before the
-      // PIN screen hands over to the session.
-      await reloadAccounts();
-      pairingInput = '';
-      pairingString = '';
-      pairingHasString = false;
-      entryPin = '';
-      entryPinFirst = '';
-      // The password that came with the profile is not in `account`: it waits on the Rust
-      // side until the PIN is set. The pad only needs to know which call to make.
-      pendingPin = true;
-      entryPhase = {
-        kind: 'set-pin',
-        profile: { keyUid: account.key_uid, name: account.name },
-      };
+      const status = await lanConfirm();
+      pairingConfirmed = status.phase === 'codes';
+      await applyPairingStatus(status);
     } catch (e) {
       pairingError = formatError(e);
-    } finally {
-      pairingBusy = false;
     }
   }
 
   /** Leaves the pairing screen. */
   async function handlePairingBack(): Promise<void> {
-    pairingString = '';
-    pairingInput = '';
-    pairingHasString = false;
+    stopPairingPolling();
+    await lanCancel().catch(() => undefined);
+    pairingPhase = 'idle';
+    pairingDigits = '';
     pairingError = '';
-    // The digits belong to one string. Keeping them would show the previous paste's
-    // answer next to a new code, which is precisely the comparison that must not be stale.
-    pairingCode = '';
-    pairingPastedCode = '';
-    pairingShowingCode = false;
-    pairingPromptPin = false;
     pairingPin = '';
     pairingPinError = '';
     if (pairingRole === 'sender') {
       mobileSendProfile = false;
       return;
     }
-    entryPhase = { kind: 'pairing-method' };
+    // The receiver came from "Restore or sync": that is where Back leads, not to a
+    // transport picker that no longer exists.
+    entryPhase = { kind: 'restore-method' };
   }
 
   /**
@@ -1242,14 +1338,9 @@
       return;
     }
     pairingRole = 'sender';
-    pairingString = '';
-    pairingInput = '';
+    pairingPhase = 'idle';
+    pairingDigits = '';
     pairingError = '';
-    pairingHasString = false;
-    pairingCode = '';
-    pairingPastedCode = '';
-    pairingShowingCode = false;
-    pairingPromptPin = false;
     pairingPin = '';
     pairingPinError = '';
     mobileSendProfile = true;
@@ -1282,6 +1373,37 @@
       statusState.accountKeyUid ||
       statusState.accounts[0]?.['key-uid'] ||
       '';
+  }
+
+  /**
+   * Stops a pairing attempt and puts the screens back where they started.
+   *
+   * @remarks
+   * A transfer in progress is a live secret: a bound discovery socket, a running
+   * status-go server, and six digits on screen. Leaving the application used to leave
+   * all of it running behind the lock — the server kept its port until the five-minute
+   * timeout, and on return the screen showed a dead attempt that had expired while the
+   * app was in the background. The attempt now ends when the app goes away, exactly as
+   * it ends when the user presses Back.
+   */
+  function stopPairingAttempt(): void {
+    const active =
+      pairingPhase === 'waiting' ||
+      pairingPhase === 'codes' ||
+      pairingPhase === 'transferring';
+    const onScreen = entryPhase.kind === 'pairing-enter' || mobileSendProfile;
+    if (!active && !onScreen) return;
+    info('[pairing] attempt stopped by leaving the app');
+    stopPairingPolling();
+    void lanCancel().catch(() => undefined);
+    pairingPhase = 'idle';
+    pairingDigits = '';
+    pairingConfirmed = false;
+    pairingError = '';
+    pairingPin = '';
+    pairingPinError = '';
+    if (entryPhase.kind === 'pairing-enter') entryPhase = { kind: 'restore-method' };
+    if (mobileSendProfile) mobileSendProfile = false;
   }
 
   /** Locks the open session, if this profile can be reopened with a PIN. */
@@ -1350,7 +1472,12 @@
    */
   $effect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') void lockSession();
+      if (document.visibilityState === 'hidden') {
+        // A pairing attempt does not survive the app leaving the foreground: its server
+        // and its sockets would keep running behind the lock until the timeout.
+        stopPairingAttempt();
+        void lockSession();
+      }
     };
     // The webview does not always report `visibilitychange` when another activity covers
     // it, while losing focus is what the window system always reports. Both are wired:
@@ -1360,9 +1487,14 @@
     // moment after a successful unlock, and only while the page is still visible — being
     // covered by another app arrives as `hidden` and locks regardless.
     const onBlur = () => {
-      if (document.visibilityState === 'visible' && Date.now() - unlockedAt < BLUR_GRACE_MS) {
-        return;
-      }
+      // Android reports `hidden` when the app actually goes away, and reports `blur` for
+      // things that are not leaving at all — dismissing the keyboard, a focus change
+      // during redraw. Locking on those asked for the PIN a second time right after a
+      // correct one. On the desktop the opposite is true: the window stays `visible`
+      // while it loses focus, so `blur` is the only signal that the user walked away.
+      if (!isAndroid() && Date.now() - unlockedAt < BLUR_GRACE_MS) return;
+      if (isAndroid() && document.visibilityState === 'visible') return;
+      stopPairingAttempt();
       void lockSession();
     };
     document.addEventListener('visibilitychange', onVisibility);
@@ -1426,9 +1558,10 @@
     // show it.
     if (id !== 'profile' && mobileSendProfile) {
       mobileSendProfile = false;
-      pairingString = '';
-      pairingInput = '';
-      pairingHasString = false;
+      stopPairingPolling();
+      void lanCancel().catch(() => undefined);
+      pairingPhase = 'idle';
+      pairingDigits = '';
       pairingError = '';
     }
     // Chat always opens on search on the right, even if the section is already open
@@ -1472,6 +1605,8 @@
     // The lock belongs to a session: a signed-out profile has no PIN to ask for, and a
     // stale flag here would hide the entry flow behind a pad that opens nothing.
     appLocked = false;
+    loginGrace = false;
+    sessionOpen = false;
     sessionHasPin = false;
     lockPin = '';
     lockError = '';
@@ -1542,20 +1677,17 @@
           -->
           <PairingScreen
             role="sender"
-            connectionString={pairingHasString ? pairingString : ''}
-            bind:value={pairingInput}
-            busy={pairingBusy}
+            phase={pairingPhase}
+            digits={pairingDigits}
             error={pairingError}
-            confirmationCode={pairingCode}
-            showingCode={pairingShowingCode}
-            promptPin={pairingPromptPin}
             bind:pin={pairingPin}
             pinError={pairingPinError}
             {pinMin}
             {pinMax}
             bind:syncHistory={pairingSyncHistory}
-            onStart={handlePairingStart}
-            onTransfer={handlePairingTransfer}
+            confirmed={pairingConfirmed}
+            onConfirm={handlePairingConfirm}
+            onAddress={handlePairingAddress}
             onPin={handlePairingPin}
             onPinCancel={handlePairingPinCancel}
             onBack={handlePairingBack}
@@ -1628,20 +1760,17 @@ onSave={() => {
             <!-- Sending a profile from a wide layout: same screen as on the phone. -->
             <PairingScreen
               role="sender"
-              connectionString={pairingHasString ? pairingString : ''}
-              bind:value={pairingInput}
-              busy={pairingBusy}
+              phase={pairingPhase}
+              digits={pairingDigits}
               error={pairingError}
-              confirmationCode={pairingCode}
-              showingCode={pairingShowingCode}
-              promptPin={pairingPromptPin}
               bind:pin={pairingPin}
               pinError={pairingPinError}
               {pinMin}
               {pinMax}
               bind:syncHistory={pairingSyncHistory}
-              onStart={handlePairingStart}
-              onTransfer={handlePairingTransfer}
+              confirmed={pairingConfirmed}
+              onConfirm={handlePairingConfirm}
+              onAddress={handlePairingAddress}
               onPin={handlePairingPin}
               onPinCancel={handlePairingPinCancel}
               onBack={handlePairingBack}
@@ -1703,7 +1832,11 @@ onSave={() => {
     `createAccount` logs in immediately, and without this the screen would vanish before
     the user ever picked a PIN, leaving a profile that can never be opened again.
   -->
-  {:else if !statusState.isLoggedIn || entryPhase.kind === 'set-pin'}
+  {:else if
+    !(sessionOpen || loginGrace) ||
+    entryPhase.kind === 'set-pin' ||
+    entryPhase.kind === 'create-pin'
+  }
     <!--
       One entry flow on every platform. The desktop used to ask for a password by hand,
       but a profile synced from a phone arrives with a 32-character generated password
@@ -1727,20 +1860,18 @@ onSave={() => {
       -->
       <PairingScreen
         role={pairingRole}
-        connectionString={pairingHasString ? pairingString : ''}
-        bind:value={pairingInput}
-        busy={pairingBusy}
+        phase={pairingPhase}
+        digits={pairingDigits}
         error={pairingError || entryError}
-        confirmationCode={pairingCode}
-        showingCode={pairingShowingCode}
-        promptPin={pairingPromptPin}
+        localAddress={pairingLocalAddress}
         bind:pin={pairingPin}
         pinError={pairingPinError}
         {pinMin}
         {pinMax}
         bind:syncHistory={pairingSyncHistory}
-        onStart={handlePairingStart}
-        onTransfer={handlePairingTransfer}
+        confirmed={pairingConfirmed}
+        onConfirm={handlePairingConfirm}
+        onAddress={handlePairingAddress}
         onPin={handlePairingPin}
         onPinCancel={handlePairingPinCancel}
         onBack={handlePairingBack}
@@ -1750,6 +1881,7 @@ onSave={() => {
         bind:phase={entryPhase}
         bind:pin={entryPin}
         hasProfiles={hasProfiles}
+        {profileCount}
         {pinMin}
         {pinMax}
         {pinConfirming}

@@ -30,6 +30,7 @@ mod env;
 mod error;
 mod inprocess;
 mod invite;
+mod lanpair;
 mod logging;
 mod market;
 mod opener;
@@ -141,6 +142,12 @@ pub fn run() {
             pairing::pairing_start_receiving,
             pairing::pairing_receive,
             pairing::pairing_send,
+            lanpair::pairing_lan_receive_start,
+            lanpair::pairing_lan_send_start,
+            lanpair::pairing_lan_confirm,
+            lanpair::pairing_lan_cancel,
+            lanpair::pairing_lan_status,
+            lanpair::pairing_lan_local_address,
             invite::parse_invite_link,
             providers::fetch_feed,
             opener::open_external,

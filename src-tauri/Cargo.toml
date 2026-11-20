@@ -38,7 +38,7 @@ libloading = "0.7"
 # Локальный RPC-форвардер (src/rpc_proxy.rs).
 # reqwest с rustls: в дереве уже есть ring/rustls, поэтому сборка идёт офлайн
 # без openssl. Фича http2 не нужна — прокси работает по HTTP/1.1.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ansi", "time"] }
@@ -68,6 +68,14 @@ zeroize = "1"
 # зависимости, sha2 — тоже, поэтому сборка идёт офлайн.
 bs58 = "0.5"
 sha2 = "0.10"
+
+# Рукопожатие в локальной сети (src/lanpair.rs).
+#
+# X25519 для одноразовых ключей, HKDF-SHA256 для вывода ключей сеанса и шести цифр.
+# AES-256-GCM уже подключён для конверта PIN. Версии лежат в кэше зависимостей,
+# поэтому сборка идёт офлайн.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
 
 # Внешние источники (src/providers.rs): разбор RSS/Atom и страниц Telegram.
 # Версии уже лежат в кэше зависимостей, поэтому сборка идёт офлайн.

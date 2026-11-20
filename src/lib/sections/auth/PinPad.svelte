@@ -11,6 +11,7 @@
    * The component holds the entered digits and nothing else: it does not compare them
    * and does not know the stored PIN, which lives encrypted on the Rust side.
    */
+  import type { Snippet } from 'svelte';
   import { i18n } from '$lib/i18n';
 
   let {
@@ -28,6 +29,8 @@
     error = '',
     onSubmit,
     onBack,
+    /** Extra content under the keypad — a checkbox, a hint, a countdown. */
+    below,
   }: {
     value: string;
     maxLength?: number;
@@ -38,6 +41,7 @@
     error?: string;
     onSubmit: () => void;
     onBack?: () => void;
+    below?: Snippet;
   } = $props();
 
   // Layout of a phone keypad, with the two action keys on the bottom row.
@@ -128,4 +132,7 @@
       {/if}
     {/each}
   </div>
+  {#if below}
+    {@render below()}
+  {/if}
 </div>

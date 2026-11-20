@@ -4,7 +4,8 @@ This document describes how Stauri is structured as a whole: what layers it
 consists of, how they communicate, and why the boundaries are drawn the way
 they are. It complements `networks_and_balances.md` (the concrete path from a
 balance to the screen), `status_outdated_architecture.md` (why `status-go` is
-complex) and `docs/BUILDING.md` (building `libstatus.so` and `libsds.so`).
+complex), `auth_and_sync.md` (login, PIN, profile creation and device sync) and
+`docs/BUILDING.md` (building `libstatus.so` and `libsds.so`).
 
 The full, more detailed description is in Russian: `docs/ru/architecture.md`.
 

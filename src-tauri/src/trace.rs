@@ -30,6 +30,13 @@ pub fn debug_enabled() -> bool {
 /// Request and response bodies are never written in full: only the endpoint, its
 /// length and the first 200 characters of the response.
 pub fn line(text: &str) {
+    // Android release builds cannot be read back with `run-as`, so the same line also
+    // goes through the `log` crate: `android_logger` writes it to logcat under the tag
+    // `stauri`. Without this, every diagnostic in this file was invisible on the phone.
+    // The `log` dependency is Android-only, hence the gate; on desktop the file is the
+    // channel and is readable as it is.
+    #[cfg(target_os = "android")]
+    log::info!("{text}");
     let Some(path) = TRACE_PATH.get() else { return };
     let stamp = std::time::SystemTime::now()
  .duration_since(std::time::UNIX_EPOCH)

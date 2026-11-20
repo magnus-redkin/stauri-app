@@ -1,49 +1,46 @@
 /**
- * Local pairing: copying a profile between devices over the local network.
+ * Local pairing: copying a profile between devices on the same network.
  *
- * This module only moves values across the boundary; the transfer itself is status-go's
- * (`src-tauri/src/pairing.rs`).
+ * This module only moves values across the boundary; discovery, the handshake and the
+ * transfer itself live in Rust (`src-tauri/src/lanpair.rs` and `pairing.rs`).
  *
  * @remarks
- * Three facts shape this API, and all three come from the status-go source rather than
- * from intuition:
+ * Three facts shape this API:
  *
  * * the device that **has** the profile is the sender, the empty one is the receiver —
- *   the role follows from whether the device is logged in, not from who starts;
+ *   the role follows from whether the device is logged in;
+ * * the connection string is a secret (it carries the transfer's AES key), so it never
+ *   reaches a screen: it travels inside an encrypted session the two devices establish
+ *   themselves, and only after both people compared six digits;
  * * the transfer carries the sender's **password**, so the receiver ends up with a
- *   32-character string nobody typed and has to wrap it under its own PIN;
- * * the string is the only channel. There is no discovery on Android — status-go
- *   disables the LAN beacon there outright — so one device always shows a string and
- *   the other reads it.
+ *   32-character string nobody typed and has to wrap it under its own PIN.
+ *
+ * The screens poll {@link lanStatus}: a transfer is one long operation on the Rust side,
+ * and polling a small value is simpler and more robust than a stream of events that has
+ * to be kept in step with the lifecycle of a screen.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { debug } from '$lib/utils/log';
-import { formatError } from '$lib/utils/errors';
 
 /** Role a device takes in a transfer. */
 export type PairingRole = 'sender' | 'receiver';
 
-/** A connection string produced on this device. */
-export interface ConnectionString {
-  /** The string to show. Several hundred characters; it cannot be typed. */
-  value: string;
-  /** Role this device took. */
-  role: PairingRole;
-  /**
-   * Six digits both devices compare before the transfer starts.
-   *
-   * Derived from the key inside the string, so a string swapped on its way across yields
-   * different digits. It does not protect against someone who saw the whole string —
-   * the five-minute lifetime is what limits that.
-   */
-  confirmation_code: string;
-}
+/** Where an attempt is. */
+export type LanPhase = 'idle' | 'waiting' | 'codes' | 'transferring' | 'done' | 'failed';
 
-/** A profile that arrived from another device. */
-export interface PairedAccount {
-  key_uid: string;
-  name?: string;
+/** State of the attempt as the Rust side reports it. */
+export interface LanStatus {
+  /** `idle` before anything starts, `failed` when it stopped with a reason. */
+  phase: LanPhase;
+  /** Six digits both screens compare, once the handshake is done. */
+  digits?: string | null;
+  /** Why the attempt stopped, when it did. */
+  error?: string | null;
+  /** Key uid of the profile that arrived, on the receiving side. */
+  key_uid?: string | null;
+  /** Its display name, when the sender had one. */
+  name?: string | null;
 }
 
 /**
@@ -56,140 +53,109 @@ export async function pairingAvailable(): Promise<boolean> {
   try {
     return await invoke<boolean>('pairing_available');
   } catch (e) {
-    debug(`[pairing] availability check failed: ${formatError(e)}`);
+    debug(`[pairing] availability check failed: ${e}`);
     return false;
   }
 }
 
 /**
- * Checks a connection string before a transfer starts.
+ * Starts this device as the receiver and begins announcing itself on the network.
  *
- * @param value - String pasted or scanned by the user.
- * @returns `true` when status-go accepts it.
+ * @param dataDir - Root data directory of the selected network.
+ * @param network - `mainnet` or `testnet`; the received password is filed under it.
+ * @returns The initial status, `waiting`.
  * @remarks
- * Cheap and local: it parses the string and verifies its fields, so a mistyped paste is
- * reported as such instead of failing after a network timeout.
+ * Returns immediately: the search runs in the background and the screen polls
+ * {@link lanStatus}. The receiving side has no secret to show, so it can start before
+ * the other device exists at all.
  */
-export async function validateConnectionString(value: string): Promise<boolean> {
-  if (!value.trim()) return false;
-  try {
-    return await invoke<boolean>('pairing_validate', { connectionString: value.trim() });
-  } catch {
-    return false;
-  }
+export async function lanReceiveStart(dataDir: string, network: string): Promise<LanStatus> {
+  const status = await invoke<LanStatus>('pairing_lan_receive_start', { dataDir, network });
+  debug(`[pairing] receiver waiting`);
+  return status;
 }
 
 /**
- * Starts this device as the sender.
+ * Starts this device as the sender and searches for the other one.
  *
  * @param dataDir - Root data directory of the selected network.
  * @param keyUid - Profile being sent.
  * @param password - Its password; status-go needs it to read the keys.
  * @param deviceType - `android`, `linux`, … as status-go records it.
  * @param syncMessages - Whether the message history travels with the profile.
- * @returns The connection string to show on this device, and the code to compare.
+ * @returns The initial status, `waiting`.
  * @remarks
- * History is off unless the caller says otherwise: status-go transfers the whole message
- * database with no date window, and calls it a privacy decision in its own source.
+ * History is on only when the caller says so. status-go transfers the whole message
+ * database with no date window, and calls it a privacy decision in its own source; the
+ * flag is read when its server starts, which happens after both sides press Sync.
  */
-export async function startSending(
+export async function lanSendStart(
   dataDir: string,
   keyUid: string,
   password: string,
   deviceType: string,
-  syncMessages = false
-): Promise<ConnectionString> {
-  const result = await invoke<ConnectionString>('pairing_start_sending', {
+  syncMessages: boolean,
+  address?: string
+): Promise<LanStatus> {
+  const status = await invoke<LanStatus>('pairing_lan_send_start', {
     dataDir,
     keyUid,
     password,
     deviceType,
     syncMessages,
+    address: address?.trim() || null,
   });
-  debug(`[pairing] sender started, string length ${result.value.length}, history ${syncMessages}`);
-  return result;
+  debug(`[pairing] sender searching, history ${syncMessages}`);
+  return status;
 }
 
 /**
- * Starts this device as the receiver.
+ * Address of this device on the local network.
  *
- * @param dataDir - Root data directory of the selected network.
- * @returns The connection string to show on this device.
- */
-export async function startReceiving(dataDir: string): Promise<ConnectionString> {
-  const result = await invoke<ConnectionString>('pairing_start_receiving', { dataDir });
-  debug(`[pairing] receiver started, string length ${result.value.length}`);
-  return result;
-}
-
-/**
- * Six digits the receiving device compares against the sender's screen.
- *
- * @param value - Connection string the user pasted.
- * @returns The digits, or `''` when the string is not in the documented shape.
+ * @returns The IPv4 address, or `null` when the device has no network.
  * @remarks
- * Computed in Rust, not here: both devices must run the same code over the same bytes,
- * and a second implementation in JavaScript would be a second thing to keep right.
+ * Shown on the waiting screen of the receiving device. Typing it on the other one turns
+ * the search into a direct probe, which is the way through a router that drops broadcast
+ * but lets unicast past.
  */
-export async function confirmationCode(value: string): Promise<string> {
-  if (!value.trim()) return '';
+export async function lanLocalAddress(): Promise<string | null> {
   try {
-    return await invoke<string>('pairing_confirmation_code', {
-      connectionString: value.trim(),
-    });
-  } catch (e) {
-    debug(`[pairing] confirmation code failed: ${formatError(e)}`);
-    return '';
+    return await invoke<string | null>('pairing_lan_local_address');
+  } catch {
+    return null;
   }
 }
 
 /**
- * Receives a profile from the other device.
+ * Presses Sync after the digits matched on both screens.
  *
- * @param dataDir - Root data directory of the selected network.
- * @param connectionString - String shown by the sender.
- * @param network - `mainnet` or `testnet`; the received password is filed under it.
- * @returns The profile that arrived: key uid and name.
- * @throws When the string is refused, the transfer fails, or nothing arrives in time.
+ * @returns The status as it is now.
  * @remarks
- * The password that came with the profile is not in the answer. It waits on the Rust side
- * until `savePinFromPending` wraps it under the PIN the user picks, so it never sits in
- * webview state.
+ * Pressing early is safe: the press is remembered, and the exchange waits for the other
+ * side. The transfer starts when both have pressed, so consent comes from two devices.
  */
-export async function receiveAccount(
-  dataDir: string,
-  connectionString: string,
-  network: string
-): Promise<PairedAccount> {
-  return await invoke<PairedAccount>('pairing_receive', {
-    dataDir,
-    connectionString: connectionString.trim(),
-    network,
-  });
+export async function lanConfirm(): Promise<LanStatus> {
+  return await invoke<LanStatus>('pairing_lan_confirm');
 }
 
 /**
- * Sends this device's profile to the other one.
+ * Stops the attempt.
  *
- * @param dataDir - Root data directory of the selected network.
- * @param connectionString - String shown by the receiver.
- * @param keyUid - Profile being sent.
- * @param password - Its password.
- * @param deviceType - `android`, `linux`, … as status-go records it.
- * @throws When the string is refused or the transfer fails.
+ * @returns The idle status.
+ * @remarks
+ * Called when the user leaves the screen. A transfer already under way is not interrupted
+ * cleanly — status-go has no export for stopping its server — but the screen stops
+ * polling and the attempt is forgotten.
  */
-export async function sendAccount(
-  dataDir: string,
-  connectionString: string,
-  keyUid: string,
-  password: string,
-  deviceType: string
-): Promise<void> {
-  await invoke('pairing_send', {
-    dataDir,
-    connectionString: connectionString.trim(),
-    keyUid,
-    password,
-    deviceType,
-  });
+export async function lanCancel(): Promise<LanStatus> {
+  return await invoke<LanStatus>('pairing_lan_cancel');
+}
+
+/**
+ * Reads the current state of the transfer.
+ *
+ * @returns The status, `idle` when nothing is running.
+ */
+export async function lanStatus(): Promise<LanStatus> {
+  return await invoke<LanStatus>('pairing_lan_status');
 }

@@ -169,7 +169,7 @@
           onclick={() => onSendProfile?.()}
           class="w-full p-2 border border-border rounded-md text-xs font-medium text-foreground hover:bg-secondary transition-colors"
         >
-          {i18n.t("Show this device's code")}
+          {i18n.t('Code for sync')}
         </button>
       </div>
     {/if}
