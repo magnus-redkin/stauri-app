@@ -101,3 +101,6 @@ Thumbs.db
 tmp/
 TMP/
 .cache/
+
+# Локальные настройки прав Claude Code (машинные, не для коммита).
+.claude/settings.local.json
