@@ -28,6 +28,24 @@ pub struct WakuConfig {
     fleet: Option<String>,
 }
 
+/// Built-in network when nothing is configured.
+///
+/// @remarks
+/// The dev Android build is the one made with `--debug`; it defaults to Sepolia, so a
+/// transaction tried while testing cannot touch real funds. Release builds keep mainnet.
+/// The desktop is left alone: `cargo tauri dev` runs against mainnet unless told
+/// otherwise, which is what its README says.
+fn default_network() -> String {
+    #[cfg(all(target_os = "android", debug_assertions))]
+    {
+        "sepolia".to_string()
+    }
+    #[cfg(not(all(target_os = "android", debug_assertions)))]
+    {
+        "mainnet".to_string()
+    }
+}
+
 fn default_chain_id() -> u64 {
     1
 }
@@ -37,7 +55,7 @@ impl AppConfig {
         self.ethereum
             .as_ref()
             .and_then(|e| e.preset.clone())
-            .unwrap_or_else(|| "mainnet".to_string())
+            .unwrap_or_else(default_network)
     }
 
     pub fn chain_id(&self) -> u64 {

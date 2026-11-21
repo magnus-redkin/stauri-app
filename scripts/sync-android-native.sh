@@ -51,6 +51,34 @@ mkdir -p "$GEN/res/xml" "$GEN/res/values"
 cp "$SRC"/res/xml/*.xml "$GEN/res/xml/"
 cp "$SRC"/res/values/*.xml "$GEN/res/values/"
 
+# ---------- Dev build, side by side with the release ----------
+#
+# The debug variant is the test client: it gets its own application id and its own
+# launcher name, so it installs next to the release build instead of replacing it. The
+# release package keeps real money and an ENS name; the reset script only ever clears
+# the `.dev` one, so a test run cannot reach the real profile.
+#
+# Both edits live here rather than in the generated files: `src-tauri/gen/` is
+# gitignored and Tauri recreates it. The patch is idempotent and applied on every
+# build, because `beforeBuildCommand` runs this script.
+GRADLE="$GEN_ROOT/app/build.gradle.kts"
+if [[ -f "$GRADLE" ]] && ! grep -q 'applicationIdSuffix' "$GRADLE"; then
+  perl -0pi -e 's/(getByName\("debug"\) \{\n)/$1            applicationIdSuffix = ".dev"\n            versionNameSuffix = "-dev"\n/' "$GRADLE"
+  echo "Dev application id: com.magnus.stauri_app.dev"
+fi
+
+# The launcher label of the debug variant. A resource in the debug source set replaces
+# the one in `main` for debug builds only, so the release keeps "Stauri".
+DEBUG_RES="$GEN_ROOT/app/src/debug/res/values"
+mkdir -p "$DEBUG_RES"
+cat > "$DEBUG_RES/strings.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">"Stauri.dev"</string>
+    <string name="main_activity_title">"Stauri.dev"</string>
+</resources>
+XML
+
 # Manifest: the generated one is kept, but two attributes are required and cannot be
 # expressed anywhere else. Applied with sed so the rest of the file stays as Tauri
 # wrote it; re-running is safe because the pattern is only inserted when absent.

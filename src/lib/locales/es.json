@@ -438,5 +438,15 @@
   "If the search finds nothing, type the address shown on the other device.": "Si la búsqueda no encuentra nada, escribe la dirección que se muestra en el otro dispositivo.",
   "If the search finds nothing, type this address on the other device.": "Si la búsqueda no encuentra nada, escribe esta dirección en el otro dispositivo.",
   "Both devices on the same local network": "Ambos dispositivos en la misma red local",
-  "Waiting for confirmation on the other device": "Esperando la confirmación en el otro dispositivo"
+  "Waiting for confirmation on the other device": "Esperando la confirmación en el otro dispositivo",
+  "Any characters: letters, digits and symbols.": "Cualquier carácter: letras, dígitos y símbolos.",
+  "Continue": "Continuar",
+  "Lowercase letter": "Letra minúscula",
+  "Uppercase letter": "Letra mayúscula",
+  "The PIN must be digits": "El PIN debe contener solo dígitos",
+  "The PIN is too easy to guess": "Este PIN es demasiado fácil de adivinar",
+  "The PIN must mix lowercase, uppercase, digits and symbols": "El PIN debe combinar minúsculas, mayúsculas, dígitos y símbolos",
+  "Without the seed phrase, the wallet cannot be used.": "Sin la frase semilla, no se puede usar la cartera.",
+  "Skip for now": "Omitir por ahora",
+  "This is how other people see you. You can change it later.": "Así te ven los demás. Puedes cambiarlo más tarde."
 }

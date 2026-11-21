@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   initialPhase,
   phaseAfterPinLookup,
-  pinProblem,
+  pinCreationProblem,
+  pinOpenProblem,
   parseNetwork,
   pairingMethods,
   type EntryContext,
@@ -29,15 +30,17 @@ describe('initialPhase', () => {
     expect(initialPhase(ctx())).toEqual({ kind: 'login' });
   });
 
-  it('при наличии профилей показывает их список', () => {
-    expect(initialPhase(ctx({ profiles: [PROFILE] }))).toEqual({ kind: 'pick-profile' });
+  it('при наличии профилей показывает экран входа со списком', () => {
+    // The list lives on the entry screen, not behind a separate routing step: one screen
+    // answers "which profile", and a device with one profile is one tap away from its pad.
+    expect(initialPhase(ctx({ profiles: [PROFILE] }))).toEqual({ kind: 'login' });
   });
 
   it('не спрашивает PIN до выбора профиля', () => {
     // A PIN belongs to a profile; asking before the choice would apply it to whichever
     // profile happens to be first in the list.
     const phase = initialPhase(ctx({ profiles: [PROFILE, { keyUid: KEY }] }));
-    expect(phase.kind).toBe('pick-profile');
+    expect(phase.kind).toBe('login');
   });
 });
 
@@ -83,19 +86,39 @@ describe('phaseAfterPinLookup', () => {
   });
 });
 
-describe('pinProblem', () => {
-  it('принимает PIN в допустимых границах', () => {
-    expect(pinProblem('1234', 4, 12)).toBeNull();
-    expect(pinProblem('123456789012', 4, 12)).toBeNull();
+describe('pinOpenProblem', () => {
+  it('принимает всё, что могло быть сохранено', () => {
+    // Opening is deliberately loose: a stored PIN must stay typeable, or the profile
+    // would be locked behind a rule its owner cannot see.
+    expect(pinOpenProblem('1379', 12)).toBeNull();
+    expect(pinOpenProblem('a', 64)).toBeNull();
+    expect(pinOpenProblem('Tr0ub4dor&3!', 64)).toBeNull();
   });
 
-  it('отвергает слишком короткий PIN', () => {
-    // The keypad already stops at the maximum, so this is the failure a user can reach.
-    expect(pinProblem('123', 4, 12)).toBe('The PIN is too short');
+  it('отвергает пустое поле и переполнение', () => {
+    expect(pinOpenProblem('', 12)).toBe('Enter your PIN');
+    expect(pinOpenProblem('1234567890123', 12)).toBe('The PIN is too long');
+  });
+});
+
+describe('pinCreationProblem', () => {
+  const phone = { creation_min: 5, max_length: 12, digits_only: true, require_classes: false };
+  const desktop = { creation_min: 8, max_length: 64, digits_only: false, require_classes: true };
+
+  it('на телефоне требует пять цифр и отвергает очевидные', () => {
+    expect(pinCreationProblem('58291', phone)).toBeNull();
+    expect(pinCreationProblem('5829', phone)).toBe('The PIN is too short');
+    expect(pinCreationProblem('5829a', phone)).toBe('The PIN must be digits');
+    expect(pinCreationProblem('12345', phone)).toBe('The PIN is too easy to guess');
+    expect(pinCreationProblem('55555', phone)).toBe('The PIN is too easy to guess');
   });
 
-  it('отвергает слишком длинный PIN', () => {
-    expect(pinProblem('1234567890123', 4, 12)).toBe('The PIN is too long');
+  it('на ноутбуке требует все четыре класса', () => {
+    expect(pinCreationProblem('Tr0ub4dor&3', desktop)).toBeNull();
+    expect(pinCreationProblem('a1b2c3d4', desktop)).toBe(
+      'The PIN must mix lowercase, uppercase, digits and symbols'
+    );
+    expect(pinCreationProblem('aB1!cD', desktop)).toBe('The PIN is too short');
   });
 });
 

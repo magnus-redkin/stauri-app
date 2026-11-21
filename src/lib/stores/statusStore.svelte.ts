@@ -2,6 +2,7 @@ import { SvelteSet } from 'svelte/reactivity';
 import type { StatusEvent, NodeLoginEvent, MessagesNewEvent, GenericEvent } from '$lib/status/types';
 import { logout as apiLogout } from '$lib/status/api';
 import { info } from '$lib/utils/log';
+import { rememberProfileName } from '$lib/stores/profileNames';
 
 export const statusState = $state({
   isConnected: false,
@@ -135,6 +136,9 @@ export function processSignal(rawJson: string) {
         loginEvent.event?.settings?.['display-name'] ||
         loginEvent.event?.settings?.['alias'] ||
         statusState.alias;
+      // The entry screen runs before any login, so it cannot read settings: the name is
+      // cached here, the moment the application knows the real value.
+      rememberProfileName(statusState.accountKeyUid, statusState.alias);
       // The phrase is the same on every login, so a profile that was told to have
       // saved it keeps saying so after a restart instead of warning again.
       statusState.isSeedSaved = readSeedSaved(statusState.accountKeyUid);

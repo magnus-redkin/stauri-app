@@ -48,13 +48,52 @@ const ENVELOPE_VERSION: u32 = 2;
 /// Ten is enough for a fumbled PIN and far too few for guessing a four-digit one.
 pub const MAX_ATTEMPTS: u32 = 10;
 
-/// Shortest PIN accepted, in digits.
-pub const PIN_MIN_LENGTH: usize = 4;
-/// Longest PIN accepted, in digits.
+/// The PIN policy this platform applies when a PIN is **created**.
 ///
-/// Twelve is where a PIN stops being something a person types from memory; longer
-/// secrets belong in a password field, which this flow deliberately does not have.
-pub const PIN_MAX_LENGTH: usize = 12;
+/// A PIN protects the profile's password and lives on this device only: nothing
+/// ever moves it. The phone keeps a short numeric code and the desktop a passphrase,
+/// and the creation rule is the half that can protect the profile — opening and
+/// locking accept whatever was stored, because rejecting a stored PIN would strand
+/// it behind a rule its owner has no way to see.
+mod pin_policy {
+    #[cfg(target_os = "android")]
+    pub const MIN: usize = 5;
+    #[cfg(not(target_os = "android"))]
+    pub const MIN: usize = 8;
+
+    #[cfg(target_os = "android")]
+    pub const MAX: usize = 12;
+    #[cfg(not(target_os = "android"))]
+    pub const MAX: usize = 64;
+
+    /// Android: digits only, which is all its keypad can type.
+    #[cfg(target_os = "android")]
+    pub const DIGITS_ONLY: bool = true;
+    #[cfg(not(target_os = "android"))]
+    pub const DIGITS_ONLY: bool = false;
+
+    /// Desktop: all four classes, so the PIN has no dictionary to fall into.
+    #[cfg(target_os = "android")]
+    pub const REQUIRE_CLASSES: bool = false;
+    #[cfg(not(target_os = "android"))]
+    pub const REQUIRE_CLASSES: bool = true;
+}
+
+/// Whether a digit-only PIN is a pattern a thumb draws without thinking: all equal,
+/// one step up, one step down.
+fn is_trivial_digit_pin(pin: &str) -> bool {
+    let digits: Vec<u8> = pin.bytes().collect();
+    let n = digits.len();
+    if n < 3 {
+        return false;
+    }
+    if digits.iter().all(|&d| d == digits[0]) {
+        return true;
+    }
+    let ascending = digits.windows(2).all(|w| w[1] == w[0] + 1);
+    let descending = digits.windows(2).all(|w| w[1] == w[0] - 1);
+    ascending || descending
+}
 
 /// Argon2id parameters.
 ///
@@ -234,23 +273,58 @@ impl Slot {
     }
 }
 
-/// Whether a PIN has an acceptable shape.
+/// Whether a PIN being **created** has an acceptable shape.
 ///
 /// @returns `None` when it is fine, otherwise the reason.
 /// @remarks
 /// Checked on the Rust side as well as in the interface: the PIN is the only thing
-/// protecting the profile, and a three-digit one would be a false sense of safety.
-pub fn pin_problem(pin: &str) -> Option<&'static str> {
-    // Characters first: a non-ASCII digit (an Arabic-Indic `١`) is several bytes, so a
-    // byte-length test would pass it and the digits-only test would then have to explain
-    // a length the user never counted.
-    if !pin.chars().all(|c| c.is_ascii_digit()) {
-        return Some("the PIN must contain digits only");
-    }
-    if pin.len() < PIN_MIN_LENGTH {
+/// protecting the profile, and a weak one would be a false sense of safety. The policy
+/// is the creation half of {@link pin_problem}: opening accepts whatever was saved.
+pub fn creation_problem(pin: &str) -> Option<&'static str> {
+    // Counted in characters, not bytes: a non-ASCII letter is several bytes, and a
+    // byte-length test would reject a passphrase for a length the user never counted.
+    let length = pin.chars().count();
+    if length < pin_policy::MIN {
         return Some("the PIN is too short");
     }
-    if pin.len() > PIN_MAX_LENGTH {
+    if length > pin_policy::MAX {
+        return Some("the PIN is too long");
+    }
+    if pin_policy::DIGITS_ONLY && !pin.bytes().all(|b| b.is_ascii_digit()) {
+        return Some("the PIN must be digits");
+    }
+    // A pattern the owner's thumb draws without thinking — all equal, one step up, one
+    // step down. Worth blocking; a random five digits is not.
+    if is_trivial_digit_pin(pin) {
+        return Some("the PIN is too predictable");
+    }
+    if pin_policy::REQUIRE_CLASSES {
+        let has_lower = pin.bytes().any(|b| b.is_ascii_lowercase());
+        let has_upper = pin.bytes().any(|b| b.is_ascii_uppercase());
+        let has_digit = pin.bytes().any(|b| b.is_ascii_digit());
+        let has_symbol = pin.bytes().any(|b| !b.is_ascii_alphanumeric());
+        if !(has_lower && has_upper && has_digit && has_symbol) {
+            return Some(
+                "the PIN must mix lowercase, uppercase, digits and symbols",
+            );
+        }
+    }
+    None
+}
+
+/// Whether a PIN being **typed to open or lock** is well formed.
+///
+/// @returns `None` when it can be a stored PIN, otherwise the reason.
+/// @remarks
+/// Deliberately loose: it accepts anything a creation could have stored, and rejects
+/// nothing else. A wrong PIN and a malformed one must stay indistinguishable — this is
+/// the door an attacker tries, and telling the difference helps them.
+pub fn pin_problem(pin: &str) -> Option<&'static str> {
+    let length = pin.chars().count();
+    if length == 0 {
+        return Some("the PIN is empty");
+    }
+    if length > pin_policy::MAX {
         return Some("the PIN is too long");
     }
     None
@@ -259,10 +333,10 @@ pub fn pin_problem(pin: &str) -> Option<&'static str> {
 /// Stores `password` encrypted under `pin`.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] for a malformed PIN, and
+/// Returns [`crate::error::ErrorKind::Config`] for a weak PIN or an empty password, and
 /// [`crate::error::ErrorKind::Io`] when the file cannot be written.
 pub fn save_pin(slot: &Slot, pin: &str, password: &str) -> AppResult<()> {
-    if let Some(problem) = pin_problem(pin) {
+    if let Some(problem) = creation_problem(pin) {
         return Err(AppError::config(problem));
     }
     // An empty password would produce an envelope that opens "successfully" and then
@@ -323,7 +397,7 @@ pub fn save_pending_pin(network: &str, key_uid: &str, pin: &str) -> AppResult<()
 /// Opens the envelope with `pin` and returns the profile password.
 ///
 /// # Errors
-/// * [`crate::error::ErrorKind::Config`] for a malformed PIN;
+/// * [`crate::error::ErrorKind::Config`] when the input is not a plausible PIN;
 /// * [`crate::error::ErrorKind::Backend`] when the PIN is wrong, the counter is
 ///   exhausted, or no PIN has been set for this profile.
 ///
@@ -738,7 +812,8 @@ mod tests {
         // An envelope around an empty password opens "successfully" and then fails at
         // login, with the password prompt no longer offered because an envelope exists.
         // Refused before anything is written, so no directory is created for it.
-        assert!(save_pin(&slot(), "1379", "").is_err());
+        // `Aa1!b2c3` passes the creation policy on every build the tests run in.
+        assert!(save_pin(&slot(), "Aa1!b2c3", "").is_err());
     }
 
     #[test]
@@ -798,13 +873,40 @@ mod tests {
     }
 
     #[test]
-    fn pin_rules_enforce_length_and_digits() {
-        assert!(pin_problem("1234").is_none());
-        assert!(pin_problem("123456789012").is_none());
-        assert!(pin_problem("123").is_some());
-        assert!(pin_problem("1234567890123").is_some());
-        // Letters are refused: a PIN is typed on a numeric keypad.
-        assert!(pin_problem("12a4").is_some());
+    fn opening_is_loose_and_creation_is_strong() {
+        // The rule is a wall one way: a weak PIN can never be *stored*, but a PIN that
+        // was stored — weak by today's standard, whatever the build — must stay
+        // *typeable*, or it would open the envelope no longer.
+        assert!(pin_problem("1379").is_none());
+        assert!(pin_problem("a").is_none());
+        assert!(pin_problem("").is_some());
+        // The longest that could ever have been created, on any platform.
+        assert!(pin_problem(&"ж".repeat(64)).is_none());
+        assert!(pin_problem(&"ж".repeat(65)).is_some());
+
+        // The creation side is platform policy, and both halves of it are tested here:
+        // digits on a phone, classes on a desktop. Neither form satisfies the other,
+        // and a test for one half must not assume the other is off.
+        if pin_policy::DIGITS_ONLY {
+            assert!(creation_problem("58291").is_none());
+            assert!(creation_problem("7463521").is_none());
+            assert!(creation_problem("746352198").is_none());
+            assert!(creation_problem("5829").is_some(), "a 4-digit PIN is too short");
+            assert!(creation_problem("582913746359").is_none());
+            assert!(creation_problem("5829137463590").is_some(), "13 digits");
+            assert!(creation_problem("A12345").is_some(), "letters are not on the keypad");
+            assert!(creation_problem("12345").is_some(), "a sequence");
+            assert!(creation_problem("54321").is_some(), "a descending sequence");
+            assert!(creation_problem("55555").is_some(), "one repeated digit");
+        }
+        if pin_policy::REQUIRE_CLASSES {
+            assert!(creation_problem("Tr0ub4dor&3!").is_none());
+            assert!(creation_problem("a1b2c3d4").is_some(), "no uppercase or symbol");
+            assert!(creation_problem("aB1!cD3!").is_none());
+            assert!(creation_problem("aB1!cD").is_some(), "under the minimum");
+            assert!(creation_problem("58291").is_some(), "digits alone lack letter classes");
+            assert!(creation_problem("Tr0ub4dor&3").is_none());
+        }
     }
 
     #[test]
@@ -1009,21 +1111,27 @@ pub fn credential_available() -> bool {
 }
 
 /// PIN rules, so the interface does not duplicate them.
-///
-/// @returns Minimum length, maximum length and the attempt limit.
 #[derive(serde::Serialize)]
 pub struct PinRules {
-    pub min_length: usize,
+    /// Opening accepts any non-empty string up to this length.
     pub max_length: usize,
     pub max_attempts: u32,
+    /// The creation policy: the shortest PIN that will be stored.
+    pub creation_min: usize,
+    /// Creation digits-only platforms: the phone keypad.
+    pub digits_only: bool,
+    /// Creation must mix lowercase, uppercase, digits and a symbol.
+    pub require_classes: bool,
 }
 
 /// Returns the PIN rules this build enforces.
 #[tauri::command]
 pub fn credential_pin_rules() -> PinRules {
     PinRules {
-        min_length: PIN_MIN_LENGTH,
-        max_length: PIN_MAX_LENGTH,
+        max_length: pin_policy::MAX,
         max_attempts: MAX_ATTEMPTS,
+        creation_min: pin_policy::MIN,
+        digits_only: pin_policy::DIGITS_ONLY,
+        require_classes: pin_policy::REQUIRE_CLASSES,
     }
 }

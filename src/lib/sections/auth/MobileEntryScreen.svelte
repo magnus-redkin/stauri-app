@@ -12,14 +12,14 @@
    */
   import { i18n } from '$lib/i18n';
   import NetworkPicker from '$lib/sections/auth/NetworkPicker.svelte';
-  import PinPad from '$lib/sections/auth/PinPad.svelte';
+  import PinEntry from '$lib/sections/auth/PinEntry.svelte';
   import { statusState } from '$lib/stores/statusStore.svelte';
+  import { profileName } from '$lib/stores/profileNames';
   import type { EntryPhase, Network, ProfileSummary } from '$lib/entry/entryFlow';
 
   let {
     phase = $bindable<EntryPhase>({ kind: 'login' }),
     hasProfiles = false,
-    profileCount = 0,
     /** Digits entered on the PIN pad; the page submits them. */
     pin = $bindable(''),
     pinMin = 4,
@@ -39,7 +39,6 @@
     phase: EntryPhase;
     hasProfiles: boolean;
     /** How many profiles this device has; with one, the PIN is asked for directly. */
-    profileCount?: number;
     pin: string;
     pinMin: number;
     pinMax: number;
@@ -86,7 +85,7 @@
     Opening an existing profile. The PIN is the only interaction: the password behind it is
     generated and never shown, and there is no system prompt on the way.
   -->
-  <PinPad
+  <PinEntry
     bind:value={pin}
     minLength={pinMin}
     maxLength={pinMax}
@@ -94,7 +93,7 @@
     {busy}
     {error}
     onSubmit={onSubmitPin}
-    onBack={profileCount > 1 ? onPinBack : undefined}
+    onBack={onPinBack}
   />
 
 {:else if phase.kind === 'password'}
@@ -140,10 +139,11 @@
     cannot lock the profile behind a value its owner does not know — and quitting before
     the second entry leaves nothing behind to clean up.
   -->
-  <PinPad
+  <PinEntry
     bind:value={pin}
     minLength={pinMin}
     maxLength={pinMax}
+    checklist
     title={pinConfirming
       ? i18n.t('Repeat the PIN')
       : i18n.t('Choose a PIN for this profile')}
@@ -172,13 +172,37 @@
 
       <div class="w-full max-w-md space-y-2">
         {#if hasProfiles}
-          <button
-            onclick={() => (phase = { kind: 'pick-profile' })}
-            disabled={busy}
-            class="w-full py-3 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition disabled:opacity-50"
-          >
-            {i18n.t('Select Profile & Log in')}
-          </button>
+          <!--
+            The profiles are listed in place, under the network picker: the entry screen
+            answers one question — which profile to open — and a separate list screen for
+            it only added a Back button. The label is the display name the owner chose,
+            cached from the last session because settings are unreadable before login.
+          -->
+          <div class="space-y-2">
+            {#each statusState.accounts as account (account['key-uid'])}
+              <button
+                onclick={() =>
+                  onSelectProfile({
+                    keyUid: account['key-uid'],
+                    name: profileName(account['key-uid']) || account.name || account.alias || undefined,
+                  })}
+                disabled={busy}
+                class="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border hover:bg-secondary transition text-left disabled:opacity-50"
+              >
+                <div class="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-xs text-muted-foreground">
+                  {(profileName(account['key-uid']) || account.name || '?').slice(0, 1).toUpperCase()}
+                </div>
+                <div class="min-w-0">
+                  <div class="text-sm font-medium text-foreground truncate">
+                    {profileName(account['key-uid']) || account.name || i18n.t('Unnamed profile')}
+                  </div>
+                  <div class="text-xs text-muted-foreground font-mono">
+                    {account['key-uid'].slice(0, 16)}…
+                  </div>
+                </div>
+              </button>
+            {/each}
+          </div>
         {/if}
 
         <!--
@@ -200,60 +224,6 @@
           {i18n.t('Restore or sync')}
         </button>
       </div>
-
-    {:else if phase.kind === 'pick-profile'}
-      <h1 class="text-2xl font-bold text-foreground">{i18n.t('Select Profile & Log in')}</h1>
-
-      <!--
-        The network lives here too, not only on the first screen. A profile belongs to one
-        network, and the desktop entry used to show the picker on every screen; hiding it
-        once the list is open made a profile created in the other network unreachable
-        without going back.
-      -->
-      <NetworkPicker bind:selectedNetwork={pickerNetwork} onSelect={handleNetwork} />
-
-      {#if statusState.accounts.length === 0}
-        <p class="text-sm text-muted-foreground text-center max-w-md">
-          {i18n.t('No profiles on this device for this network.')}
-        </p>
-      {:else}
-        <div class="w-full max-w-md space-y-2">
-          {#each statusState.accounts as account (account['key-uid'])}
-            <!--
-              The display name is the label; the key prefix is the fallback, and is what a
-              user sees when status-go has no name for the profile.
-            -->
-            <button
-              onclick={() =>
-                onSelectProfile({
-                  keyUid: account['key-uid'],
-                  name: account.name || account.alias || undefined,
-                })}
-              disabled={busy}
-              class="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border hover:bg-secondary transition text-left disabled:opacity-50"
-            >
-              <div class="w-9 h-9 rounded-full bg-secondary flex items-center justify-center text-xs text-muted-foreground">
-                {(account.name || '?').slice(0, 1).toUpperCase()}
-              </div>
-              <div class="min-w-0">
-                <div class="text-sm font-medium text-foreground truncate">
-                  {account.name || i18n.t('Unnamed profile')}
-                </div>
-                <div class="text-xs text-muted-foreground font-mono">
-                  {account['key-uid'].slice(0, 16)}…
-                </div>
-              </div>
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-      <button
-        onclick={() => (phase = { kind: 'login' })}
-        class="text-sm text-muted-foreground hover:underline"
-      >
-        ← {i18n.t('Back')}
-      </button>
 
     {:else if phase.kind === 'restore-method'}
       <h1 class="text-2xl font-bold text-foreground">{i18n.t('Restore or sync')}</h1>

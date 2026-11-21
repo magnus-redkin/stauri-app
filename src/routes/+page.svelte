@@ -72,7 +72,7 @@
   import SidebarIcons from "$lib/sections/layout/SidebarIcons.svelte";
   import RecoveryScreen from '$lib/sections/auth/RecoveryScreen.svelte';
   import MobileEntryScreen from '$lib/sections/auth/MobileEntryScreen.svelte';
-  import PinPad from '$lib/sections/auth/PinPad.svelte';
+  import PinEntry from '$lib/sections/auth/PinEntry.svelte';
   import { isAndroid } from '$lib/utils/platform';
   import type {
     EntryContext,
@@ -80,16 +80,23 @@
     Network,
     ProfileSummary,
   } from '$lib/entry/entryFlow';
-  import { initialPhase, phaseAfterPinLookup, pinProblem } from '$lib/entry/entryFlow';
+  import {
+    initialPhase,
+    phaseAfterPinLookup,
+    pinCreationProblem,
+    pinOpenProblem,
+  } from '$lib/entry/entryFlow';
   import { deleteProfile, initializeApplication } from '$lib/status/api';
   import {
     credentialsAvailable,
     forgetPendingPin,
     generatePassword,
     openPin,
+    pinRules,
     pinState,
     savePin,
     savePinFromPending,
+    type PinRules,
   } from '$lib/status/credentials';
   import {
     lanCancel,
@@ -102,6 +109,10 @@
     type LanStatus,
   } from '$lib/status/pairing';
   import PairingScreen from '$lib/sections/auth/PairingScreen.svelte';
+  import CreateName from '$lib/sections/auth/CreateName.svelte';
+  import { rememberProfileName } from '$lib/stores/profileNames';
+  import { saveSetting } from '$lib/status/wallet';
+  import { sendContactUpdates } from '$lib/status/messaging';
 
   import HomeMain from "$lib/sections/home/HomeMain.svelte";
   import HomeLeft from "$lib/sections/home/HomeLeft.svelte";
@@ -158,15 +169,14 @@
   let selectedAccountKeyUid = $state('');
   let selectedNetwork = $state('mainnet');
 
-  const hasProfiles = $derived(statusState.accounts.length > 0);
   /**
-   * How many profiles this device has for the selected network.
+   * Whether this device has profiles for the selected network.
    *
    * @remarks
-   * One profile means the list is a screen with a single item and a row of Back buttons
-   * that lead nowhere: the PIN is asked for straight away instead.
+   * The entry screen lists them itself; with none, creation is the only action and it is
+   * styled as the primary one.
    */
-  const profileCount = $derived(statusState.accounts.length);
+  const hasProfiles = $derived(statusState.accounts.length > 0);
 
   // Ctrl+Q closes the window.
   $effect(() => {
@@ -620,9 +630,23 @@
   const pinConfirming = $derived(
     (entryPhase.kind === 'set-pin' || entryPhase.kind === 'create-pin') && entryPinFirst !== ''
   );
-  /** PIN bounds, read from the backend so the interface cannot drift from it. */
-  let pinMin = $state(4);
-  let pinMax = $state(12);
+  /**
+   * PIN policy read from the backend, so the interface cannot drift from Rust.
+   *
+   * @remarks
+   * The phone keeps a numeric code (five digits and up) and the desktop a passphrase
+   * (eight characters and four classes). Creation is the strict half; opening accepts
+   * whatever was stored. The defaults mirror the Rust policy and are replaced at start.
+   */
+  let credentialRules = $state<PinRules>(
+    isAndroid()
+      ? { max_length: 12, max_attempts: 10, creation_min: 5, digits_only: true, require_classes: false }
+      : { max_length: 64, max_attempts: 10, creation_min: 8, digits_only: false, require_classes: true }
+  );
+  /** Shortest PIN the creation policy accepts; the open screens use it as a guard. */
+  let pinMin = $derived(credentialRules.creation_min);
+  /** Longest PIN that could ever have been stored. */
+  let pinMax = $derived(credentialRules.max_length);
   let entryBusy = $state(false);
   let entryError = $state('');
   /** Whether this build keeps PINs at all; read once at start. */
@@ -654,17 +678,6 @@
   let lockedKeyUid = $state('');
   let lockedNetwork = $state<Network>('mainnet');
   /**
-   * When the session last became unlocked.
-   *
-   * @remarks
-   * Dismissing the soft keyboard fires `blur`, and that happens right after the PIN is
-   * accepted — the pad closes, the keyboard goes away, the window loses focus for an
-   * instant. Locking on that event asked for the PIN a second time, immediately after a
-   * correct one. The guard only applies while the page is still visible: a real
-   * backgrounding reports `hidden` and locks at once, grace period or not.
-   */
-  let unlockedAt = 0;
-  /**
    * Holds the interface on screen for a moment after a successful login.
    *
    * @remarks
@@ -684,15 +697,6 @@
    * This one only changes when a session really opens or closes.
    */
   let sessionOpen = $state(false);
-
-  /**
-   * How long a `blur` after an unlock is ignored, in milliseconds.
-   *
-   * @remarks
-   * Long enough to cover dismissing the keyboard and the window settling, short enough
-   * that a real glance away still locks. Backgrounding does not rely on this at all.
-   */
-  const BLUR_GRACE_MS = 1500;
 
   /** Network of the entry flow, in the storage vocabulary (`mainnet`/`testnet`). */
   let entryNetwork = $state<Network>('mainnet');
@@ -885,15 +889,14 @@
   /** Starts the entry flow: reads what this build can do, then asks what to show. */
   async function startEntryFlow(): Promise<void> {
     canStorePin = await credentialsAvailable();
+    // The policy decides what the pads enforce and what the keypad offers: five digits
+    // on the phone, eight characters with four classes on the desktop.
+    credentialRules = await pinRules();
     // The flow starts on whatever network the backend actually came up on. Assuming
     // `mainnet` would ask for a PIN in a slot the profile was never stored in, and the
     // profile would look like it had none.
     entryNetwork = statusState.isTestnet ? 'testnet' : 'mainnet';
     syncEntryPhase();
-    // A single profile needs no choice: asking which one it is, only to answer "the only
-    // one", put a Back button in front of the PIN pad at every cold start.
-    const only = entryContext().profiles;
-    if (only.length === 1) await handleSelectProfile(only[0]);
   }
 
   async function handleEntryNetworkChange(network: Network): Promise<void> {
@@ -981,7 +984,12 @@
       return;
     }
 
-    const problem = pinProblem(entryPin, pinMin, pinMax);
+    // Opening an existing PIN is checked for shape only; a PIN being created is checked
+    // against the creation policy. The same split exists in Rust, which is the gate.
+    const problem =
+      phase.kind === 'enter-pin'
+        ? pinOpenProblem(entryPin, pinMax)
+        : pinCreationProblem(entryPin, credentialRules);
     if (problem) {
       entryError = i18n.t(problem);
       return;
@@ -1089,7 +1097,7 @@
     pinUpgrade = false;
     entryCreatePassword = '';
     entryError = '';
-    entryPhase = { kind: 'pick-profile' };
+    entryPhase = { kind: 'login' };
   }
 
   /**
@@ -1114,9 +1122,6 @@
       setSessionPassword(password);
       selectedAccountKeyUid = profile.keyUid;
       sessionHasPin = viaPin;
-      // The keyboard used for the PIN is dismissed right about now, and that fires `blur`.
-      // Recording the moment keeps the lock from asking for the same PIN a second time.
-      unlockedAt = Date.now();
       loginGrace = true;
       sessionOpen = true;
       // The pad must not be what a backend hiccup returns to: the session is open.
@@ -1170,10 +1175,43 @@
     setSessionPassword(password);
     sessionHasPin = true;
     sessionOpen = true;
+    // Creation continues on the entry flow: the phrase first, then the display name.
+    // Both are skippable, and the profile is already complete without them.
+    entryPhase = { kind: 'create-seed', password };
+  }
+
+  /**
+   * Ends the creation wizard and opens the interface.
+   *
+   * @remarks
+   * The default name is what the backend created the profile with
+   * (`createAccountAndLogin`), so a skipped name screen is a real answer rather than an
+   * empty field: the picker on the next start shows it.
+   */
+  function finishCreation(): void {
+    const keyUid = statusState.accountKeyUid || selectedAccountKeyUid;
+    rememberProfileName(keyUid, statusState.alias || 'Stauri User');
     entryPhase = { kind: 'login' };
-    // The phrase is the only way back if the PIN is forgotten: show it right away.
-    activeSection = 'profile';
-    showCreateSeed = true;
+    showCreateSeed = false;
+    activeSection = 'home';
+  }
+
+  /** Stores the name chosen in the wizard, then leaves it. */
+  async function handleCreateName(name: string): Promise<void> {
+    entryError = '';
+    const keyUid = statusState.accountKeyUid || selectedAccountKeyUid;
+    try {
+      await saveSetting('display-name', name);
+      statusState.alias = name;
+      rememberProfileName(keyUid, name);
+      // The contact record carries the name into chats. A messenger that is not up yet
+      // is not a reason to fail the wizard: the setting is saved either way.
+      sendContactUpdates('').catch(() => undefined);
+    } catch (e) {
+      entryError = formatError(e);
+      return;
+    }
+    finishCreation();
   }
 
   function handleMobileCreate(): void {
@@ -1263,7 +1301,7 @@
    */
   async function handlePairingPin(): Promise<void> {
     pairingPinError = '';
-    const problem = pinProblem(pairingPin, pinMin, pinMax);
+    const problem = pinOpenProblem(pairingPin, pinMax);
     if (problem) {
       pairingPinError = i18n.t(problem);
       return;
@@ -1430,7 +1468,7 @@
   /** Verifies the PIN on the lock screen and returns to the interface. */
   async function handleUnlock(): Promise<void> {
     lockError = '';
-    const problem = pinProblem(lockPin, pinMin, pinMax);
+    const problem = pinOpenProblem(lockPin, pinMax);
     if (problem) {
       lockError = i18n.t(problem);
       return;
@@ -1443,7 +1481,6 @@
       lockPin = '';
       setSessionPassword(password);
       appLocked = false;
-      unlockedAt = Date.now();
     } catch (e) {
       // The backend's message carries the attempts left, which is what the user needs.
       lockError = formatError(e);
@@ -1483,19 +1520,23 @@
     // it, while losing focus is what the window system always reports. Both are wired:
     // `lockSession` is idempotent, so a double trigger costs nothing.
     //
-    // `blur` alone is too eager: dismissing the keyboard fires it. It is ignored for a
-    // moment after a successful unlock, and only while the page is still visible — being
-    // covered by another app arrives as `hidden` and locks regardless.
+    // On the phone `blur` fires for keyboard dismissal and redraws, so only `hidden`
+    // counts. On the desktop `blur` fires on every alt-tab, and locking there turned
+    // switching windows into a PIN prompt — it is minimising, the explicit act that puts
+    // the window away, that locks now.
     const onBlur = () => {
-      // Android reports `hidden` when the app actually goes away, and reports `blur` for
-      // things that are not leaving at all — dismissing the keyboard, a focus change
-      // during redraw. Locking on those asked for the PIN a second time right after a
-      // correct one. On the desktop the opposite is true: the window stays `visible`
-      // while it loses focus, so `blur` is the only signal that the user walked away.
-      if (!isAndroid() && Date.now() - unlockedAt < BLUR_GRACE_MS) return;
-      if (isAndroid() && document.visibilityState === 'visible') return;
-      stopPairingAttempt();
-      void lockSession();
+      if (isAndroid()) return;
+      window.setTimeout(() => {
+        void (async () => {
+          try {
+            if (!(await getCurrentWindow().isMinimized())) return;
+            stopPairingAttempt();
+            void lockSession();
+          } catch {
+            // Not running inside a Tauri window (a plain browser during development).
+          }
+        })();
+      }, 250);
     };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
@@ -1816,7 +1857,7 @@ onSave={() => {
       signed in — the backend keeps running in the background, and the pad is the only way
       back to the interface.
     -->
-    <PinPad
+    <PinEntry
       bind:value={lockPin}
       minLength={pinMin}
       maxLength={pinMax}
@@ -1835,7 +1876,9 @@ onSave={() => {
   {:else if
     !(sessionOpen || loginGrace) ||
     entryPhase.kind === 'set-pin' ||
-    entryPhase.kind === 'create-pin'
+    entryPhase.kind === 'create-pin' ||
+    entryPhase.kind === 'create-seed' ||
+    entryPhase.kind === 'create-name'
   }
     <!--
       One entry flow on every platform. The desktop used to ask for a password by hand,
@@ -1876,12 +1919,30 @@ onSave={() => {
         onPinCancel={handlePairingPinCancel}
         onBack={handlePairingBack}
       />
+    {:else if entryPhase.kind === 'create-seed'}
+      <!--
+        The wizard's second step. The account already exists, so the phrase is shown with
+        a way past it: a profile without a written phrase still works here, but the wallet
+        cannot be restored or spent from elsewhere, and the screen says so.
+      -->
+      <CreateSeed
+        onSave={() => (entryPhase = { kind: 'create-name' })}
+        onSkip={() => (entryPhase = { kind: 'create-name' })}
+      />
+    {:else if entryPhase.kind === 'create-name'}
+      <!-- The third step: a setting, not a prerequisite. Skipping keeps "Stauri User". -->
+      <CreateName
+        initial={statusState.alias || 'Stauri User'}
+        busy={entryBusy}
+        error={entryError}
+        onSave={handleCreateName}
+        onSkip={finishCreation}
+      />
     {:else}
       <MobileEntryScreen
         bind:phase={entryPhase}
         bind:pin={entryPin}
         hasProfiles={hasProfiles}
-        {profileCount}
         {pinMin}
         {pinMax}
         {pinConfirming}

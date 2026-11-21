@@ -449,5 +449,15 @@
   "If the search finds nothing, type the address shown on the other device.": "Если поиск ничего не нашёл, введите адрес, который показан на другом устройстве.",
   "If the search finds nothing, type this address on the other device.": "Если поиск ничего не нашёл, введите этот адрес на другом устройстве.",
   "Both devices on the same local network": "Оба устройства в одной локальной сети",
-  "Waiting for confirmation on the other device": "Ждём подтверждения на другом устройстве"
+  "Waiting for confirmation on the other device": "Ждём подтверждения на другом устройстве",
+  "Any characters: letters, digits and symbols.": "Любые символы: буквы, цифры и знаки.",
+  "Continue": "Продолжить",
+  "Lowercase letter": "Строчная буква",
+  "Uppercase letter": "Прописная буква",
+  "The PIN must be digits": "PIN должен состоять из цифр",
+  "The PIN is too easy to guess": "Такой PIN слишком легко подобрать",
+  "The PIN must mix lowercase, uppercase, digits and symbols": "PIN должен содержать строчные, прописные, цифры и знаки",
+  "Without the seed phrase, the wallet cannot be used.": "Без seed-фразы работа с кошельком невозможна.",
+  "Skip for now": "Пропустить пока",
+  "This is how other people see you. You can change it later.": "Так вас видят другие. Имя можно изменить позже."
 }

@@ -31,10 +31,15 @@ export interface ProfileSummary {
 
 /** What the user is looking at. */
 export type EntryPhase =
-  /** Deciding between the two networks and what to do next. */
+  /**
+   * The full entry screen: the network, the profiles on it, and what to do next.
+   *
+   * @remarks
+   * Every start lands here, even with one profile. The screen shows the picker and the
+   * two ways in; opening a profile is one tap, and choosing another one is possible
+   * without backing out of a PIN pad first.
+   */
   | { kind: 'login' }
-  /** Profile list of the selected network. */
-  | { kind: 'pick-profile' }
   /** PIN pad to open an existing profile. */
   | { kind: 'enter-pin'; profile: ProfileSummary }
   /**
@@ -66,6 +71,14 @@ export type EntryPhase =
   | { kind: 'create-pin' }
   /** Seed phrase of a new profile is being shown. */
   | { kind: 'create-seed'; password: string }
+  /**
+   * The display name of the freshly created profile.
+   *
+   * @remarks
+   * The account already exists and is open: the name is a setting, and skipping the step
+   * keeps the default the backend created it with.
+   */
+  | { kind: 'create-name' }
   /** Choosing how to restore an existing profile. */
   | { kind: 'restore-method' }
   /** Typing the twelve words. */
@@ -123,14 +136,14 @@ export type PinState =
 /**
  * What to do when the application starts or the network changes.
  *
- * @param ctx - Current context.
+ * @param _ctx - Current context.
  * @returns The phase to show.
  * @remarks
- * A clean install lands on `login`, never on a PIN screen: there is nothing to unlock
- * yet, and a PIN prompt before the first profile is created is a dead end.
+ * Always `login`. The screen it renders already lists the profiles of the selected
+ * network, so there is no separate list to route to — and a device with one profile no
+ * longer jumps straight to a PIN pad that offers no way back to the network choice.
  */
-export function initialPhase(ctx: EntryContext): EntryPhase {
-  if (ctx.profiles.length > 0) return { kind: 'pick-profile' };
+export function initialPhase(_ctx: EntryContext): EntryPhase {
   return { kind: 'login' };
 }
 
@@ -168,23 +181,62 @@ export function phaseAfterPinLookup(
 }
 
 /**
- * Validates a PIN against the rules the backend enforces.
+ * Validates a PIN being typed to open, lock or send a profile.
  *
- * @param pin - Digits entered.
- * @param minLength - Shortest accepted PIN.
- * @param maxLength - Longest accepted PIN.
- * @returns `null` when the PIN is acceptable, otherwise a locale key for the message.
+ * @param pin - Text entered.
+ * @param maxLength - The longest PIN any creation could have stored on this platform.
+ * @returns `null` when the input can be a stored PIN, otherwise a locale key.
  * @remarks
- * Checked here as well as in Rust: the keypad already refuses non-digits and stops at
- * `maxLength`, so the only reachable failure is a PIN that is too short to submit.
+ * Deliberately loose. The creation rule is strict, but a stored PIN has to stay
+ * typeable: rejecting it here would leave a profile nobody can open, behind a rule its
+ * owner has no way to see. The backend draws the same line.
  */
-export function pinProblem(
+export function pinOpenProblem(pin: string, maxLength: number): string | null {
+  const length = [...pin].length;
+  if (length === 0) return 'Enter your PIN';
+  if (length > maxLength) return 'The PIN is too long';
+  return null;
+}
+
+/** Whether a digit PIN is a pattern a thumb draws without thinking. */
+function isTrivialPin(pin: string): boolean {
+  if (!/^\d{3,}$/.test(pin)) return false;
+  const digits = [...pin].map((c) => c.charCodeAt(0));
+  if (digits.every((d) => d === digits[0])) return true;
+  const ascending = digits.every((d, i) => i === 0 || d === digits[i - 1] + 1);
+  const descending = digits.every((d, i) => i === 0 || d === digits[i - 1] - 1);
+  return ascending || descending;
+}
+
+/**
+ * Validates a PIN being **created**, against the backend's policy.
+ *
+ * @param pin - Text entered.
+ * @param rules - What the backend enforces on this platform.
+ * @returns `null` when the PIN will be accepted, otherwise a locale key.
+ * @remarks
+ * This is feedback, not the gate: `save_pin` in Rust applies the same rules and is the
+ * only thing that decides what gets stored. Kept in step with `creation_problem` by
+ * shape — digits on the phone, four character classes on the desktop.
+ */
+export function pinCreationProblem(
   pin: string,
-  minLength: number,
-  maxLength: number
+  rules: { creation_min: number; max_length: number; digits_only: boolean; require_classes: boolean }
 ): string | null {
-  if (pin.length < minLength) return 'The PIN is too short';
-  if (pin.length > maxLength) return 'The PIN is too long';
+  const length = [...pin].length;
+  if (length < rules.creation_min) return 'The PIN is too short';
+  if (length > rules.max_length) return 'The PIN is too long';
+  if (rules.digits_only && !/^\d+$/.test(pin)) return 'The PIN must be digits';
+  if (isTrivialPin(pin)) return 'The PIN is too easy to guess';
+  if (rules.require_classes) {
+    const lower = /[a-z]/.test(pin);
+    const upper = /[A-Z]/.test(pin);
+    const digit = /\d/.test(pin);
+    const symbol = /[^A-Za-z0-9]/.test(pin);
+    if (!(lower && upper && digit && symbol)) {
+      return 'The PIN must mix lowercase, uppercase, digits and symbols';
+    }
+  }
   return null;
 }
 

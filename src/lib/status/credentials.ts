@@ -14,17 +14,25 @@
 import { invoke } from '@tauri-apps/api/core';
 import { debug } from '$lib/utils/log';
 import { formatError } from '$lib/utils/errors';
+import { isAndroid } from '$lib/utils/platform';
 
-/** Shortest PIN accepted; mirrors the Rust side. */
-export const PIN_MIN_LENGTH = 4;
-/** Longest PIN accepted; mirrors the Rust side. */
-export const PIN_MAX_LENGTH = 12;
+/*
+ * The PIN's shape is platform policy and is read from the backend (`pinRules`), not
+ * duplicated here: five digits on the phone, eight characters with four classes on the
+ * desktop. A constant in this file would be a second source of truth that can drift.
+ */
 
 /** Rules reported by the backend, so the interface does not invent its own. */
 export interface PinRules {
-  min_length: number;
+  /** Opening accepts any non-empty PIN up to this length. */
   max_length: number;
   max_attempts: number;
+  /** The creation policy: the shortest PIN that will be stored. */
+  creation_min: number;
+  /** Creation on the phone: digits only, which is all its keypad can type. */
+  digits_only: boolean;
+  /** Creation on the desktop: lowercase, uppercase, digits and a symbol. */
+  require_classes: boolean;
 }
 
 /**
@@ -45,17 +53,17 @@ export async function credentialsAvailable(): Promise<boolean> {
 /**
  * Reads the PIN rules the backend enforces.
  *
- * @returns The rules, or the module defaults when the command is unavailable.
+ * @returns The rules, or this platform's defaults when the command is unavailable.
  */
 export async function pinRules(): Promise<PinRules> {
   try {
     return await invoke<PinRules>('credential_pin_rules');
   } catch {
-    return {
-      min_length: PIN_MIN_LENGTH,
-      max_length: PIN_MAX_LENGTH,
-      max_attempts: 10,
-    };
+    // The fallback mirrors the Rust policy per platform, so a failed call degrades to
+    // the right shape rather than to the phone's rules on a desktop.
+    return isAndroid()
+      ? { max_length: 12, max_attempts: 10, creation_min: 5, digits_only: true, require_classes: false }
+      : { max_length: 64, max_attempts: 10, creation_min: 8, digits_only: false, require_classes: true };
   }
 }
 

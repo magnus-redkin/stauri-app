@@ -4,7 +4,11 @@
   import { i18n } from '$lib/i18n';
   import { formatError } from '$lib/utils/errors';
 
-  let { onBack, onSave }: { onBack: () => void; onSave: () => void } = $props();
+  let {
+    onBack,
+    onSave,
+    onSkip,
+  }: { onBack?: () => void; onSave: () => void; onSkip?: () => void } = $props();
 
   let wordCount = $state(0);
   let isLoading = $state(true);
@@ -141,9 +145,24 @@
     >
       {i18n.t('Проверить сохраненную фразу')}
     </button>
-    <button onclick={onBack} class="text-sm text-muted-foreground hover:underline">
-      {i18n.t('Back')}
-    </button>
+    {#if onSkip}
+      <!--
+        Skipping is allowed, and its cost is stated once, in the place where the decision
+        is made: without the phrase the wallet cannot be restored or spent from on another
+        device. The profile itself keeps working with the PIN on this one.
+      -->
+      <p class="text-xs text-muted-foreground text-center max-w-md mb-2">
+        {i18n.t('Without the seed phrase, the wallet cannot be used.')}
+      </p>
+      <button onclick={onSkip} class="text-sm text-muted-foreground hover:underline mb-2">
+        {i18n.t('Skip for now')}
+      </button>
+    {/if}
+    {#if onBack}
+      <button onclick={onBack} class="text-sm text-muted-foreground hover:underline">
+        {i18n.t('Back')}
+      </button>
+    {/if}
   {:else}
     <h2 class="text-2xl font-bold text-primary mb-4">{i18n.t('Verify Seed Phrase')}</h2>
     <p class="text-sm text-muted-foreground mb-4">

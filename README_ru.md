@@ -1,6 +1,6 @@
 # Stauri — клиент Status на Tauri
 
-Stauri — настольный клиент для экосистемы [Status](https://status.im): защищённый
+Stauri — альтернативный неофициальный клиент для экосистемы [Status](https://status.im): защищённый
 мессенджер и криптокошелёк в одном приложении. Написан на **Tauri (Rust)** и
 **Svelte 5**, использует тот же бэкенд, что и официальный `status-desktop`
 (`status-go`), но подключает его иначе — как **библиотеку внутри своего процесса**.
@@ -8,8 +8,30 @@ Stauri — настольный клиент для экосистемы [Status
 процесса, нет локального порта и нет отдельного бэкенда, который надо держать
 живым.
 
-Документация — на русском, в [`docs/ru/`](docs/ru/). Английская версия README —
-[`README.md`](README.md).
+№№ Документация
+
+на русском в [`docs/ru/`](docs/ru/). Английская версия README — [`README.md`](README.md).
+
+- [`docs/ru/web3im.md`](docs/ru/web3im.md) — если впервые слышите про Web3,
+  seed-фразу и распределённые мессенджеры: без терминов, с аналогиями.
+- [`docs/ru/comparison.md`](docs/ru/comparison.md) — Stauri и Status: что
+  именно сравниваем, архитектурные отличия, преимущества и недостатки,
+  перспективы Logos.
+- [`docs/ru/architecture.md`](docs/ru/architecture.md) — устройство: слои,
+  поток данных, подсистемы, инварианты.
+- [`docs/ru/networks_and_balances.md`](docs/ru/networks_and_balances.md) — путь
+  от баланса до экрана: кэши `status-go`, локальный RPC-форвардер.
+- [`docs/ru/providers_and_dapps.md`](docs/ru/providers_and_dapps.md) — внешние
+  источники данных и dApp: модель доверия, изоляция, что уже работает.
+- [`docs/ru/akk_scheme.md`](docs/ru/akk_scheme.md) — схема «Автор → Канал →
+  Комментарии» поверх возможностей `status-go` без форка.
+- [`docs/ru/status_outdated_architecture.md`](docs/ru/status_outdated_architecture.md) —
+  почему `status-go` устроен сложно (историческая справка).
+- [`docs/ru/tests.md`](docs/ru/tests.md) — уровни тестов, что покрыто и что
+  проверяется руками.
+- [`README.md`](README.md) — английская версия: сборка, ограничения, что уже
+  работает.
+
 
 ## Особенности
 
@@ -65,27 +87,6 @@ Stauri — настольный клиент для экосистемы [Status
 `status-desktop` и последствия перехода на Logos, — в
 [`docs/ru/comparison.md`](docs/ru/comparison.md).
 
-## Документация
-
-- [`docs/ru/web3im.md`](docs/ru/web3im.md) — если впервые слышите про Web3,
-  seed-фразу и распределённые мессенджеры: без терминов, с аналогиями.
-- [`docs/ru/comparison.md`](docs/ru/comparison.md) — Stauri и Status: что
-  именно сравниваем, архитектурные отличия, преимущества и недостатки,
-  перспективы Logos.
-- [`docs/ru/architecture.md`](docs/ru/architecture.md) — устройство: слои,
-  поток данных, подсистемы, инварианты.
-- [`docs/ru/networks_and_balances.md`](docs/ru/networks_and_balances.md) — путь
-  от баланса до экрана: кэши `status-go`, локальный RPC-форвардер.
-- [`docs/ru/providers_and_dapps.md`](docs/ru/providers_and_dapps.md) — внешние
-  источники данных и dApp: модель доверия, изоляция, что уже работает.
-- [`docs/ru/akk_scheme.md`](docs/ru/akk_scheme.md) — схема «Автор → Канал →
-  Комментарии» поверх возможностей `status-go` без форка.
-- [`docs/ru/status_outdated_architecture.md`](docs/ru/status_outdated_architecture.md) —
-  почему `status-go` устроен сложно (историческая справка).
-- [`docs/ru/tests.md`](docs/ru/tests.md) — уровни тестов, что покрыто и что
-  проверяется руками.
-- [`README.md`](README.md) — английская версия: сборка, ограничения, что уже
-  работает.
 
 ## Сборка
 

@@ -11,6 +11,7 @@
   import { i18n } from '$lib/i18n';
   import { untrack } from 'svelte';
   import { statusState, setSeedSaved } from '$lib/stores/statusStore.svelte';
+  import { rememberProfileName } from '$lib/stores/profileNames';
   import { ensState, loadProfileNames } from '$lib/stores/ensStore.svelte';
   import { profileAvatarState, ensureProfileAvatar } from '$lib/stores/profileStore.svelte';
   import { saveSetting } from '$lib/status/wallet';
@@ -105,6 +106,9 @@
       // first. The argument here is the ENS name, not the display name.
       await sendContactUpdates(ensOfProfile);
       statusState.alias = displayName;
+      // The entry screen labels profiles from this cache; a rename that stayed only in
+      // session state would show the old name after the next start.
+      rememberProfileName(statusState.accountKeyUid, displayName);
       // The own contact record carries the name too; reread it so the list and
       // the chat header show the new one at once.
       await loadContacts(true);

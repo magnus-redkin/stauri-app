@@ -14,7 +14,7 @@
    * after the profile arrives.
    */
   import { i18n } from '$lib/i18n';
-  import PinPad from './PinPad.svelte';
+  import PinEntry from './PinEntry.svelte';
 
   let {
     /** What this device does. */
@@ -83,7 +83,7 @@
     before anything is issued. The same pad as everywhere else in the app: a PIN is
     entered one way, not two.
   -->
-  <PinPad
+  <PinEntry
     bind:value={pin}
     minLength={pinMin}
     maxLength={pinMax}
@@ -107,7 +107,7 @@
         </span>
       </label>
     {/snippet}
-  </PinPad>
+  </PinEntry>
 {:else}
   <div class="flex flex-col items-center justify-center min-h-screen gap-5 p-4 bg-background">
     <button

@@ -438,5 +438,15 @@
   "If the search finds nothing, type the address shown on the other device.": "如果搜索不到，请输入另一台设备上显示的地址。",
   "If the search finds nothing, type this address on the other device.": "如果搜索不到，请在另一台设备上输入此地址。",
   "Both devices on the same local network": "两台设备在同一本地网络",
-  "Waiting for confirmation on the other device": "等待另一台设备确认"
+  "Waiting for confirmation on the other device": "等待另一台设备确认",
+  "Any characters: letters, digits and symbols.": "任意字符：字母、数字和符号。",
+  "Continue": "继续",
+  "Lowercase letter": "小写字母",
+  "Uppercase letter": "大写字母",
+  "The PIN must be digits": "PIN 只能包含数字",
+  "The PIN is too easy to guess": "这个 PIN 太容易被猜到了",
+  "The PIN must mix lowercase, uppercase, digits and symbols": "PIN 必须包含小写字母、大写字母、数字和符号",
+  "Without the seed phrase, the wallet cannot be used.": "没有助记词，钱包将无法使用。",
+  "Skip for now": "暂时跳过",
+  "This is how other people see you. You can change it later.": "其他人将看到这个名字。以后可以修改。"
 }

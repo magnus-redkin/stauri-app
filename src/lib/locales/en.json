@@ -449,5 +449,15 @@
   "If the search finds nothing, type the address shown on the other device.": "If the search finds nothing, type the address shown on the other device.",
   "If the search finds nothing, type this address on the other device.": "If the search finds nothing, type this address on the other device.",
   "Both devices on the same local network": "Both devices on the same local network",
-  "Waiting for confirmation on the other device": "Waiting for confirmation on the other device"
+  "Waiting for confirmation on the other device": "Waiting for confirmation on the other device",
+  "Any characters: letters, digits and symbols.": "Any characters: letters, digits and symbols.",
+  "Continue": "Continue",
+  "Lowercase letter": "Lowercase letter",
+  "Uppercase letter": "Uppercase letter",
+  "The PIN must be digits": "The PIN must be digits",
+  "The PIN is too easy to guess": "The PIN is too easy to guess",
+  "The PIN must mix lowercase, uppercase, digits and symbols": "The PIN must mix lowercase, uppercase, digits and symbols",
+  "Without the seed phrase, the wallet cannot be used.": "Without the seed phrase, the wallet cannot be used.",
+  "Skip for now": "Skip for now",
+  "This is how other people see you. You can change it later.": "This is how other people see you. You can change it later."
 }
