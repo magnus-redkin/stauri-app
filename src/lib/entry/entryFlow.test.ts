@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   initialPhase,
+  isMissingPinError,
   phaseAfterPinLookup,
   pinCreationProblem,
   pinOpenProblem,
@@ -135,9 +136,21 @@ describe('parseNetwork', () => {
   });
 });
 
+describe('isMissingPinError', () => {
+  it('узнаёт сообщение Rust про отсутствующий конверт', () => {
+    expect(isMissingPinError('no PIN is set for this profile')).toBe(true);
+    expect(isMissingPinError('no PIN is set for this profile (backend)')).toBe(true);
+  });
+
+  it('не путает с другими ошибками PIN', () => {
+    expect(isMissingPinError('too many wrong PINs: restore the profile from its seed phrase')).toBe(false);
+    expect(isMissingPinError('wrong PIN: 3 attempts left')).toBe(false);
+    expect(isMissingPinError('')).toBe(false);
+  });
+});
+
 describe('pairingMethods', () => {
-  it('предлагает Wi-Fi и USB, QR пока выключен', () => {
-    const methods = pairingMethods();
+  it('предлагает Wi-Fi и USB, QR пока выключен', () => {    const methods = pairingMethods();
     expect(methods.find((m) => m.id === 'wifi')?.enabled).toBe(true);
     expect(methods.find((m) => m.id === 'usb')?.enabled).toBe(true);
     // `qr` has no implementation; it stays visible because the camera permission exists

@@ -82,6 +82,7 @@
   } from '$lib/entry/entryFlow';
   import {
     initialPhase,
+    isMissingPinError,
     phaseAfterPinLookup,
     pinCreationProblem,
     pinOpenProblem,
@@ -678,6 +679,16 @@
   let lockedKeyUid = $state('');
   let lockedNetwork = $state<Network>('mainnet');
   /**
+   * Credential slot of the open session — where its PIN envelope actually lives.
+   *
+   * @remarks
+   * Recorded when the session is opened, not derived when it is about to be locked:
+   * guessing the network and the profile from whatever the picker last showed is how a
+   * pad ends up asking for a PIN in a slot the profile never had one in, and every
+   * attempt there ends in "no PIN is set for this profile".
+   */
+  let sessionSlot = $state<{ network: Network; keyUid: string } | null>(null);
+  /**
    * Holds the interface on screen for a moment after a successful login.
    *
    * @remarks
@@ -1000,6 +1011,8 @@
       if (phase.kind === 'enter-pin') {
         const password = await openPin(entryNetwork, phase.profile.keyUid, entryPin);
         entryPin = '';
+        // The slot just proved it opens: it is the one a lock has to verify against.
+        sessionSlot = { network: entryNetwork, keyUid: phase.profile.keyUid };
         await loginWithStoredPassword(phase.profile, password);
         return;
       }
@@ -1046,6 +1059,7 @@
       selectedAccountKeyUid = phase.profile.keyUid;
       // The profile is open from here on, and this PIN is now what reopens it.
       sessionHasPin = true;
+      sessionSlot = { network: entryNetwork, keyUid: phase.profile.keyUid };
       entryPhase = { kind: 'login' };
       const upgraded = pinUpgrade;
       pinUpgrade = false;
@@ -1174,6 +1188,7 @@
     selectedAccountKeyUid = keyUid;
     setSessionPassword(password);
     sessionHasPin = true;
+    sessionSlot = { network: entryNetwork, keyUid };
     sessionOpen = true;
     // Creation continues on the entry flow: the phrase first, then the display name.
     // Both are skippable, and the profile is already complete without them.
@@ -1401,12 +1416,14 @@
 
   /** Records which profile the open session belongs to, so it can be locked. */
   function rememberSessionIdentity(): void {
-    // The picker speaks `sepolia`/`holesky`, while a credential slot is scoped by
-    // `mainnet`/`testnet` only. `parseNetwork` would answer `null` for the testnet names
-    // and leave the slot pointing at mainnet, where this profile has no PIN at all —
-    // unlocking would fail on a testnet profile that restored fine a minute earlier.
-    lockedNetwork = selectedNetwork === 'mainnet' ? 'mainnet' : 'testnet';
+    // The slot recorded when the session opened is the one the PIN was written to. The
+    // fallbacks only matter for a session that never had an envelope, which `lockSession`
+    // refuses to lock anyway — but they must not silently point a pad at another profile.
+    lockedNetwork =
+      sessionSlot?.network ??
+      (selectedNetwork === 'mainnet' ? 'mainnet' : 'testnet');
     lockedKeyUid =
+      sessionSlot?.keyUid ||
       selectedAccountKeyUid ||
       statusState.accountKeyUid ||
       statusState.accounts[0]?.['key-uid'] ||
@@ -1445,7 +1462,7 @@
   }
 
   /** Locks the open session, if this profile can be reopened with a PIN. */
-  function lockSession(): void {
+  async function lockSession(): Promise<void> {
     if (appLocked || !statusState.isLoggedIn) return;
     if (!sessionHasPin) {
       // Signed in without a PIN (a desktop-style profile): there is nothing to verify, and
@@ -1456,6 +1473,14 @@
     // A profile whose key uid could not be resolved has no slot to verify against:
     // locking would put a pad in front of a profile that can never open.
     if (!lockedKeyUid) return;
+    // The flag records how the session was opened, not that the envelope is still there:
+    // a profile restored, synced or reset since has none, and a pad over it would refuse
+    // every PIN. Checked here so the dead end is never shown in the first place.
+    const state = await pinState(lockedNetwork, lockedKeyUid).catch(() => 'missing' as const);
+    if (state !== 'ready') {
+      info(`[lock] not locking: PIN slot is ${state}`);
+      return;
+    }
     info('[lock] locking the session');
     appLocked = true;
     lockPin = '';
@@ -1483,7 +1508,24 @@
       appLocked = false;
     } catch (e) {
       // The backend's message carries the attempts left, which is what the user needs.
-      lockError = formatError(e);
+      const message = formatError(e);
+      // A failure this pad can never get past: there is no envelope for the profile any
+      // more (it was restored, synced or reset after the session was opened by PIN), or
+      // the envelope cannot be read. Every PIN would end here, so the lock is dropped and
+      // the entry flow — password and phrase — is the way back. A wrong PIN and a full
+      // attempt counter stay on the pad: those have an answer.
+      if (isMissingPinError(message) || /damaged|corrupt/i.test(message)) {
+        info('[lock] session cannot be reopened, returning to the entry flow');
+        appLocked = false;
+        sessionHasPin = false;
+        sessionSlot = null;
+        sessionOpen = false;
+        lockPin = '';
+        lockError = '';
+        entryPhase = { kind: 'login' };
+        return;
+      }
+      lockError = message;
       lockPin = '';
     } finally {
       lockBusy = false;
@@ -1649,6 +1691,7 @@
     loginGrace = false;
     sessionOpen = false;
     sessionHasPin = false;
+    sessionSlot = null;
     lockPin = '';
     lockError = '';
     activeSection = 'home';
@@ -1835,10 +1878,10 @@ onSave={() => {
       </SectionPane>
     {/snippet}
 
-<div class="min-h-screen bg-background">
+<div class="flex flex-col min-h-[100dvh] bg-background">
   <!-- Testnet banner -->
   {#if statusState.isTestnet}
-    <div class="bg-warning text-warning-foreground text-center py-2 px-4 font-semibold text-sm">
+    <div class="shrink-0 bg-warning text-warning-foreground text-center py-2 px-4 font-semibold text-sm">
       ⚠️ {statusState.networkName.toUpperCase()} TESTNET MODE — All balances and transactions are on testnets.
     </div>
   {/if}

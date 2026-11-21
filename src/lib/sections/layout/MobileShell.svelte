@@ -9,8 +9,6 @@
    */
   import type { Snippet } from 'svelte';
   import { ArrowLeft, ArrowRight, Home, User, MessageCircle, Wallet, Blocks, Store } from 'lucide-svelte';
-  import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
 
   let {
     activeSection = $bindable(),
@@ -48,35 +46,13 @@
     activeSection = id;
     onSelect?.(id);
   }
-
-  /**
-   * Temporary safe-area diagnostic, to be removed before release.
-   *
-   * Measures whether the WebView reports env(safe-area-inset-*) values and writes the result
-   * to the trace.
-   */
-  let probe: HTMLDivElement | null = $state(null);
-  onMount(() => {
-    if (!probe) return;
-    const cs = getComputedStyle(probe);
-    const note = {
-      kind: 'safe-area',
-      top: cs.paddingTop,
-      bottom: cs.paddingBottom,
-      innerHeight: window.innerHeight,
-      dvh: probe.getBoundingClientRect().height,
-    };
-    invoke('status_call', { endpoint: 'TraceNote', body: JSON.stringify(note) }).catch(() => {});
-  });
 </script>
 
-<div class="flex flex-col h-[100dvh] min-h-0 overflow-hidden bg-background">
-  <!-- Safe-area diagnostic: an invisible measurement, see the script. -->
-  <div bind:this={probe} aria-hidden="true" class="absolute inset-0 pointer-events-none invisible" style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"></div>
-  <!-- Title bar: [←][→] [section name] [icons on the right]. The top padding never drops
-       below the height of the Android status bar (clock, network, battery), even when the
-       WebView reports no safe-area inset. -->
-  <header class="shrink-0 flex items-center gap-2 px-3 pt-[max(20px,env(safe-area-inset-top))] pb-2 border-b border-border bg-secondary">
+<div class="flex flex-col flex-1 min-h-0 overflow-hidden bg-background">
+  <!-- Title bar: [←][→] [section name] [icons on the right]. The system bars are kept off
+       the content by the activity's window inset padding (MainActivity.kt), so this only
+       needs its own spacing. -->
+  <header class="shrink-0 flex items-center gap-2 px-3 pt-3 pb-2 border-b border-border bg-secondary">
     {#if history.canBack}
       <button
         type="button"
@@ -111,9 +87,9 @@
     {@render content()}
   </div>
 
-  <!-- Bottom section menu, always visible. Same rule at the bottom: the padding never drops
-       below the height of the Android system buttons. -->
-  <nav class="shrink-0 flex items-stretch justify-around border-t border-border bg-secondary pb-[max(25px,env(safe-area-inset-bottom))]">
+  <!-- Bottom section menu, always visible. The navigation bar below it is kept clear by the
+       activity's window inset padding, so no extra fallback is needed here. -->
+  <nav class="shrink-0 flex items-stretch justify-around border-t border-border bg-secondary pb-2">
     {#each menu as item (item.id)}
       <button
  type="button"

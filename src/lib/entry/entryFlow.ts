@@ -254,6 +254,22 @@ export function parseNetwork(value: string): Network | null {
 }
 
 /**
+ * Whether a backend failure means this profile simply has no PIN envelope.
+ *
+ * @param message - Error text, as `formatError` produced it.
+ * @returns `true` for the one failure a keypad can never get past.
+ * @remarks
+ * The lock screen is built from the flag that the session was opened with a PIN, not from
+ * the envelope itself. A profile restored, synced or reset since then can have none, and
+ * the pad becomes a door with no key: every attempt ends in this message. The caller uses
+ * this to drop the lock and show the entry flow, where the password and the phrase still
+ * work, instead of leaving a pad that refuses every PIN.
+ */
+export function isMissingPinError(message: string): boolean {
+  return /no PIN is set/i.test(message);
+}
+
+/**
  * Transport options for pairing with another device.
  *
  * @returns The options in display order, with the unsupported ones marked.
