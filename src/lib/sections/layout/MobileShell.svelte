@@ -8,7 +8,8 @@
    * always visible.
    */
   import type { Snippet } from 'svelte';
-  import { ArrowLeft, ArrowRight, Home, User, MessageCircle, Wallet, Blocks, Store } from 'lucide-svelte';
+  import { ArrowLeft, ArrowRight, Home, User, MessageCircle, Wallet, Blocks, Store, Settings } from 'lucide-svelte';
+  import { updateState } from '$lib/stores/updaterState.svelte';
 
   let {
     activeSection = $bindable(),
@@ -40,6 +41,7 @@
     { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'dapps', icon: Blocks, label: 'dApps' },
     { id: 'market', icon: Store, label: 'Market' },
+    { id: 'settings', icon: Settings, label: 'Settings' },
   ];
 
   function pick(id: string) {
@@ -94,11 +96,18 @@
       <button
  type="button"
         onclick={() => pick(item.id)}
- class="flex-1 py-2 flex flex-col items-center gap-0.5 {activeSection === item.id ? 'text-primary' : 'text-muted-foreground'}"
+ class="relative flex-1 py-2 flex flex-col items-center gap-0.5 {activeSection === item.id ? 'text-primary' : 'text-muted-foreground'}"
         aria-label={item.label}
       >
         <item.icon size={22} />
         <span class="text-[0.625rem]">{item.label}</span>
+        {#if item.id === 'settings' && updateState.available}
+          <!-- A release is waiting: the dot marks the icon until it is opened or updated. -->
+          <span
+            class="absolute top-0.5 right-1/2 translate-x-5 w-2 h-2 rounded-full bg-destructive"
+            aria-hidden="true"
+          ></span>
+        {/if}
       </button>
     {/each}
   </nav>

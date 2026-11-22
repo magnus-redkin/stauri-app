@@ -25,7 +25,7 @@ use libloading::{Library, Symbol};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// Signatures from `mobile/status.go`: one string in, one string out.
 type CStrFn = unsafe extern "C" fn(*mut c_char) -> *mut c_char;
@@ -114,6 +114,15 @@ pub struct InProcessBackend {
     /// The screens call it before a scan or a paste is accepted, so a mistyped
     /// string is reported as such instead of failing halfway through a transfer.
     validate_connection_string: Option<CStrFn>,
+    /// Closes the multiaccounts database so the next `InitializeApplication` opens
+    /// the directory it is given.
+    ///
+    /// Added by the Stauri patch (`src-tauri/status-go/`). Without it a host that
+    /// changes its data directory keeps reading the first directory's profiles,
+    /// because `OpenAccounts` opens the database once and returns early afterwards.
+    /// `None` on an unpatched library; callers report that switching needs a
+    /// restart instead of pretending it worked.
+    close_accounts: Option<unsafe extern "C" fn() -> *mut c_char>,
     logout: unsafe extern "C" fn() -> *mut c_char,
     set_signal_callback: Option<SetSignalFn>,
 }
@@ -227,7 +236,7 @@ fn library_file_name() -> &'static str {
 ///   and the target directory during development.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the executable path cannot
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the executable path cannot
 /// be determined.
 pub fn library_path() -> AppResult<PathBuf> {
     if let Some(path) = std::env::var_os("STAURI_LIBSTATUS") {
@@ -252,7 +261,7 @@ impl InProcessBackend {
     /// Loads the library and binds the exported functions.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the library cannot be
     /// loaded or any required symbol is missing.
     fn load() -> AppResult<Self> {
         let path = library_path()?;
@@ -319,6 +328,13 @@ impl InProcessBackend {
                 .get::<CStrFn>(b"ValidateConnectionString\0")
                 .ok()
                 .map(|s| *s);
+            // Added by the Stauri patch, so it is optional: an unpatched library loads
+            // and runs every other flow, and only a network switch reports that it needs
+            // a rebuild.
+            let close_accounts = lib
+                .get::<unsafe extern "C" fn() -> *mut c_char>(b"CloseAccounts\0")
+                .ok()
+                .map(|s| *s);
             let logout: Symbol<unsafe extern "C" fn() -> *mut c_char> = lib
                 .get(b"Logout\0")
                 .map_err(|e| AppError::internal(format!("no Logout: {e}")))?;
@@ -355,6 +371,7 @@ impl InProcessBackend {
                 bootstrap_receiver,
                 bootstrap_sender,
                 validate_connection_string,
+                close_accounts,
                 logout,
                 set_signal_callback,
             })
@@ -383,8 +400,8 @@ impl InProcessBackend {
     /// string.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the request contains a
-    /// NUL byte, and [`crate::error::ErrorKind::Backend`] when status-go returns
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the request contains a
+    /// NUL byte, and [`crate::core::error::ErrorKind::Backend`] when status-go returns
     /// a null pointer.
     fn invoke(&self, f: CStrFn, json: &str) -> AppResult<String> {
         let input = CString::new(json)
@@ -410,8 +427,8 @@ impl InProcessBackend {
     /// call returns, the reply belongs to Go and is released here.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when either argument contains
-    /// a NUL byte, and [`crate::error::ErrorKind::Backend`] when status-go returns
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when either argument contains
+    /// a NUL byte, and [`crate::core::error::ErrorKind::Backend`] when status-go returns
     /// a null pointer.
     fn invoke2(&self, f: CStr2Fn, first: &str, second: &str) -> AppResult<String> {
         let a = CString::new(first)
@@ -452,7 +469,7 @@ impl InProcessBackend {
     /// @returns The connection string the other device has to read.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the build does not export
     /// pairing, and propagates status-go's error.
     pub fn pairing_start_sender(&self, config_json: &str) -> AppResult<String> {
         let f = self.connection_string_sender.ok_or_else(|| {
@@ -467,7 +484,7 @@ impl InProcessBackend {
     /// @returns The connection string the other device has to read.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the build does not export
     /// pairing, and propagates status-go's error.
     pub fn pairing_start_receiver(&self, config_json: &str) -> AppResult<String> {
         let f = self.connection_string_receiver.ok_or_else(|| {
@@ -483,7 +500,7 @@ impl InProcessBackend {
     /// @returns status-go's JSON reply.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the build does not export
     /// pairing, and propagates status-go's error.
     pub fn pairing_bootstrap_receiver(
         &self,
@@ -503,7 +520,7 @@ impl InProcessBackend {
     /// @returns status-go's JSON reply.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the build does not export
     /// pairing, and propagates status-go's error.
     pub fn pairing_bootstrap_sender(
         &self,
@@ -522,7 +539,7 @@ impl InProcessBackend {
     /// @returns An empty string when valid, status-go's reason otherwise.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when the build does not export
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the build does not export
     /// validation.
     pub fn pairing_validate(&self, connection_string: &str) -> AppResult<String> {
         let f = self.validate_connection_string.ok_or_else(|| {
@@ -543,18 +560,45 @@ impl InProcessBackend {
     /// session restarts.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Backend`] when status-go returns
+    /// Returns [`crate::core::error::ErrorKind::Backend`] when status-go returns
     /// nothing.
     pub fn logout(&self) -> AppResult<String> {
         // SAFETY: Logout takes no arguments and returns a C string from Go.
         let out = unsafe { (self.logout)() };
-        if out.is_null() {
-            return Err(AppError::backend("status-go returned no response"));
-        }
-        // SAFETY: out is a C string from status-go; copy it, then release it.
-        let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
-        unsafe { free(out as *mut std::ffi::c_void) };
-        Ok(text)
+        owned_reply(out)
+    }
+
+    /// Whether this library can reopen its account database.
+    ///
+    /// @returns `true` when the Stauri patch is present; callers use it to offer the
+    /// in-place network switch and to explain its absence on an unpatched build.
+    pub fn supports_account_reopen(&self) -> bool {
+        self.close_accounts.is_some()
+    }
+
+    /// Closes the account database, so the next `InitializeApplication` opens the
+    /// directory it is given (`CloseAccounts`, added by the Stauri patch).
+    ///
+    /// # Errors
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when the library does not
+    /// export it, and [`crate::core::error::ErrorKind::Backend`] when status-go
+    /// refuses.
+    ///
+    /// @remarks
+    /// The database is the unencrypted `accounts.sql` holding profile metadata; no key
+    /// material passes through it. The keystore itself is only re-rooted by
+    /// `UpdateRootDataDir`, which `InitializeApplication` performs.
+    pub fn close_accounts(&self) -> AppResult<()> {
+        let f = self.close_accounts.ok_or_else(|| {
+            AppError::internal(
+                "this libstatus does not export CloseAccounts; rebuild it from src-tauri/status-go \
+                 to switch networks without restarting",
+            )
+        })?;
+        // SAFETY: the export takes no arguments and returns a C string from Go.
+        let out = unsafe { f() };
+        owned_reply(out)?;
+        Ok(())
     }
 
     /// Calls a status-go endpoint by name, the equivalent of an HTTP endpoint on
@@ -563,7 +607,7 @@ impl InProcessBackend {
     /// `Logout` takes no arguments; every other endpoint takes one JSON string.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] for an unsupported endpoint
+    /// Returns [`crate::core::error::ErrorKind::Internal`] for an unsupported endpoint
     /// name, and propagates the errors of the underlying call.
     pub fn direct(&self, endpoint: &str, body_json: &str) -> AppResult<String> {
         match endpoint {
@@ -590,6 +634,10 @@ impl InProcessBackend {
                 self.invoke(f, body_json)
             }
             "Logout" => self.logout(),
+            "CloseAccounts" => {
+                self.close_accounts()?;
+                Ok("{}".to_string())
+            }
             "CallRPC" => self.invoke(self.call_rpc, body_json),
             other => Err(AppError::internal(format!(
                 "unsupported in-process endpoint: {other}"
@@ -604,7 +652,7 @@ impl InProcessBackend {
     /// must go through [`call_rpc`], which moves it to a blocking thread.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Backend`] when the reply is not valid
+    /// Returns [`crate::core::error::ErrorKind::Backend`] when the reply is not valid
     /// JSON or carries a JSON-RPC error, and propagates the errors of
     /// [`Self::invoke`].
     pub fn call_rpc_blocking(&self, method: &str, params: Value) -> AppResult<Value> {
@@ -622,6 +670,25 @@ impl InProcessBackend {
         }
         Ok(envelope.get("result").cloned().unwrap_or(Value::Null))
     }
+}
+
+/// Copies a reply allocated by Go and releases it.
+///
+/// Go (cgo) allocates the returned string; the caller owns it and releases it with
+/// libc `free`, because `libstatus.h` exports no dedicated release function.
+///
+/// # Errors
+/// Returns [`crate::core::error::ErrorKind::Backend`] when status-go returned a null
+/// pointer.
+fn owned_reply(out: *mut c_char) -> AppResult<String> {
+    if out.is_null() {
+        return Err(AppError::backend("status-go returned no response"));
+    }
+    // SAFETY: out is a C string returned by status-go.
+    let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
+    // SAFETY: out is no longer used after the copy.
+    unsafe { free(out as *mut std::ffi::c_void) };
+    Ok(text)
 }
 
 /// Extracts the message from a JSON-RPC error response.
@@ -642,7 +709,7 @@ pub fn describe_rpc_error(err: &Value) -> String {
 /// One instance per process: the library is loaded on first use.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the library or one of its
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the library or one of its
 /// symbols cannot be loaded.
 pub fn backend() -> AppResult<&'static InProcessBackend> {
     BACKEND
@@ -658,7 +725,7 @@ pub fn backend() -> AppResult<&'static InProcessBackend> {
 ///
 /// # Errors
 /// Propagates the errors of [`InProcessBackend::call_rpc_blocking`] and
-/// [`crate::error::ErrorKind::Internal`] when the blocking task cannot be joined.
+/// [`crate::core::error::ErrorKind::Internal`] when the blocking task cannot be joined.
 pub async fn call_rpc(method: &str, params: Value) -> AppResult<Value> {
     let backend = backend()?;
     let method = method.to_string();

@@ -26,3 +26,18 @@ export function isAndroid(): boolean {
   if (!isTauri()) return false;
   return typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 }
+
+/**
+ * Whether this build runs on a phone or tablet.
+ *
+ * @returns `true` inside the Android or iOS WebView.
+ * @remarks
+ * The layout must not be chosen by window width alone. A phone held sideways is wider
+ * than the 768px breakpoint, and the desktop layout it then picked has no bottom menu —
+ * the section bar disappeared and the user was left on a pane with no way back. A phone
+ * is a phone in both orientations.
+ */
+export function isPhonePlatform(): boolean {
+  if (!isTauri()) return false;
+  return typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}

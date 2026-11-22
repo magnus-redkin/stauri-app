@@ -24,7 +24,7 @@
 
 | Компонент | Файл | Роль |
 |---|---|---|
-| `rpc_proxy.rs` | `src-tauri/src/rpc_proxy.rs` | Локальный HTTP-форвардер `http://127.0.0.1:43057/<секрет>/<chainId>` |
+| `rpc_proxy.rs` | `src-tauri/src/core/rpc_proxy.rs` | Локальный HTTP-форвардер `http://127.0.0.1:43057/<секрет>/<chainId>` |
 | `connection.svelte.ts` | `src/lib/stores/connection.svelte.ts` | `connect`/`login`/`createAccount`, режим сетей |
 | `connectionStore.svelte.ts` | `src/lib/stores/connectionStore.svelte.ts` | Фасад: реэкспорт тех же функций для старого кода |
 | `rpcConfig.ts` | `src/lib/stores/rpcConfig.ts` | `configureWalletRpc`: форвардер + провайдеры |

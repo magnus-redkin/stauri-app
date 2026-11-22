@@ -38,7 +38,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// On-disk format version. A bump means an older build must not read the file.
 const ENVELOPE_VERSION: u32 = 2;
@@ -227,8 +227,8 @@ impl Slot {
     /// Validates the parts that become a path.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Config`] for an unknown network, and
-    /// [`crate::error::ErrorKind::Internal`] for a malformed key uid.
+    /// Returns [`crate::core::error::ErrorKind::Config`] for an unknown network, and
+    /// [`crate::core::error::ErrorKind::Internal`] for a malformed key uid.
     pub fn new(network: &str, key_uid: &str) -> AppResult<Self> {
         // An allow-list, not a sanitising pass: these two values are path components,
         // and a value like `../../` must be refused rather than cleaned up.
@@ -252,7 +252,7 @@ impl Slot {
     /// Directory holding this profile's secrets.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when no data directory is known.
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when no data directory is known.
     fn dir(&self) -> AppResult<std::path::PathBuf> {
         let base = crate::appdirs::data_dir()
             .ok_or_else(|| AppError::internal("cannot determine app data dir"))?;
@@ -262,7 +262,7 @@ impl Slot {
     /// Path of the envelope.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Internal`] when no data directory is known.
+    /// Returns [`crate::core::error::ErrorKind::Internal`] when no data directory is known.
     pub fn path(&self) -> AppResult<std::path::PathBuf> {
         Ok(self.dir()?.join("envelope.json"))
     }
@@ -333,8 +333,8 @@ pub fn pin_problem(pin: &str) -> Option<&'static str> {
 /// Stores `password` encrypted under `pin`.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] for a weak PIN or an empty password, and
-/// [`crate::error::ErrorKind::Io`] when the file cannot be written.
+/// Returns [`crate::core::error::ErrorKind::Config`] for a weak PIN or an empty password, and
+/// [`crate::core::error::ErrorKind::Io`] when the file cannot be written.
 pub fn save_pin(slot: &Slot, pin: &str, password: &str) -> AppResult<()> {
     if let Some(problem) = creation_problem(pin) {
         return Err(AppError::config(problem));
@@ -375,7 +375,7 @@ pub fn save_pin(slot: &Slot, pin: &str, password: &str) -> AppResult<()> {
 /// Stores the password a paired profile arrived with, under a PIN the user chose.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when no pairing is waiting for this
+/// Returns [`crate::core::error::ErrorKind::Config`] when no pairing is waiting for this
 /// profile or the PIN is malformed.
 /// @remarks
 /// This is the only path a received password takes to disk. It never reaches the
@@ -397,8 +397,8 @@ pub fn save_pending_pin(network: &str, key_uid: &str, pin: &str) -> AppResult<()
 /// Opens the envelope with `pin` and returns the profile password.
 ///
 /// # Errors
-/// * [`crate::error::ErrorKind::Config`] when the input is not a plausible PIN;
-/// * [`crate::error::ErrorKind::Backend`] when the PIN is wrong, the counter is
+/// * [`crate::core::error::ErrorKind::Config`] when the input is not a plausible PIN;
+/// * [`crate::core::error::ErrorKind::Backend`] when the PIN is wrong, the counter is
 ///   exhausted, or no PIN has been set for this profile.
 ///
 /// # Remarks
@@ -459,8 +459,8 @@ pub fn open_pin(slot: &Slot, pin: &str) -> AppResult<String> {
 /// Refuses an envelope this build cannot or should not open.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] for an unsupported version or a platform
-/// mismatch, and [`crate::error::ErrorKind::Config`] for KDF parameters outside the range
+/// Returns [`crate::core::error::ErrorKind::Internal`] for an unsupported version or a platform
+/// mismatch, and [`crate::core::error::ErrorKind::Config`] for KDF parameters outside the range
 /// the application ever writes.
 ///
 /// @remarks
@@ -559,7 +559,7 @@ pub fn pin_state(slot: &Slot) -> AppResult<PinState> {
 /// Removes the stored secret of a profile.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Io`] when a file exists but cannot be removed.
+/// Returns [`crate::core::error::ErrorKind::Io`] when a file exists but cannot be removed.
 pub fn delete(slot: &Slot) -> AppResult<()> {
     for path in [slot.path()?, slot.attempts_path()?] {
         match std::fs::remove_file(&path) {
@@ -724,7 +724,7 @@ fn encrypt(key: &[u8], nonce: &[u8], plain: &[u8]) -> AppResult<Vec<u8>> {
 /// Decrypts an AES-256-GCM blob.
 ///
 /// # Errors
-/// Returns a plain [`crate::error::ErrorKind::Backend`] without detail: a wrong PIN and a
+/// Returns a plain [`crate::core::error::ErrorKind::Backend`] without detail: a wrong PIN and a
 /// tampered file must be indistinguishable from the outside.
 fn decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> AppResult<Vec<u8>> {
     use aes_gcm::aead::{Aead, KeyInit};
@@ -1006,7 +1006,7 @@ pub async fn credential_save_pin(
     tokio::task::spawn_blocking(move || save_pin(&slot, &pin, &password))
         .await
         .map_err(|e| AppError::internal(format!("credential save panicked: {e}")))??;
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "credential pin saved network={network} key={}",
         &key_uid[..10.min(key_uid.len())]
     ));
@@ -1029,7 +1029,7 @@ pub async fn credential_open_pin(
         .await
         .map_err(|e| AppError::internal(format!("credential open panicked: {e}")))?;
     // Only the outcome reaches the trace: a failed PIN is worth seeing, its value is not.
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "credential pin open network={network} key={} ok={}",
         &key_uid[..10.min(key_uid.len())],
         password.is_ok()
@@ -1094,7 +1094,7 @@ pub async fn credential_save_pin_from_pending(
     tokio::task::spawn_blocking(move || save_pending_pin(&network, &key_uid, &pin))
         .await
         .map_err(|e| AppError::internal(format!("credential save panicked: {e}")))??;
-    crate::trace::line(&format!("credential pin saved from pairing key={key}"));
+    crate::core::trace::line(&format!("credential pin saved from pairing key={key}"));
     Ok(())
 }
 

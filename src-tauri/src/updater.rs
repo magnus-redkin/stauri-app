@@ -26,7 +26,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// An update found by the server.
 #[derive(Serialize)]
@@ -64,8 +64,8 @@ fn is_configured<R: Runtime>(app: &AppHandle<R>) -> bool {
 /// build with no update server configured.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the updater cannot be built
-/// and [`crate::error::ErrorKind::Network`] when the check request fails.
+/// Returns [`crate::core::error::ErrorKind::Config`] when the updater cannot be built
+/// and [`crate::core::error::ErrorKind::Network`] when the check request fails.
 pub async fn check<R: Runtime>(app: &AppHandle<R>) -> AppResult<Option<UpdateInfo>> {
     if !is_configured(app) {
         tracing::debug!("updater is not configured (no pubkey); skipping check");
@@ -99,8 +99,8 @@ pub async fn check<R: Runtime>(app: &AppHandle<R>) -> AppResult<Option<UpdateInf
 /// restart, which the user performs.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the updater cannot be built
-/// or no update is available any more, and [`crate::error::ErrorKind::Network`]
+/// Returns [`crate::core::error::ErrorKind::Config`] when the updater cannot be built
+/// or no update is available any more, and [`crate::core::error::ErrorKind::Network`]
 /// when the check, download or install fails.
 pub async fn install<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     let updater = app

@@ -15,7 +15,7 @@ export { isWsOpen, openWs, closeWs } from './ws';
 export {
   connectionState,
   connect,
-  changeNetwork,
+  switchNetwork,
   login,
   createAccount,
   restoreAccount,

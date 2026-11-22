@@ -254,6 +254,23 @@ export function parseNetwork(value: string): Network | null {
 }
 
 /**
+ * Maps a network name to the pair of credential slots.
+ *
+ * @param name - Network as the picker names it: `mainnet`, `sepolia`, `holesky`, …
+ * @returns `mainnet` for mainnet and `testnet` for everything else.
+ * @remarks
+ * Two vocabularies meet here and must not be confused. The backend starts on a **network
+ * preset** (`mainnet`, `sepolia`, `holesky`) and refuses anything else; a PIN envelope, on
+ * the other hand, is scoped to just two slots. Passing one vocabulary where the other is
+ * expected broke switching: the picker's `sepolia` was turned into `testnet` before the
+ * backend saw it, `start_backend` answered `unknown network: testnet`, and the app stayed
+ * on the previous network — the selection appeared to snap back to Mainnet.
+ */
+export function credentialNetwork(name: string): Network {
+  return name === 'mainnet' ? 'mainnet' : 'testnet';
+}
+
+/**
  * Whether a backend failure means this profile simply has no PIN envelope.
  *
  * @param message - Error text, as `formatError` produced it.

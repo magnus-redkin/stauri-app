@@ -29,23 +29,28 @@ cd src-tauri
 cargo test
 ```
 
-Покрытие по модулям:
+Покрытие по модулям (🔒 — файл в `src/core/`, ядро безопасности):
 
 | Модуль | Тестов | Что проверяет |
 |---|---|---|
 | `transfer.rs` | 17 | Сборка `sendTxArgs`, кодирование ERC-20 `transfer`, точность суммы, снятие `0x` только с подписи, одинаковость аргументов для оценки комиссии и отправки |
+| 🔒 `credentials.rs` | 16 | Раунд-трип PIN → пароль, разные PIN дают разные ключи, неверный PIN не проходит тег |
+| 🔒 `pairing.rs` | 16 | Строка подключения, коды подтверждения, отказы на мусорных входах |
+| 🔒 `lanpair.rs` | 8 | Обнаружение и шестизначный handshake, отказ при неверном коде |
 | `logging.rs` | 11 | Вычищение ключей из URL, JSON-полей, `user:pass@`, разрывов между `write` |
+| `router.rs` | 11 | Разбор 65-байтной подписи, нормализация `v` 27/28 → 0/1, извлечение хэшей из обоих сигналов |
 | `swap.rs` | 10 | Список сетей, `min_amount_out` при проскальзывании, отказ тестовым сетям, `tokenKey` |
-| `router.rs` | 9 | Разбор 65-байтной подписи, нормализация `v` 27/28 → 0/1, извлечение хэшей из обоих сигналов |
-| `providers.rs` | 9 | SSRF-фильтр (loopback, частные, link-local), разбор RSS/Atom и HTML Telegram, лимит записей |
+| `providers.rs` | 13 | SSRF-фильтр (loopback, частные, link-local), разбор RSS/Atom и HTML Telegram, лимит записей |
 | `ens.rs` | 9 | Валидация имени, разные формы имени для `ens_ownerOf` и `ens_expireAt`, `tokenKey`, параметры маршрута |
-| `auth_proxy.rs` | 9 | Токен, отказ без токена и с чужим, снятие заголовка перед пересылкой, сравнение без префикса |
 | `opener.rs` | 8 | Схемы `http(s)`/`mailto`, диплинк `t.me` для поста, отсутствие диплинка для похожего хоста |
-| `config.rs` | 8 | Сети, `data_dir_suffix`, fallback RPC URL |
-| `rpc_proxy.rs` | 6 | Проксирование JSON-RPC, 503 без upstream, 502 от мёртвого, секрет в пути, смена upstream без рестарта |
+| `config.rs` | 11 | Сети, `data_dir_suffix`, fallback RPC URL, `save_network` (пресет пишется, другие ключи сохраняются, незнакомая сеть не создаёт файла) |
+| 🔒 `rpc_proxy.rs` | 6 | Проксирование JSON-RPC, 503 без upstream, 502 от мёртвого, секрет в пути, смена upstream без рестарта |
 | `invite.rs` | 5 | Разбор ссылок SIM, varint через границу байта, мусорный payload |
-| `error.rs` | 3 | Виды ошибок, сериализация |
+| 🔒 `seed.rs` | 3 | Разбор ответа `settings_getSettings`, отказ на конверте вместо фразы |
+| 🔒 `error.rs` | 3 | Виды ошибок, сериализация |
 | `dapp.rs` | 2 | Метка окна: стабильна и безопасна |
+| 🔒 `surface.rs` | 2 | Состав `core/` не изменился; поверхность команд не расширилась молча |
+| 🔒 `backend.rs` | 1 | Имя и поиск библиотеки |
 | `updater.rs` | 1 | camelCase в `UpdateInfo` |
 
 Чего не покрыто (и почему):
@@ -98,7 +103,7 @@ pnpm tests         # frontend + rust подряд
 | `utils/totalBalance.test.ts` | 16 |
 | `stores/feedsStore.test.ts` | 16 |
 | `utils/tokens.test.ts` | 14 |
-| `stores/connectionStore.test.ts` | 13 |
+| `stores/connectionStore.test.ts` | 15 |
 | `stores/navStore.test.ts` | 12 |
 | `status/api.test.ts` | 11 |
 | `stores/statusStore.test.ts` | 10 |
@@ -123,6 +128,8 @@ pnpm tests         # frontend + rust подряд
     три состояния rpcError, сброс, ключи цен.
 
     connectionStore — порядок запуска, wroteProviders, перезапуск ноды,
+    восстановление, `switchNetwork` (список профилей и сеть заменяются из
+    ответа команды; при отказе состояние не трогается)
     createAccount с keyUid и без.
 
     totalBalance — mainnet-сети, цена без токена и токен без цены,

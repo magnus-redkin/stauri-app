@@ -5,11 +5,14 @@ import {
   createAccount,
   restoreAccount,
   resetLocalProfileAndRestore,
+  switchNetwork,
   LocalProfileLockedError,
 } from './connectionStore.svelte';
+import { invoke } from '@tauri-apps/api/core';
 import {
   statusState,
   setAccounts,
+  setNetworkInfo,
   waitForNodeStopped,
   waitForLogin,
 } from './statusStore.svelte';
@@ -49,6 +52,13 @@ vi.mock('$lib/status/api', () => ({
 // Signals arrive as a Tauri event now, not over a WebSocket.
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
+// `switchNetwork` reaches the backend through a single command. Outside Tauri the real
+// `invoke` rejects, and other tests here rely on that, so the default is a rejection;
+// tests that need a reply mock it explicitly.
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockRejectedValue(new Error('not running in Tauri')),
 }));
 
 vi.mock('./statusStore.svelte', () => ({
@@ -531,5 +541,62 @@ describe('resetLocalProfileAndRestore', () => {
       'keystore is in use'
     );
     expect(restoreAccountAndLogin).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Switching networks.
+ *
+ * status-go opens its account database once per process, so a switch that does not close
+ * it first keeps listing the previous network's profiles while the keystore root has
+ * already moved — the profile is shown but cannot be opened. The list must come from the
+ * reply of the switching command and from nowhere else.
+ */
+describe('switchNetwork', () => {
+  const SEPOLIA_REPLY = {
+    dataDir: '/data/sepolia',
+    networkName: 'sepolia',
+    chainId: 11155111,
+    rpcUrl: 'https://rpc.sepolia.org',
+    wakuFleet: 'status.test',
+    isTestnet: true,
+    accounts: [{ 'key-uid': 'key-uid-sepolia', name: 'Test' }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (statusState as any).backendDataDir = '/data/mainnet';
+    (statusState as any).accounts = [{ 'key-uid': 'key-uid-mainnet', name: 'Main' }];
+    (statusState as any).networkName = 'mainnet';
+  });
+
+  it('заменяет список профилей списком выбранной сети', async () => {
+    (invoke as any).mockResolvedValue(SEPOLIA_REPLY);
+
+    await switchNetwork('sepolia');
+
+    // The picker's own name goes to the backend; `testnet` would be refused there.
+    expect(invoke).toHaveBeenCalledWith('switch_network', { network: 'sepolia' });
+    expect(setAccounts).toHaveBeenCalledWith(SEPOLIA_REPLY.accounts);
+    expect(setNetworkInfo).toHaveBeenCalledWith(
+      'sepolia',
+      'https://rpc.sepolia.org',
+      'status.test',
+      true,
+      11155111
+    );
+    expect((statusState as any).backendDataDir).toBe('/data/sepolia');
+  });
+
+  it('оставляет прежнее состояние, когда переключение отказало', async () => {
+    // An unpatched library is the realistic failure: it loads and runs, and only the
+    // switch reports that it cannot reopen the database.
+    (invoke as any).mockRejectedValue(new Error('this libstatus does not export CloseAccounts'));
+
+    await expect(switchNetwork('sepolia')).rejects.toThrow('CloseAccounts');
+
+    expect(setAccounts).not.toHaveBeenCalled();
+    expect(setNetworkInfo).not.toHaveBeenCalled();
+    expect((statusState as any).backendDataDir).toBe('/data/mainnet');
   });
 });

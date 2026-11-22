@@ -5,19 +5,24 @@
   import { statusState } from '$lib/stores/statusStore.svelte';
   import { ensState } from '$lib/stores/ensStore.svelte';
   import { profileAvatarState } from '$lib/stores/profileStore.svelte';
+  import { updateState } from '$lib/stores/updaterState.svelte';
   import NetworkInfo from './NetworkInfo.svelte';
 
   let {
     displayName = "Tauri User",
+    /** Narrow layout: the shell header already carries the title and the pencil. */
+    compact = false,
     onDisconnect,
     onCreateSeed,
     onEditProfile,
-    onSendProfile
+    onSendProfile,
+    onOpenSettings
   }: {
     displayName?: string,
+    compact?: boolean,
     onDisconnect?: () => void,
     onCreateSeed?: () => void,
-    /** Opens profile editing (the only route to it in the app). */
+    /** Opens profile editing — the pencil in the header on a phone, a link on a wide screen. */
     onEditProfile?: () => void,
     /**
      * Opens the pairing screen as the sending side.
@@ -26,7 +31,9 @@
      * Sending needs a logged-in profile — the keys are what travels — so the entry point
      * lives here rather than on the login screen.
      */
-    onSendProfile?: () => void
+    onSendProfile?: () => void,
+    /** Where the update banner leads: the section that holds the install button. */
+    onOpenSettings?: () => void
   } = $props();
 
   let copiedProfileId = $state(false);
@@ -52,12 +59,17 @@
 </script>
 
 <div class="flex flex-col h-full border-r border-border bg-card">
-  <div class="p-4 border-b border-border font-bold text-lg text-primary">
-    {i18n.t('Profile')}
-  </div>
+  {#if !compact}
+    <!--
+      A phone already shows "Profile" and the pencil in the shell header; repeating them
+      here produced two titles over one pane.
+    -->
+    <div class="p-4 border-b border-border font-bold text-lg text-primary">
+      {i18n.t('Profile')}
+    </div>
 
-  <!-- Link to editing: on a narrow screen this is the only way into the profile editor. -->
-  <div class="px-4 py-2 border-b border-border">
+    <!-- Link to editing: on a wide screen the header has no pencil, only this link. -->
+    <div class="px-4 py-2 border-b border-border">
     <button
       type="button"
       onclick={() => onEditProfile?.()}
@@ -66,6 +78,7 @@
       {i18n.t('Edit profile')}
     </button>
   </div>
+  {/if}
 
   <ScrollArea class="flex-1 min-h-0 overflow-x-hidden">
     <div class="p-4 border-b border-border bg-secondary/30">
@@ -156,22 +169,34 @@
             onclick={() => onCreateSeed?.()}
                                                       class="w-full p-2 bg-destructive/10 text-destructive rounded-md text-xs font-semibold text-center border border-destructive/30 hover:bg-destructive/20 transition-colors cursor-pointer"
                                                       >
-              ⚠️ {i18n.t('Seed-фраза не сохранена')}
+              ⚠️ {i18n.t('Seed phrase not saved')}
           </button>
         {/if}
-
-        <!--
-          Copying the profile to another device. Shown always: pairing is how a second
-          device is set up, and hiding it behind a menu would make the feature invisible
-          to the person who needs it.
-        -->
-        <button
-          onclick={() => onSendProfile?.()}
-          class="w-full p-2 border border-border rounded-md text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-        >
-          {i18n.t('Code for sync')}
-        </button>
       </div>
     {/if}
   </ScrollArea>
+
+  <!--
+    The bottom of the panel belongs to actions that must stay reachable: the offer to
+    update, and the code that copies this profile to another device. Pairing is how a
+    second device is set up, so it is never hidden behind a menu — and pinning it here
+    keeps it visible however long the account block above grows.
+  -->
+  <div class="shrink-0 p-3 border-t border-border space-y-2 bg-card">
+    {#if updateState.available}
+      <button
+        type="button"
+        onclick={() => onOpenSettings?.()}
+        class="w-full p-2 rounded-md bg-warning text-warning-foreground text-xs font-semibold text-center hover:opacity-90 transition"
+      >
+        {i18n.t('Update Stauri to')} {updateState.available.version}
+      </button>
+    {/if}
+    <button
+      onclick={() => onSendProfile?.()}
+      class="w-full p-2 border border-border rounded-md text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+    >
+      {i18n.t('Code for sync')}
+    </button>
+  </div>
 </div>

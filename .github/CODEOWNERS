@@ -1,0 +1,9 @@
+# The safety core is not an implementation detail: a mistake there is a key
+# disclosure, so every change to it (or to its contract) is reviewed. The rest
+# of the backend is a normal review.
+#
+# `surface.rs` is the pinned contract of `core/` and belongs to the core for
+# ownership purposes, even though it is a test.
+
+/src-tauri/src/core/                  @magnus-redkin
+/src-tauri/src/core/surface.rs        @magnus-redkin

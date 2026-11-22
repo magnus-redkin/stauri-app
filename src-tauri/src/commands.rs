@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use tauri::Manager;
 
-use crate::error::AppResult;
-use crate::inprocess;
-use crate::rpc_proxy;
+use crate::core::error::AppResult;
+use crate::core::inprocess;
+use crate::core::rpc_proxy;
 use crate::updater;
 
 /// Prepares status-go inside this process.
@@ -16,7 +16,7 @@ use crate::updater;
 /// directory and the network settings; no port is returned.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the data directory cannot
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the data directory cannot
 /// be determined or created, and when the library or one of its symbols cannot
 /// be loaded.
 #[tauri::command]
@@ -27,7 +27,7 @@ pub async fn start_backend(
     let _ = app;
     tracing::info!(network = ?network, "start_backend called");
     let base = crate::appdirs::data_dir()
-        .ok_or_else(|| crate::error::AppError::internal("cannot determine app data dir"))?;
+        .ok_or_else(|| crate::core::error::AppError::internal("cannot determine app data dir"))?;
 
     let config = match network.as_deref() {
         Some(net) => crate::config::config_for_network(net)?,
@@ -38,7 +38,7 @@ pub async fn start_backend(
     // accounts or databases.
     let dir = base.join(config.data_dir_suffix());
     std::fs::create_dir_all(&dir)
-        .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
+        .map_err(|e| crate::core::error::AppError::internal(format!("create data dir: {e}")))?;
 
     // Loading here rather than lazily gives an immediate, actionable error when
     // the library is missing next to the executable.
@@ -62,15 +62,15 @@ pub async fn start_backend(
 /// so callers keep working.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
-/// loaded, and [`crate::error::ErrorKind::Backend`] when status-go refuses.
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the library cannot be
+/// loaded, and [`crate::core::error::ErrorKind::Backend`] when status-go refuses.
 #[tauri::command]
 pub async fn stop_backend() -> AppResult<String> {
     let backend = inprocess::backend()?;
     // `Logout` takes no arguments; `direct` handles that endpoint specially.
     tokio::task::spawn_blocking(move || backend.logout())
         .await
-        .map_err(|e| crate::error::AppError::internal(format!("logout panicked: {e}")))??;
+        .map_err(|e| crate::core::error::AppError::internal(format!("logout panicked: {e}")))??;
     Ok("Backend stopped".to_string())
 }
 
@@ -82,7 +82,7 @@ pub async fn stop_backend() -> AppResult<String> {
 /// could run, and a forwarder without a table answers 503.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the listener cannot be
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the listener cannot be
 /// bound or address resolution fails.
 #[tauri::command]
 pub async fn start_rpc_proxy(
@@ -140,8 +140,8 @@ pub fn stop_rpc_proxy(app: tauri::AppHandle) -> AppResult<()> {
 /// error means the server did not answer or answered incorrectly.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the updater is not
-/// configured, and [`crate::error::ErrorKind::Network`] when the check fails.
+/// Returns [`crate::core::error::ErrorKind::Config`] when the updater is not
+/// configured, and [`crate::core::error::ErrorKind::Network`] when the check fails.
 #[tauri::command]
 pub async fn check_for_update(app: tauri::AppHandle) -> AppResult<Option<updater::UpdateInfo>> {
     updater::check(&app).await
@@ -150,9 +150,9 @@ pub async fn check_for_update(app: tauri::AppHandle) -> AppResult<Option<updater
 /// Downloads and installs an update. The application must be restarted.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the updater is not
+/// Returns [`crate::core::error::ErrorKind::Config`] when the updater is not
 /// configured or no update is available, and
-/// [`crate::error::ErrorKind::Network`] when the download or install fails.
+/// [`crate::core::error::ErrorKind::Network`] when the download or install fails.
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
     updater::install(&app).await
@@ -175,6 +175,130 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
 pub fn restart_app(app: tauri::AppHandle) {
     tracing::info!("restart requested by user");
     app.request_restart();
+}
+
+/// Reply of [`switch_network`]: the chosen network's settings and its profiles.
+#[derive(serde::Serialize)]
+pub struct SwitchNetworkResponse {
+    #[serde(rename = "dataDir")]
+    pub data_dir: String,
+    #[serde(rename = "networkName")]
+    pub network_name: String,
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    #[serde(rename = "rpcUrl")]
+    pub rpc_url: String,
+    #[serde(rename = "wakuFleet")]
+    pub waku_fleet: String,
+    #[serde(rename = "isTestnet")]
+    pub is_testnet: bool,
+    /// Profiles stored in the chosen network's directory.
+    pub accounts: Vec<serde_json::Value>,
+}
+
+/// Switches the network in place: the process keeps running, the data directory does not.
+///
+/// @param network - Network preset as the picker names it: `mainnet`, `sepolia`,
+/// `holesky`.
+/// @returns The network settings and the profiles found in its directory.
+/// # Errors
+/// Returns [`crate::core::error::ErrorKind::Config`] for an unknown preset or when the
+/// network is fixed by `STAURI_NETWORK`, and
+/// [`crate::core::error::ErrorKind::Internal`] when the library cannot reopen its account
+/// database (an unpatched `libstatus`, see `src-tauri/status-go/`).
+///
+/// @remarks
+/// status-go opens `accounts.sql` once per process and answers every later
+/// `InitializeApplication` from it (`OpenAccounts` returns early once opened), while
+/// `UpdateRootDataDir` still moves the keystore root. Without closing it first, a
+/// process started on one network lists that network's profiles under any other and
+/// looks for their keystore in the new, empty directory — a profile that is shown but
+/// cannot be opened.
+///
+/// The order is: validate and persist the choice, log out (nobody may be logged in while
+/// the database is swapped), `CloseAccounts`, then `InitializeApplication` on the new
+/// directory. The reply is the same shape as `start_backend`, plus the accounts.
+#[tauri::command]
+pub async fn switch_network(
+    app: tauri::AppHandle,
+    network: String,
+) -> AppResult<SwitchNetworkResponse> {
+    let _ = app;
+    tokio::task::spawn_blocking(move || switch_network_blocking(&network))
+        .await
+        .map_err(|e| crate::core::error::AppError::internal(format!("switch panicked: {e}")))?
+}
+
+fn switch_network_blocking(network: &str) -> AppResult<SwitchNetworkResponse> {
+    // Validates the preset and refuses when `STAURI_NETWORK` fixes it, before anything
+    // is touched.
+    crate::config::save_network(network)?;
+    let config = crate::config::config_for_network(network)?;
+
+    let base = crate::appdirs::data_dir()
+        .ok_or_else(|| crate::core::error::AppError::internal("cannot determine app data dir"))?;
+    // One profile directory per network, the same suffix `start_backend` uses.
+    let dir = base.join(config.data_dir_suffix());
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| crate::core::error::AppError::internal(format!("create data dir: {e}")))?;
+
+    let backend = inprocess::backend()?;
+    if !backend.supports_account_reopen() {
+        return Err(crate::core::error::AppError::internal(
+            "this libstatus does not export CloseAccounts; rebuild it from src-tauri/status-go \
+             to switch networks without restarting the app",
+        ));
+    }
+
+    // Nothing may stay logged in while the account database is swapped: a session holds
+    // the old profile's keys and its node is bound to the old data directory.
+    backend.logout()?;
+    backend.close_accounts()?;
+
+    let reply = backend.direct("InitializeApplication", &initialize_request(&dir))?;
+    let parsed: serde_json::Value = serde_json::from_str(&reply).map_err(|e| {
+        crate::core::error::AppError::backend(format!("invalid JSON from backend: {e}"))
+    })?;
+    if let Some(err) = parsed.get("error") {
+        return Err(crate::core::error::AppError::backend(
+            inprocess::describe_rpc_error(err),
+        ));
+    }
+    let accounts = parsed
+        .get("accounts")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    tracing::info!(
+        network = config.network_name(),
+        dir = %dir.display(),
+        accounts = accounts.len(),
+        "network switched in place"
+    );
+
+    Ok(SwitchNetworkResponse {
+        data_dir: dir.to_string_lossy().into_owned(),
+        network_name: config.network_name(),
+        chain_id: config.chain_id(),
+        rpc_url: config.rpc_url(),
+        waku_fleet: config.waku_fleet(),
+        is_testnet: config.is_testnet(),
+        accounts,
+    })
+}
+
+/// Request body for `InitializeApplication`, matching `requests.InitializeApplication`.
+///
+/// Only `dataDir` is read by status-go; it also sets the root from which the account
+/// manager resolves the keystore.
+fn initialize_request(dir: &std::path::Path) -> String {
+    let dir = dir.to_string_lossy();
+    serde_json::json!({
+        "dataDir": dir,
+        "rootDataDir": dir,
+    })
+    .to_string()
 }
 
 /// Accepts a log line from the webview and writes it to the shared file.
@@ -217,18 +341,18 @@ pub fn log_frontend(level: String, message: String) {
 /// `InitializeApplication` — and returns the reply to the frontend as is.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the data directory cannot
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the data directory cannot
 /// be determined or created and when the library fails to load, and
-/// [`crate::error::ErrorKind::Backend`] when status-go returns no response.
+/// [`crate::core::error::ErrorKind::Backend`] when status-go returns no response.
 #[tauri::command]
-pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<String> {
+pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::core::error::AppResult<String> {
     let _ = app;
     // Data directory: appdirs honours STAURI_DATA_DIR and otherwise uses the
     // Tauri value.
     let dir = crate::appdirs::data_dir()
-        .ok_or_else(|| crate::error::AppError::internal("cannot determine app data dir"))?;
+        .ok_or_else(|| crate::core::error::AppError::internal("cannot determine app data dir"))?;
     std::fs::create_dir_all(&dir)
-        .map_err(|e| crate::error::AppError::internal(format!("create data dir: {e}")))?;
+        .map_err(|e| crate::core::error::AppError::internal(format!("create data dir: {e}")))?;
     let data_dir = dir.to_string_lossy().into_owned();
     let request = serde_json::json!({
         "dataDir": data_dir,
@@ -236,7 +360,7 @@ pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<St
         "networkId": 1,
     })
     .to_string();
-    crate::inprocess::backend()?.initialize(&request)
+    crate::core::inprocess::backend()?.initialize(&request)
 }
 
 /// Calls a status-go endpoint by name without a transport.
@@ -249,29 +373,29 @@ pub fn inprocess_initialize(app: tauri::AppHandle) -> crate::error::AppResult<St
 /// `Logout`.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the library cannot be
 /// loaded or the endpoint is unsupported, and
-/// [`crate::error::ErrorKind::Backend`] when status-go returns an error or no
+/// [`crate::core::error::ErrorKind::Backend`] when status-go returns an error or no
 /// response.
 #[tauri::command]
-pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<String> {
+pub fn status_call(endpoint: String, body: String) -> crate::core::error::AppResult<String> {
     if endpoint == "TraceNote" {
         // Frontend test notes. A password never reaches this call.
-        crate::trace::line(&format!("note {body}"));
+        crate::core::trace::line(&format!("note {body}"));
         return Ok(String::new());
     }
-    crate::trace::line(&format!("call {endpoint} body={}b", body.len()));
-    let res = crate::inprocess::backend()?.direct(&endpoint, &body);
+    crate::core::trace::line(&format!("call {endpoint} body={}b", body.len()));
+    let res = crate::core::inprocess::backend()?.direct(&endpoint, &body);
     match &res {
         Ok(text) => {
-            let limit = if crate::trace::debug_enabled() { 4000 } else { 200 };
-            crate::trace::line(&format!(
+            let limit = if crate::core::trace::debug_enabled() { 4000 } else { 200 };
+            crate::core::trace::line(&format!(
                 "ok {endpoint} len={} text={}",
                 text.len(),
                 text.chars().take(limit).collect::<String>()
             ));
         }
-        Err(e) => crate::trace::line(&format!("err {endpoint} {e}")),
+        Err(e) => crate::core::trace::line(&format!("err {endpoint} {e}")),
     }
     res
 }
@@ -283,10 +407,27 @@ pub fn status_call(endpoint: String, body: String) -> crate::error::AppResult<St
 /// the command handler.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when the library cannot be
-/// loaded, and [`crate::error::ErrorKind::Backend`] when status-go reports a
+/// Returns [`crate::core::error::ErrorKind::Internal`] when the library cannot be
+/// loaded, and [`crate::core::error::ErrorKind::Backend`] when status-go reports a
 /// JSON-RPC error.
 #[tauri::command]
 pub async fn status_rpc(method: String, params: serde_json::Value) -> AppResult<serde_json::Value> {
-    crate::inprocess::call_rpc(&method, params).await
+    crate::core::inprocess::call_rpc(&method, params).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initialize_request_uses_the_data_dir_field() {
+        // `requests.InitializeApplication` reads `dataDir` and nothing else in
+        // `initializeApplication`; a wrong key leaves status-go with no directory, and
+        // `Validate` then refuses the call. `rootDataDir` is ignored by this version but
+        // is kept so a build that starts reading it keeps working.
+        let body = initialize_request(std::path::Path::new("/var/data/sepolia"));
+        let value: serde_json::Value = serde_json::from_str(&body).expect("request is JSON");
+        assert_eq!(value["dataDir"], "/var/data/sepolia");
+        assert_eq!(value["rootDataDir"], "/var/data/sepolia");
+    }
 }

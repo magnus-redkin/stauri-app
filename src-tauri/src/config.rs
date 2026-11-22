@@ -3,11 +3,11 @@
 //! Sources, in priority order: `STAURI_NETWORK`, `STAURI_CONFIG_PATH`,
 //! `~/.config/stauri/config.json`, then the built-in default (mainnet).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 #[derive(Deserialize, Default, Debug)]
 pub struct AppConfig {
@@ -178,6 +178,82 @@ pub fn load_config() -> AppConfig {
     AppConfig::default()
 }
 
+/// File the in-app network choice is written to.
+///
+/// `STAURI_CONFIG_PATH` first, so an explicit config file keeps being the one the
+/// application reads; otherwise the same `stauri/config.json` that [`load_config`] reads.
+fn config_path() -> Option<PathBuf> {
+    crate::appdirs::env_override("STAURI_CONFIG_PATH")
+        .or_else(|| crate::appdirs::config_dir().map(|dir| dir.join("stauri").join("config.json")))
+}
+
+/// Saves the network chosen in the interface, for the next start.
+///
+/// @param network - One of [`NETWORKS`].
+/// @returns Nothing; the value is in the config file and is read by the next start.
+/// # Errors
+/// Returns [`crate::core::error::ErrorKind::Config`] for an unknown network, when
+/// `STAURI_NETWORK` fixes the network for this run, and when the file cannot be written.
+///
+/// @remarks
+/// This only writes a setting. Re-pointing the running process is the caller's job and
+/// needs the `CloseAccounts` export: status-go opens its account database once and keeps
+/// serving it afterwards, so without closing it first the file and the running process
+/// would disagree until the next start. See `commands::switch_network`.
+pub fn save_network(network: &str) -> AppResult<()> {
+    // An environment override outranks the file on every start, so a write here would be
+    // undone silently — after a restart, which is the worst place to learn about it.
+    if let Ok(fixed) = std::env::var("STAURI_NETWORK") {
+        return Err(AppError::config(format!(
+            "the network is fixed by STAURI_NETWORK={fixed}; unset it to switch inside the app"
+        )));
+    }
+    let path = config_path()
+        .ok_or_else(|| AppError::config("cannot determine the config directory"))?;
+    save_network_to(&path, network)
+}
+
+/// Writes `preset` into the config file at `path`, keeping everything else it holds.
+///
+/// @param path - Config file to write; created with its directory when missing.
+/// @param network - One of [`NETWORKS`].
+/// # Errors
+/// Returns [`crate::core::error::ErrorKind::Config`] for an unknown network and when the
+/// file cannot be written.
+///
+/// @remarks
+/// The file is read first and only `ethereum.preset` is replaced: a custom provider or
+/// fleet the user put there by hand must survive a switch from the interface.
+pub fn save_network_to(path: &Path, network: &str) -> AppResult<()> {
+    config_for_network(network)?;
+    let mut root: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let object = root
+        .as_object_mut()
+        .expect("an object was guaranteed above");
+    let ethereum = object
+        .entry("ethereum")
+        .or_insert_with(|| serde_json::json!({}));
+    if !ethereum.is_object() {
+        // A hand-written `"ethereum": "sepolia"` is not the shape `load_config` reads;
+        // replace it rather than try to extend it.
+        *ethereum = serde_json::json!({});
+    }
+    ethereum["preset"] = serde_json::Value::String(network.to_string());
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| AppError::config(format!("create config dir: {e}")))?;
+    }
+    let text = serde_json::to_string_pretty(&root)
+        .map_err(|e| AppError::config(format!("serialize config: {e}")))?;
+    std::fs::write(path, text).map_err(|e| AppError::config(format!("write config: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,7 +304,7 @@ mod tests {
     #[test]
     fn test_config_for_network_invalid() {
         let err = config_for_network("../../x").expect_err("unknown network must fail");
-        assert_eq!(err.kind, crate::error::ErrorKind::Config);
+        assert_eq!(err.kind, crate::core::error::ErrorKind::Config);
         assert!(err.message.contains("unknown network"), "{}", err.message);
     }
 
@@ -243,6 +319,67 @@ mod tests {
         // data_dir_suffix always returns the network name, mainnet included:
         // otherwise mainnet and testnet directories would share one location.
         assert_eq!(config.data_dir_suffix(), PathBuf::from("mainnet"));
+    }
+
+    /// A fresh, empty directory for one test.
+    ///
+    /// The name carries the process id and the test name so two test binaries running at
+    /// once cannot share a file, and the directory is removed first so a previous failed
+    /// run cannot make a test pass with its leftovers.
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stauri-config-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn test_save_network_to_writes_the_preset() {
+        let dir = temp_dir("writes");
+        let path = dir.join("stauri").join("config.json");
+
+        save_network_to(&path, "sepolia").expect("write config");
+
+        // The written file must be readable as the configuration the next start uses:
+        // the preset has to arrive at `network_name`, not only at the JSON field.
+        let text = std::fs::read_to_string(&path).expect("read config");
+        let config: AppConfig = serde_json::from_str(&text).expect("parse config");
+        assert_eq!(config.network_name(), "sepolia");
+        assert_eq!(config.data_dir_suffix(), PathBuf::from("sepolia"));
+        assert!(config.is_testnet());
+    }
+
+    #[test]
+    fn test_save_network_to_keeps_other_keys() {
+        // A provider and a fleet put in the file by hand are not the switch's business.
+        let dir = temp_dir("keeps");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"ethereum":{"preset":"mainnet","rpc_url":"https://custom.rpc"},"waku":{"fleet":"custom.fleet"}}"#,
+        )
+        .expect("seed config");
+
+        save_network_to(&path, "holesky").expect("write config");
+
+        let text = std::fs::read_to_string(&path).expect("read config");
+        let config: AppConfig = serde_json::from_str(&text).expect("parse config");
+        assert_eq!(config.network_name(), "holesky");
+        assert_eq!(config.rpc_url(), "https://custom.rpc");
+        assert_eq!(config.waku_fleet(), "custom.fleet");
+    }
+
+    #[test]
+    fn test_save_network_to_rejects_unknown() {
+        // The value ends up in a file read at the next start, so a name that
+        // `config_for_network` refuses must not be written at all.
+        let dir = temp_dir("rejects");
+        let path = dir.join("config.json");
+
+        let err = save_network_to(&path, "../../x").expect_err("unknown network must fail");
+
+        assert_eq!(err.kind, crate::core::error::ErrorKind::Config);
+        assert!(!path.exists(), "an unknown network must not create the file");
     }
 
     #[test]

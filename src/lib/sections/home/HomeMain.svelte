@@ -1,124 +1,105 @@
 <script lang="ts">
   /**
-   * Main part of the Home section.
+   * Main part of the Home section: About content and the two main buttons.
    *
-   * With no topic open, only the two main buttons are shown, centred in the
-   * panel. With a topic open, its text sits at the top and the buttons stay
-   * centred in the space that is left.
+   * The content comes from `docs/<lang>/about.md`; this component only chooses what to
+   * show. On a narrow screen the list of subsections and the open subsection share the
+   * single pane: nothing open shows the list, something open shows it with a way back.
    *
    * @remarks
-   * External links open in a dApp window (`open_dapp`), like any other external
-   * address: the window has its own menu and the host in its title.
+   * The document link at the foot of a subsection opens in a dApp window on the desktop
+   * and in the browser on a phone: `open_dapp` has no second window on mobile yet.
    */
   import { i18n } from '$lib/i18n';
   import { invoke } from '@tauri-apps/api/core';
-  import { ExternalLink } from 'lucide-svelte';
+  import { ExternalLink, ChevronLeft } from 'lucide-svelte';
+  import { renderMarkdown } from '$lib/utils/markdown';
   import { error } from '$lib/utils/log';
-  import { TOPICS, type TopicId } from './homeTopics';
+  import { isAndroid } from '$lib/utils/platform';
+  import { docUrl, resolveDocPath, type AboutSection } from './aboutSections';
 
   let {
-    topic,
+    sections,
+    topic = $bindable(),
+    compact,
     onNavigate,
-  }: { topic: TopicId | null; onNavigate?: (section: string) => void } = $props();
+    onBack,
+  }: {
+    sections: AboutSection[];
+    /** Open subsection; bound, because the list on a narrow screen lives here too. */
+    topic: string | null;
+    compact: boolean;
+    onNavigate?: (section: string) => void;
+    onBack?: () => void;
+  } = $props();
 
-  const current = $derived(TOPICS.find((t) => t.id === topic) ?? null);
+  const current: AboutSection | null = $derived(sections.find((s) => s.id === topic) ?? null);
 
-  /** Opens a link in a dApp window. */
+  /**
+   * Opens the document link.
+   *
+   * @param url - Address to open.
+   * @remarks
+   * Desktop opens a dApp window with its own menu. A phone has no second window yet, so
+   * the address goes to the system handler through `open_external`, which checks the
+   * scheme in Rust — the shell plugin is not registered and would not work here.
+   */
   async function openLink(url: string): Promise<void> {
     try {
-      await invoke<string>('open_dapp', { url });
+      if (isAndroid()) await invoke('open_external', { url });
+      else await invoke<string>('open_dapp', { url });
     } catch (e) {
       error(`[home] cannot open ${url}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+
+  /** Address of the document link of the open subsection. */
+  const currentUrl = $derived(
+    current?.link ? docUrl(resolveDocPath(current.link, i18n.locale ?? 'en')) : ''
+  );
 </script>
 
-<div class="h-full flex flex-col bg-background">
-  {#if current}
+<div class="h-full flex flex-col overflow-y-auto bg-background">
+  {#if compact && !current}
+    <!-- The list stands in for the left panel: one pane, so only one thing at a time. -->
+    <div class="border-b border-border bg-card">
+      <div class="p-4 border-b border-border">
+        <span class="font-bold text-lg text-primary">{i18n.t('About')}</span>
+      </div>
+      <div class="p-4 space-y-1">
+        {#each sections as section (section.id)}
+          <button
+            onclick={() => (topic = section.id)}
+            class="w-full text-left p-3 rounded-md transition-colors hover:bg-secondary text-muted-foreground"
+          >
+            {section.title}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {:else if current}
     <article class="max-h-[60%] overflow-y-auto p-6 border-b border-border bg-card">
       <div class="max-w-2xl mx-auto space-y-4">
-        {#if current.id === 'web3im'}
-          <h1 class="text-2xl font-bold text-foreground">{i18n.t('What is Web3 IM?')}</h1>
-          <p class="text-sm text-muted-foreground leading-relaxed">
-            {i18n.t(
-              'A messenger where messages travel through a peer-to-peer network instead of a company server: no one holds the whole history, and no one can delete or read it. The wallet lives in the same app, because the identity behind the messages is the same key that holds the funds.'
-            )}
-          </p>
-          <ul class="text-sm space-y-1 list-disc pl-5 text-foreground">
-            <li>{i18n.t('No account on a server: the key pair is the account.')}</li>
-            <li>{i18n.t('The seed phrase of 12 words is the master key for both the profile and the funds.')}</li>
-            <li>{i18n.t('Messages are encrypted end to end; nodes relay them without reading them.')}</li>
-          </ul>
-        {:else if current.id === 'status-network'}
-          <h1 class="text-2xl font-bold text-foreground">{i18n.t('What is the Status network?')}</h1>
-          <p class="text-sm text-muted-foreground leading-relaxed">
-            {i18n.t(
-              'Status is a set of open-source programs — the Status app, the status-go engine and the Waku transport — that form one network. Nodes find each other through a boot list (a "fleet") and exchange sealed messages; the same network carries the messenger and the wallet traffic.'
-            )}
-          </p>
-          <ul class="text-sm space-y-1 list-disc pl-5 text-foreground">
-            <li>{i18n.t('Waku is the transport: it stores and forwards sealed envelopes.')}</li>
-            <li>{i18n.t('A fleet is the list of starting nodes; Status runs a public one.')}</li>
-            <li>{i18n.t('status-go is the engine; Stauri loads it as a library and draws its own interface.')}</li>
-          </ul>
-        {:else if current.id === 'difference'}
-          <h1 class="text-2xl font-bold text-foreground">{i18n.t('Stauri vs Status.im')}</h1>
-          <p class="text-sm text-muted-foreground leading-relaxed">
-            {i18n.t(
-              'Stauri uses the same engine and the same network as Status Desktop. The differences are two: the stack, and the vocabulary.'
-            )}
-          </p>
-          <ol class="text-sm space-y-3 list-decimal pl-5 text-foreground">
-            <li>
-              <span class="font-medium">{i18n.t('Tauri + Svelte instead of Nix + Nim/QML.')}</span>
-              {' '}{i18n.t(
-                'The interface is a web front end in Svelte: a short edit cycle, one Rust code base on desktop and Android, and isolated windows for external dApps. Status Desktop is one monolith built with Nix in Nim and QML.'
-              )}
-            </li>
-            <li>
-              <span class="font-medium">{i18n.t('No "Community" in the interface; channels are ACC.')}</span>
-              {' '}{i18n.t(
-                'A Status community is a technical container with one channel. Stauri hides the container and shows channels (ACC) directly as the entity a user recognises.'
-              )}
-            </li>
-          </ol>
-        {:else}
-          <h1 class="text-2xl font-bold text-foreground">{i18n.t('TODO / DONE')}</h1>
-          <p class="text-sm text-muted-foreground leading-relaxed">
-            {i18n.t('What works today and what is planned next. The list is short on purpose: only the items that shape the product.')}
-          </p>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <div class="rounded-lg border border-success/30 bg-success/10 p-4">
-              <h2 class="font-semibold text-success mb-2">{i18n.t('DONE')}</h2>
-              <ul class="space-y-1 list-disc pl-4 text-foreground">
-                <li>{i18n.t('Profile: create, log in, seed phrase.')}</li>
-                <li>{i18n.t('Chats, channels, contacts, comments.')}</li>
-                <li>{i18n.t('Wallet: assets, send, receive, swap.')}</li>
-                <li>{i18n.t('ENS name in the profile.')}</li>
-                <li>{i18n.t('Market, external feeds, dApps in separate windows.')}</li>
-                <li>{i18n.t('Four themes; four languages.')}</li>
-              </ul>
-            </div>
-            <div class="rounded-lg border border-warning/30 bg-warning/10 p-4">
-              <h2 class="font-semibold text-warning mb-2">{i18n.t('TODO')}</h2>
-              <ul class="space-y-1 list-disc pl-4 text-foreground">
-                <li>{i18n.t('Android build; Windows build.')}</li>
-                <li>{i18n.t('Buy crypto for fiat (placeholder now).')}</li>
-                <li>{i18n.t('window.ethereum in dApp windows.')}</li>
-                <li>{i18n.t('Transaction history, NFTs, bridge.')}</li>
-                <li>{i18n.t('Keycard, push notifications.')}</li>
-              </ul>
-            </div>
-          </div>
-        {/if}
-
-        {#if current.link}
+        <div class="flex items-center gap-2">
+          {#if compact}
+            <button
+              onclick={() => onBack?.()}
+              class="shrink-0 p-1.5 rounded-md hover:bg-secondary text-muted-foreground"
+              aria-label={i18n.t('Back')}
+            >
+              <ChevronLeft size={18} />
+            </button>
+          {/if}
+          <h1 class="text-2xl font-bold text-foreground">{current.title}</h1>
+        </div>
+        {@html renderMarkdown(current.body)}
+        {#if currentUrl}
           <button
-            onclick={() => openLink(current.link!.url)}
+            onclick={() => openLink(currentUrl)}
             class="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline break-all text-left"
           >
             <ExternalLink size={16} class="shrink-0" />
-            {current.link.url}
+            {currentUrl}
           </button>
         {/if}
       </div>

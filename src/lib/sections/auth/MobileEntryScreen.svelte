@@ -46,8 +46,8 @@
     pinConfirming?: boolean;
     busy: boolean;
     error: string;
-    /** Fires when the network above the list is changed. */
-    onNetworkChange: (network: Network) => void;
+    /** Fires when the network above the list is changed; the page restarts the app. */
+    onNetworkChange: (network: string) => void | Promise<void>;
     onSelectProfile: (profile: ProfileSummary) => void;
     /** Starts profile creation: the password is generated, then a PIN is asked for. */
     onCreate: () => void;
@@ -61,15 +61,29 @@
     onPair: (method: 'wifi' | 'usb') => void;
   } = $props();
 
-  // The picker speaks the config's network names (`sepolia`, `holesky`), while a
-  // credential slot is scoped by `mainnet`/`testnet` only. Mapping here keeps the two
-  // vocabularies apart instead of leaking the picker's names into storage.
+  // The picker speaks the config's network names (`sepolia`, `holesky`), and those are
+  // exactly what the backend starts on. They must not be translated into the credential
+  // vocabulary (`mainnet`/`testnet`) on the way out: `start_backend` only knows the
+  // presets and answers `unknown network: testnet`.
   let pickerNetwork = $state(statusState.networkName || 'mainnet');
-  const networkOf = (name: string): Network => (name === 'mainnet' ? 'mainnet' : 'testnet');
 
-  function handleNetwork(net: string) {
+  /**
+   * Asks the page to switch networks.
+   *
+   * @remarks
+   * The switch restarts the application, so this promise does not settle in practice.
+   * When it does reject, the switch did not happen — a network fixed by an environment
+   * variable is the common case — and the highlight goes back to the network the backend
+   * is actually on.
+   */
+  async function handleNetwork(net: string) {
+    const previous = pickerNetwork;
     pickerNetwork = net;
-    onNetworkChange(networkOf(net));
+    try {
+      await onNetworkChange(net);
+    } catch {
+      pickerNetwork = previous;
+    }
   }
 
   // The transport picker is gone: one path, on whatever local network both devices share.

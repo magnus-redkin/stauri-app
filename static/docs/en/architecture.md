@@ -46,7 +46,7 @@ The price, accepted deliberately:
 ## 2. Library loading and signals
 
 ```text
-src-tauri/src/inprocess.rs
+src-tauri/src/core/inprocess.rs
   library_path()      STAURI_LIBSTATUS, else next to the executable
                       (Android: the bare name, resolved from jniLibs)
   backend()           the Library, loaded once per process
@@ -74,6 +74,50 @@ consumers of one stream:
 `status-signal`, which `lib.rs` emits from the callback. Keeping the shape left
 every call site untouched.
 
+## 2.1. The safety core (`src/core/`)
+
+Every file that **holds, protects or moves keys** lives in one folder,
+`src-tauri/src/core/`. The folder is a marker, not a lock: Rust has no
+per-folder visibility, and code inside `core/` imports the rest of the crate
+just as freely. What keeps the boundary honest is process, not the compiler:
+
+- `.github/CODEOWNERS` — any change inside `core/` requires review;
+- `src/core/surface.rs` — a contract test that pins the set of files and the
+  command surface: a new file in the folder, or a module quietly moved back
+  out, fails the build;
+- this list, which says what belongs there.
+
+| File | What it does |
+|---|---|
+| `core/inprocess.rs` | status-go as a library in this process: `library_path`, `backend`, `register_signals`, `call_rpc`, `direct`, `subscribe` |
+| `core/backend.rs` | The single named entry point to status-go; wallet and ENS say `Backend` and never touch the library |
+| `core/rpc_proxy.rs` | Local HTTP forwarder `127.0.0.1:<port>/<secret>/<chainId>` that status-go uses for RPC; the secret lives in the path, kept in the config directory |
+| `core/credentials.rs` | The PIN → Argon2id → AES-GCM envelope per profile, the attempt counter, and the pending-key stash for sync |
+| `core/seed.rs` | The seed phrase, held in Rust; the webview sees one word at a time (`seed_word`), verified without revealing the expected word |
+| `core/pairing.rs` | Copying a profile to another device: sender and receiver, confirmation codes, `is_valid_connection_string` |
+| `core/lanpair.rs` | Finding the other device over the LAN and the six-digit handshake that starts the transfer |
+| `core/error.rs` | Typed command errors; the vocabulary everything returns |
+| `core/trace.rs` | The in-app trace log with secret scrubbing |
+
+### What deliberately does **not** belong in the core
+
+`transfer`, `ens`, `swap`, `router`, `providers`, `market`, `dapp`, `updater`,
+`opener`, `invite`, `config`, `profile`, `commands`. These *use* the core
+through its `pub` surface, and they are the parts most likely to be rewritten
+in another language or replaced one day. Money movement and the data layer are
+clients of the core, not the core: freezing them inside it would defeat the
+point.
+
+### Why a polyglot boundary, not "all of Rust is sacred"
+
+A polyglot architecture with Rust at the centre of security does not mean every
+Rust file is unchangeable. The line is drawn at **where the keys physically
+live**: `inprocess`/`backend` (the status-go FFI holds the private keys),
+`credentials` (the PIN envelope), `seed` (the phrase), `pairing` / `lanpair`
+(carrying the keys between devices). Anything that merely *calls* `Backend` and
+`Router` to move money is business logic — Nim, Go or Rust, as the module's
+authors decide.
+
 ## 3. Layers
 
 ```text
@@ -90,8 +134,10 @@ every call site untouched.
 │ status/api.ts, status/messaging.ts                           │
 ├──────────────────────────────────────────────────────────────┤
 │ Tauri (Rust)                                                 │
-│ inprocess, rpc_proxy, transfer, ens, swap, router, market,   │
-│ providers, seed, updater, dapp, …                            │
+│ core/: inprocess, backend, rpc_proxy, credentials, seed,     │
+│        pairing, lanpair, error, trace   ← locked, review     │
+│ business: transfer, ens, swap, router, market, providers,    │
+│        dapp, updater, …                                       │
 ├──────────────────────────────────────────────────────────────┤
 │ libstatus.so in this process · RPC providers · CoinGecko · RSS│
 └──────────────────────────────────────────────────────────────┘
@@ -157,6 +203,41 @@ Direct `reqwest` calls from Rust, not through `status-go`:
 
 Prices for the **total balance** take a different path: `wallet_fetchPrices` in
 `status-go`, which already maps tokens to CoinGecko by `crossChainId`.
+
+### 4.4. Network choice — an in-process switch
+
+The network is switched **inside the running process**, with no restart. The
+`switch_network` command (`commands.rs`) does, in order: validates the preset
+(`mainnet`, `sepolia`, `holesky`) and writes it to `config.json`
+(`config::save_network`), calls `Logout`, then `CloseAccounts`, then
+`InitializeApplication` on the chosen network's directory — and returns the
+chosen network's settings and **its** profile list to the frontend.
+
+Why `CloseAccounts` is needed. `InitializeApplication` opens `accounts.sql`
+once per process: `StatusBackend.OpenAccounts` returns immediately after the
+first open, so a second call with another `dataDir` would still list the
+**first** network's profiles. Meanwhile the accounts-manager root
+(`UpdateRootDataDir`) *does* move — the keystore is looked up in the new
+directory, which is empty, so a profile shows up that cannot be opened.
+
+`CloseAccounts` is a **patch to `status-go`** without which this API does not
+exist (`src-tauri/status-go/`). In the fork it is a single commit; in the app
+the library's symbol is optional: an unpatched `libstatus` still loads and runs,
+and a network switch returns a clear "rebuild it from `src-tauri/status-go`"
+error. Why a patch instead of a process restart: restarting on Android means
+killing the process, and the OS will not bring it back from the background
+(`BAL_BLOCK`), so the next start would have to be done by hand.
+
+Directories are per-network: `start_backend` and `switch_network` place the
+data under `<data>/<network_name>/` (`config.data_dir_suffix()`), so profiles,
+history and keystores of mainnet and a testnet never mix.
+
+`CloseAccounts` closes the **unencrypted** `accounts.sql` that holds the
+profile list; no keys live there. The keystore moves only because
+`InitializeApplication` re-sets `rootDataDir`.
+
+When the network is fixed by `STAURI_NETWORK`, `save_network` returns an error
+before anything is closed or re-initialised.
 
 ## 5. Invariants
 

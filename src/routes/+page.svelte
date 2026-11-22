@@ -19,7 +19,7 @@
   import {
     connectionState,
     connect,
-    changeNetwork,
+    switchNetwork,
     login,
     createAccount,
     restoreAccount,
@@ -59,6 +59,7 @@
   } from '$lib/stores/walletStore.svelte';
   import { resetSend } from '$lib/stores/sendStore.svelte';
   import { resetEns } from '$lib/stores/ensStore.svelte';
+  import { startUpdatePolling } from '$lib/stores/updaterState.svelte';
   import {
     ensureProfileAvatar,
     setProfileAvatar,
@@ -73,7 +74,7 @@
   import RecoveryScreen from '$lib/sections/auth/RecoveryScreen.svelte';
   import MobileEntryScreen from '$lib/sections/auth/MobileEntryScreen.svelte';
   import PinEntry from '$lib/sections/auth/PinEntry.svelte';
-  import { isAndroid } from '$lib/utils/platform';
+  import { isAndroid, isPhonePlatform } from '$lib/utils/platform';
   import type {
     EntryContext,
     EntryPhase,
@@ -81,6 +82,7 @@
     ProfileSummary,
   } from '$lib/entry/entryFlow';
   import {
+    credentialNetwork,
     initialPhase,
     isMissingPinError,
     phaseAfterPinLookup,
@@ -117,7 +119,8 @@
 
   import HomeMain from "$lib/sections/home/HomeMain.svelte";
   import HomeLeft from "$lib/sections/home/HomeLeft.svelte";
-  import type { TopicId } from "$lib/sections/home/homeTopics";
+  import { parseAbout } from "$lib/sections/home/aboutSections";
+  import { aboutMarkdown } from "$lib/sections/home/aboutMarkdown";
   import ProfileLeft from "$lib/sections/profile/ProfileLeft.svelte";
   import EditProfile from "$lib/sections/profile/EditProfile.svelte";
   import CreateSeed from "$lib/sections/profile/CreateSeed.svelte";
@@ -150,15 +153,28 @@
   }
 
   let activeSection = $state('home');
-  // Open topic of the About menu on Home; the right panel follows it.
+  /**
+   * The shell header title on a phone: "Edit Profile" while the editor is open, "Profile"
+   * otherwise. The pencil in the header carries both states, so the pane body no longer
+   * repeats the title.
+   */
+  const mobileTitle = $derived(
+    activeSection === 'profile' && mobileEditProfile ? i18n.t('Edit Profile') : sectionTitle(activeSection)
+  );
+  // Open subsection of the About menu on Home; the right panel follows it.
   // null: Home shows only the two main buttons.
-  let homeTopic = $state<TopicId | null>(null);
-  // Mobile layout uses a single panel and a bottom bar; the breakpoint is window width (≤ 768px).
-  let isMobile = $state(false);
+  let homeSection = $state<string | null>(null);
+  /** Subsections of `docs/<lang>/about.md`: one per `##` heading, in file order. */
+  const aboutSections = $derived(parseAbout(aboutMarkdown()));
+  // Mobile layout uses a single panel and a bottom bar. A phone keeps it in both
+  // orientations: turning the device makes the viewport wider than the 768px breakpoint,
+  // and a width-only rule swapped the whole layout for the desktop panes, which have no
+  // bottom menu — the section bar vanished with no way back to it.
+  let isMobile = $state(isPhonePlatform());
   // Which section panel the mobile layout shows: left or right.
   $effect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
-    const update = () => (isMobile = mq.matches);
+    const update = () => (isMobile = isPhonePlatform() || mq.matches);
     update();
     mq.addEventListener('change', update);
     return () => mq.removeEventListener('change', update);
@@ -503,6 +519,8 @@
     // list needs them, not only the dApp section. A read error must not block
     // connecting; a corrupted store is left with an empty list.
     loadFeeds();
+    // A release can wait on no one: the check runs in the background and then hourly.
+    startUpdatePolling();
     await connect(undefined);
     if (statusState.accounts.length > 0) {
       selectedAccountKeyUid = statusState.accounts[0]["key-uid"];
@@ -512,17 +530,6 @@
     await startEntryFlow();
   });
 
-  async function handleNetworkChange(network: string) {
-    await changeNetwork(network);
-    selectedNetwork = network;
-
-    // A network switch means a different data directory, and therefore a different
-    // set of profiles. A key selected on the previous network does not exist in the
-    // new database, and signing in with it fails while reading `kdfIterations`:
-    //   failed to get account kdf iterations number: sql: no rows in result set
-    // (`GetAccountKDFIterationsNumber` looks up a row by keyUid in accounts.sql).
-    selectedAccountKeyUid = statusState.accounts[0]?.['key-uid'] ?? '';
-  }
 
   /**
    * Opens or restores a profile from its seed phrase.
@@ -708,6 +715,24 @@
    * This one only changes when a session really opens or closes.
    */
   let sessionOpen = $state(false);
+
+  /**
+   * Whether the bottom-menu interface is on screen.
+   *
+   * @remarks
+   * The section bar must be reachable from every section, so the shell owns exactly one
+   * viewport: banner, header, scrolling content, bar. With `min-h` alone the column grew
+   * with the content — a long screen (the profile editor) or a phone held sideways pushed
+   * the bar past the bottom edge, and the menu was simply gone with no way back. Entry
+   * screens keep `min-h`: they are short and may scroll.
+   */
+  const shellVisible = $derived(
+    isMobile &&
+      !connectionState.isConnecting &&
+      !appLocked &&
+      (sessionOpen || loginGrace) &&
+      !['set-pin', 'create-pin', 'create-seed', 'create-name'].includes(entryPhase.kind)
+  );
 
   /** Network of the entry flow, in the storage vocabulary (`mainnet`/`testnet`). */
   let entryNetwork = $state<Network>('mainnet');
@@ -905,20 +930,29 @@
     credentialRules = await pinRules();
     // The flow starts on whatever network the backend actually came up on. Assuming
     // `mainnet` would ask for a PIN in a slot the profile was never stored in, and the
-    // profile would look like it had none.
-    entryNetwork = statusState.isTestnet ? 'testnet' : 'mainnet';
+    // profile would look like it had none. `credentialNetwork` is the one place that
+    // turns a backend preset (`sepolia`, `holesky`) into the two envelope slots.
+    entryNetwork = credentialNetwork(statusState.networkName || 'mainnet');
     syncEntryPhase();
   }
 
-  async function handleEntryNetworkChange(network: Network): Promise<void> {
+  async function handleEntryNetworkChange(network: string): Promise<void> {
+    // The switch happens in place: status-go closes its account database and reopens it
+    // on the chosen network's directory, so the list above is replaced by that network's
+    // profiles. Nothing restarts, and a failure leaves the old network untouched — the
+    // picker then puts its highlight back.
+    if (network === statusState.networkName) return;
     entryError = '';
-    // The listener is registered here instead of at the top: in the phone flow the
-    // picker only exists on the first screen, and a network switch restarts the
-    // backend, which the flow has to survive.
-    await handleNetworkChange(network);
-    entryNetwork = network;
-    entrySelected = null;
-    syncEntryPhase();
+    try {
+      await switchNetwork(network);
+      entryNetwork = credentialNetwork(network);
+      entrySelected = null;
+      selectedAccountKeyUid = statusState.accounts[0]?.['key-uid'] ?? '';
+      syncEntryPhase();
+    } catch (e) {
+      entryError = formatError(e);
+      throw e;
+    }
   }
 
   /**
@@ -1533,6 +1567,26 @@
   }
 
   /**
+   * Leaves the lock for the full entry screen.
+   *
+   * @remarks
+   * The pad is the way back into the open session and nothing else: someone who wants
+   * another profile, a new one, or a sync has no other door, and being held on the keypad
+   * with no way out is a dead end. The backend session stays up — the same state the lock
+   * itself leaves behind — so returning to the picker loses nothing.
+   */
+  function leaveLockedSession(): void {
+    info('[lock] left the lock screen for the entry flow');
+    appLocked = false;
+    sessionHasPin = false;
+    sessionSlot = null;
+    sessionOpen = false;
+    lockPin = '';
+    lockError = '';
+    entryPhase = { kind: 'login' };
+  }
+
+  /**
    * Wires the window lifecycle to the lock.
    *
    * @remarks
@@ -1707,14 +1761,26 @@
     {/snippet}
 
     {#snippet profileActions()}
-      <button
-        type="button"
-        onclick={() => (mobileEditProfile = !mobileEditProfile)}
-        class="h-11 w-11 rounded-md bg-card flex items-center justify-center"
+      {#if !mobileEditProfile}
+        <button
+          type="button"
+          onclick={() => (mobileEditProfile = true)}
+          class="h-11 w-11 rounded-md bg-card flex items-center justify-center"
  aria-label="Edit profile"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
-      </button>
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        </button>
+      {:else}
+        <!-- In edit mode the check ends the editor and returns to the profile pane. -->
+        <button
+          type="button"
+          onclick={() => (mobileEditProfile = false)}
+          class="h-11 w-11 rounded-md bg-card flex items-center justify-center"
+ aria-label="Done"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      {/if}
     {/snippet}
 
     {#snippet walletActions()}
@@ -1744,7 +1810,21 @@
  {:else}
           {@render leftPane()}
  {/if}
-      {:else if activeSection === 'profile' || activeSection === 'home'}
+      {:else if activeSection === 'home'}
+        <!--
+          Home owns the whole pane on a phone: the list of subsections is the start screen,
+          and an open subsection replaces it with a way back. This branch used to be folded
+          into the profile one and rendered the desktop list, so a tap only highlighted the
+          item and the text never appeared.
+        -->
+        <HomeMain
+          sections={aboutSections}
+          bind:topic={homeSection}
+          compact={true}
+          onNavigate={(s) => activeSection = s}
+          onBack={() => (homeSection = null)}
+        />
+      {:else if activeSection === 'profile'}
         <!--
           The editor, the pairing screen and the seed screen belong to the Profile section.
           The branch used to treat `home` the same way, so a leftover `mobileEditProfile`
@@ -1752,7 +1832,7 @@
           phrase and landed on Edit.page instead of Home.
         -->
         {#if activeSection === 'profile' && mobileEditProfile}
-   <EditProfile onNavigate={(s) => { mobileEditProfile = false; activeSection = s; }} />
+   <EditProfile compact={true} onNavigate={(s) => { mobileEditProfile = false; activeSection = s; }} />
         {:else if activeSection === 'profile' && mobileSendProfile}
           <!--
             Sending from a phone: the list is replaced by the pairing screen, which shows
@@ -1797,13 +1877,15 @@
     {#snippet leftPane()}
       <SectionPane>
         {#if activeSection === 'home'}
-          <HomeLeft active={homeTopic} onSelect={(id) => (homeTopic = id)} />
+          <HomeLeft sections={aboutSections} active={homeSection} onSelect={(id) => (homeSection = id)} />
         {:else if activeSection === 'profile'}
    <ProfileLeft
+     compact={isMobile}
      onDisconnect={handleDisconnect}
      onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
      onEditProfile={openEditProfile}
      onSendProfile={handleOpenSendProfile}
+     onOpenSettings={() => (activeSection = 'settings')}
           />
         {:else if activeSection === 'settings'}
           <SettingsLeft />
@@ -1815,9 +1897,11 @@
    <DappsLeft />
         {:else}
    <ProfileLeft
+     compact={isMobile}
      onDisconnect={handleDisconnect}
      onCreateSeed={() => { activeSection = 'profile'; showCreateSeed = true; }}
      onEditProfile={openEditProfile}
+     onOpenSettings={() => (activeSection = 'settings')}
    />
  {/if}
       </SectionPane>
@@ -1826,7 +1910,12 @@
     {#snippet rightPane()}
       <SectionPane>
  {#if activeSection === 'home'}
-   <HomeMain topic={homeTopic} onNavigate={(s) => activeSection = s} />
+   <HomeMain
+     sections={aboutSections}
+     topic={homeSection}
+     compact={false}
+     onNavigate={(s) => activeSection = s}
+   />
         {:else if activeSection === 'profile'}
           {#if showCreateSeed}
      <CreateSeed
@@ -1860,7 +1949,7 @@ onSave={() => {
               onBack={handlePairingBack}
             />
           {:else}
-            <EditProfile onNavigate={(s) => activeSection = s} />
+            <EditProfile compact={false} onNavigate={(s) => activeSection = s} />
    {/if}
         {:else if activeSection === 'settings'}
           <SettingsMain />
@@ -1873,12 +1962,17 @@ onSave={() => {
  {:else if activeSection === 'dapps'}
           <DappsMain onOpenChat={handleOpenChat} />
  {:else}
-          <HomeMain topic={homeTopic} onNavigate={(s) => activeSection = s} />
+          <HomeMain
+            sections={aboutSections}
+            topic={homeSection}
+            compact={false}
+            onNavigate={(s) => activeSection = s}
+          />
         {/if}
       </SectionPane>
     {/snippet}
 
-<div class="flex flex-col min-h-[100dvh] bg-background">
+<div class="flex flex-col bg-background {shellVisible ? 'h-[100dvh] overflow-hidden' : 'min-h-[100dvh]'}">
   <!-- Testnet banner -->
   {#if statusState.isTestnet}
     <div class="shrink-0 bg-warning text-warning-foreground text-center py-2 px-4 font-semibold text-sm">
@@ -1908,6 +2002,7 @@ onSave={() => {
       busy={lockBusy}
       error={lockError}
       onSubmit={handleUnlock}
+      onBack={leaveLockedSession}
     />
 
   <!-- Login screen -->
@@ -2009,7 +2104,7 @@ onSave={() => {
         onSelect={handleSectionSelect}
         content={mobileContent}
  actions={activeSection === 'chat' ? chatActions : activeSection === 'wallet' ? walletActions : activeSection === 'profile' ? profileActions : undefined}
- title={sectionTitle(activeSection)}
+ title={mobileTitle}
  history={noHistory}
       />
     {:else}

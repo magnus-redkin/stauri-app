@@ -3,43 +3,37 @@
 //! Only application assembly and handler registration live here. The logic is
 //! split across the modules:
 //!
+//! * [`core`] — the safety core: keys, PIN envelopes, status-go FFI and pairing.
+//!   Everything there is a review decision; see `core/mod.rs`;
 //! * [`config`] — network configuration detection and loading;
 //! * [`env`] — locating and loading `.env`;
-//! * [`inprocess`] — status-go as a library inside this process;
 //! * [`commands`] — commands exposed to the frontend;
-//! * [`rpc_proxy`] — forwarder for RPC providers;
-//! * [`seed`] — seed phrase handling outside the webview;
 //! * [`market`] — CoinGecko data;
 //! * [`logging`] — file and stderr logging with secret scrubbing;
-//! * [`updater`] — update check and installation;
-//! * [`error`] — typed command errors.
+//! * [`updater`] — update check and installation.
+//!
+//! Money movement (`transfer`, `ens`, `swap`, `router`) and the data layer
+//! (`providers`, `market`) stay outside the core on purpose: they use it, and
+//! they are the parts most likely to be rewritten or replaced.
 
 use tauri::Manager;
 
 mod appdirs;
-mod trace;
-mod backend;
+// The safety core: keys, envelopes, status-go FFI, pairing. See `core/mod.rs` for what
+// belongs there and what deliberately does not.
+mod core;
 mod commands;
 mod config;
-// Per-profile secrets for the mobile entry flow: the PIN and the password it protects.
-// See the module docs for what protects them on each platform.
-mod credentials;
 mod dapp;
 mod ens;
 mod env;
-mod error;
-mod inprocess;
 mod invite;
-mod lanpair;
 mod logging;
 mod market;
 mod opener;
-mod pairing;
 mod profile;
 mod providers;
 mod router;
-mod rpc_proxy;
-mod seed;
 mod swap;
 mod transfer;
 mod updater;
@@ -62,6 +56,9 @@ pub fn run() {
         // and the frontend goes through commands::check_for_update and
         // commands::install_update instead.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Открытие внешних ссылок на Android: на десктопе это делает `open::that`
+        // в `opener.rs`, а у мобильной платформы обработчик — только через Intent.
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Directories from Tauri: on Android `dirs::config_dir()` and
             // `dirs::data_local_dir()` do not work. `STAURI_CONFIG_DIR` and
@@ -78,14 +75,14 @@ pub fn run() {
                 if let Err(e) = std::fs::create_dir_all(dir) {
                     tracing::warn!(dir = %dir.display(), error = %e, "не удалось создать каталог данных");
                 }
-                trace::set_dir(dir.clone());
+                core::trace::set_dir(dir.clone());
                 appdirs::set_data_dir(dir.clone());
             }
 
             // status-go lives in this process, so its signals reach the webview
             // through a Tauri event rather than a WebSocket.
             let handle = app.handle().clone();
-            inprocess::set_app_emitter(move |raw| {
+            core::inprocess::set_app_emitter(move |raw| {
                 use tauri::Emitter;
                 let payload: serde_json::Value = match serde_json::from_str(raw) {
                     Ok(v) => v,
@@ -102,7 +99,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .manage(rpc_proxy::RpcProxyState::default())
+        .manage(core::rpc_proxy::RpcProxyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::start_backend,
             commands::stop_backend,
@@ -113,41 +110,42 @@ pub fn run() {
             commands::check_for_update,
             commands::install_update,
             commands::restart_app,
+            commands::switch_network,
             commands::inprocess_initialize,
             commands::status_call,
             commands::status_rpc,
             commands::log_frontend,
             market::fetch_market_data,
-            seed::fetch_seed_phrase,
-            seed::seed_word,
-            seed::seed_challenge,
-            seed::verify_seed_answer,
-            seed::clear_seed,
+            core::seed::fetch_seed_phrase,
+            core::seed::seed_word,
+            core::seed::seed_challenge,
+            core::seed::verify_seed_answer,
+            core::seed::clear_seed,
             profile::store_avatar,
             profile::get_avatar,
             profile::change_password,
-            credentials::credential_save_pin,
-            credentials::credential_open_pin,
-            credentials::credential_has_pin,
-            credentials::credential_pin_state,
-            credentials::credential_save_pin_from_pending,
-            credentials::credential_forget_pending,
-            credentials::credential_delete,
-            credentials::credential_available,
-            credentials::credential_pin_rules,
-            pairing::pairing_available,
-            pairing::pairing_validate,
-            pairing::pairing_confirmation_code,
-            pairing::pairing_start_sending,
-            pairing::pairing_start_receiving,
-            pairing::pairing_receive,
-            pairing::pairing_send,
-            lanpair::pairing_lan_receive_start,
-            lanpair::pairing_lan_send_start,
-            lanpair::pairing_lan_confirm,
-            lanpair::pairing_lan_cancel,
-            lanpair::pairing_lan_status,
-            lanpair::pairing_lan_local_address,
+            core::credentials::credential_save_pin,
+            core::credentials::credential_open_pin,
+            core::credentials::credential_has_pin,
+            core::credentials::credential_pin_state,
+            core::credentials::credential_save_pin_from_pending,
+            core::credentials::credential_forget_pending,
+            core::credentials::credential_delete,
+            core::credentials::credential_available,
+            core::credentials::credential_pin_rules,
+            core::pairing::pairing_available,
+            core::pairing::pairing_validate,
+            core::pairing::pairing_confirmation_code,
+            core::pairing::pairing_start_sending,
+            core::pairing::pairing_start_receiving,
+            core::pairing::pairing_receive,
+            core::pairing::pairing_send,
+            core::lanpair::pairing_lan_receive_start,
+            core::lanpair::pairing_lan_send_start,
+            core::lanpair::pairing_lan_confirm,
+            core::lanpair::pairing_lan_cancel,
+            core::lanpair::pairing_lan_status,
+            core::lanpair::pairing_lan_local_address,
             invite::parse_invite_link,
             providers::fetch_feed,
             opener::open_external,
@@ -165,8 +163,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                let proxy_state = app_handle.state::<rpc_proxy::RpcProxyState>();
-                rpc_proxy::stop(&proxy_state);
+                let proxy_state = app_handle.state::<core::rpc_proxy::RpcProxyState>();
+                core::rpc_proxy::stop(&proxy_state);
 
                 // Last: flushes what is still queued in the log.
                 logging::shutdown();

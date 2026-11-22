@@ -29,12 +29,38 @@ unset CGO_LDFLAGS CGO_CFLAGS LD_LIBRARY_PATH LIBRARY_PATH
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH <команда>
 ```
 
+## Патч Stauri к `status-go`
+
+Строгая сборка Stauri — это **upstream + один коммит**, не чистый upstream.
+
+- Закреплённый коммит: `766535cf3` (проверен, `develop`).
+- Патч: `src-tauri/status-go/stauri-close-accounts.patch` (файл `git format-patch`,
+  2 файла: `pkg/backend/geth_backend.go` и `mobile/status.go`).
+- Форк с веткой `stauri/close-accounts`: `magnus-redkin/status-go`.
+
+Почему: `status-go` открывает `accounts.sql` один раз за процесс
+(`OpenAccounts` после первого открытия выходит сразу), поэтому смена сети
+внутри процесса возвращает чужой список профилей. Патч добавляет
+`CloseAccounts` — метод, который закрывает эту БД, чтобы следующий
+`InitializeApplication` открыл нужный каталог. Без патча переключение
+сетей деградирует до «перезапустите приложение» и команда `switch_network`
+отвечает ошибкой; остальные сценарии работают.
+
+Патч **добавляет** один экспорт `CloseAccounts`; ничего не меняет и не
+удаляет. Ванильный `libstatus.so` загружается и работает в Stauri как есть.
+
+`build/bin/statusgo-lib/main.go`, который компилируется в `libstatus`,
+собирает генератор `tools/generate-cbindings` из `mobile/status.go`, поэтому
+третьего файла в патче нет — экспорт появляется сам.
+
 ## 1. Сборка `libstatus.so` в Nix (десктоп)
 
 ```bash
 git clone https://github.com/status-im/status-go.git ~/ETH/github.status-go
 cd ~/ETH/github.status-go
 git checkout 766535cf3   # протестированный коммит
+# патч Stauri (один коммит):
+git apply ~/ETH/stauri/stauri-app/src-tauri/status-go/stauri-close-accounts.patch
 
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
   nix develop --extra-experimental-features 'nix-command flakes' --command make statusgo-shared-library
@@ -42,6 +68,13 @@ env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
 
 Результат: `build/bin/libstatus.so` и `build/bin/libstatus.so.0` (SONAME).
 Stauri берёт `libstatus.so.0` и кладёт под именем `libstatus.so`.
+
+Проверьте, что патч собрался:
+
+```bash
+nm -D --defined-only build/bin/libstatus.so | grep -w CloseAccounts
+# ожидается строка вида «… T CloseAccounts»
+```
 
 Цель `make statusgo-library` даёт статическую `libstatus.a` — она Stauri не
 нужна. Для настольной сборки нужна именно `statusgo-shared-library`.
@@ -167,8 +200,15 @@ ARCH=arm64 make -o build-libsds-android statusgo-android-library
 
 `-o build-libsds-android` пропускает пересборку `libsds` внутри `make`
 (иначе он вызывает `nim-sds` через NDK). Результат: `build/bin/libstatus.so` (AArch64,
-экспорт `CallRPC`, `InitializeApplication`, `LoginAccount`, `CreateAccountAndLogin`,
-`Logout`, `SetSignalEventCallback`).
+экспорт `CallRPC`, `InitializeApplication`, `CloseAccounts`, `LoginAccount`,
+`CreateAccountAndLogin`, `Logout`, `SetSignalEventCallback`). Патч из §1
+применяется так же: репо `github.status-go` с веткой или `git apply` до этой
+команды.
+
+`$P` — **только** результат предыдущего шага (arm64, bionic). Десктопная
+`libsds` из Nix store (`gczmis…/lib`) здесь не подойдёт: линковщик
+падает с `libsds.so is incompatible with aarch64linux`. Если `P` утерян,
+пересобери `libsds` командой выше и возьми `<out>/jni`.
 
 Копирование в проект (копии, не ссылки):
 

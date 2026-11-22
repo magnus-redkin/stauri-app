@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  credentialNetwork,
   initialPhase,
   isMissingPinError,
   phaseAfterPinLookup,
@@ -136,6 +137,26 @@ describe('parseNetwork', () => {
   });
 });
 
+describe('credentialNetwork', () => {
+  it('сводит любую тестовую сеть к слоту testnet', () => {
+    // The picker names presets (`sepolia`, `holesky`); a PIN envelope has two slots.
+    expect(credentialNetwork('sepolia')).toBe('testnet');
+    expect(credentialNetwork('holesky')).toBe('testnet');
+    expect(credentialNetwork('testnet')).toBe('testnet');
+  });
+
+  it('оставляет mainnet как есть', () => {
+    expect(credentialNetwork('mainnet')).toBe('mainnet');
+  });
+
+  it('не путает имя preface со слотом', () => {
+    // The bug this guards: the picker's name was turned into `testnet` and passed to
+    // `start_backend`, which only knows `mainnet`/`sepolia`/`holesky` and refused it —
+    // the selection then snapped back to Mainnet.
+    expect(credentialNetwork('sepolia')).not.toBe('sepolia');
+  });
+});
+
 describe('isMissingPinError', () => {
   it('узнаёт сообщение Rust про отсутствующий конверт', () => {
     expect(isMissingPinError('no PIN is set for this profile')).toBe(true);
@@ -150,7 +171,8 @@ describe('isMissingPinError', () => {
 });
 
 describe('pairingMethods', () => {
-  it('предлагает Wi-Fi и USB, QR пока выключен', () => {    const methods = pairingMethods();
+  it('предлагает Wi-Fi и USB, QR пока выключен', () => {
+    const methods = pairingMethods();
     expect(methods.find((m) => m.id === 'wifi')?.enabled).toBe(true);
     expect(methods.find((m) => m.id === 'usb')?.enabled).toBe(true);
     // `qr` has no implementation; it stays visible because the camera permission exists

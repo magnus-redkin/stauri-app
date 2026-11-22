@@ -33,7 +33,14 @@
   import ChangePassword from './ChangePassword.svelte';
   import EnsNameBlock from './EnsNameBlock.svelte';
 
-  let { onNavigate }: { onNavigate?: (section: string) => void } = $props();
+  let {
+    onNavigate,
+    compact = false,
+  }: {
+    onNavigate?: (section: string) => void;
+    /** Narrow layout: the shell header already says "Edit Profile" and carries the pencil. */
+    compact?: boolean;
+  } = $props();
 
   let originalDisplayName = $state(statusState.alias || '');
   let displayName = $state(originalDisplayName);
@@ -204,7 +211,10 @@
   />
 {:else}
   <div class="p-8 max-w-2xl mx-auto w-full h-full flex flex-col bg-card">
-    <h2 class="text-2xl font-bold text-primary mb-6">{i18n.t('Edit Profile')}</h2>
+    {#if !compact}
+      <!-- On a phone the shell header is the title, with the pencil next to it. -->
+      <h2 class="text-2xl font-bold text-primary mb-6">{i18n.t('Edit Profile')}</h2>
+    {/if}
 
     <div class="flex flex-col gap-6 max-w-md mx-auto w-full">
       <!-- Picture -->
@@ -316,7 +326,7 @@
           >
             <span class="flex items-center gap-2 text-sm font-medium">
               <span aria-hidden="true">⚠️</span>
-              {i18n.t('Создать seed-фразу')}
+              {i18n.t('Create seed phrase')}
             </span>
             <span class="text-xs">{i18n.t('Required')}</span>
           </button>

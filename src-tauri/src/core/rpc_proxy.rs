@@ -26,7 +26,7 @@
 //! provider URLs are already recorded in the status-go database, and a random
 //! secret on the next start would leave them pointing at nothing.
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

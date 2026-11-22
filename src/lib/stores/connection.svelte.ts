@@ -111,14 +111,47 @@ export async function connect(network?: string) {
   }
 }
 
+/** Reply of the `switch_network` command; the same fields `start_backend` returns. */
+interface SwitchNetworkReply {
+  dataDir: string;
+  networkName: string;
+  chainId: number;
+  rpcUrl: string;
+  wakuFleet: string;
+  isTestnet: boolean;
+  /** Profiles found in the chosen network's directory. */
+  accounts: Array<Record<string, unknown>>;
+}
+
 /**
- * Restarts the backend on another network.
+ * Switches the network in place and replaces the profile list with the new one.
  *
- * @param network - Network to reconnect to.
+ * @param network - Network preset as the picker names it: `mainnet`, `sepolia`,
+ * `holesky`.
+ * @remarks
+ * The Rust side closes status-go's account database and re-initialises it on the chosen
+ * directory, so the accounts returned here are the ones stored there. Without that step
+ * the process keeps answering from the database it opened at start-up — that is the bug
+ * this replaces. A rejection means nothing was switched: the network is still the old
+ * one, and the caller keeps showing its profiles.
  */
-export async function changeNetwork(network: string) {
-  await disconnect();
-  await connect(network);
+export async function switchNetwork(network: string): Promise<void> {
+  info(`[boot] switchNetwork(${network})`);
+  const reply = await invoke<SwitchNetworkReply>('switch_network', { network });
+
+  statusState.backendDataDir = reply.dataDir;
+  statusState.backendRunning = true;
+  connectionState.selectedNetwork = reply.networkName;
+  setAccounts(reply.accounts ?? []);
+  setNetworkInfo(
+    reply.networkName,
+    reply.rpcUrl,
+    reply.wakuFleet,
+    reply.isTestnet,
+    reply.chainId
+  );
+
+  info(`[boot] switchNetwork(${network}) ok: ${reply.accounts?.length ?? 0} profiles`);
 }
 
 /**

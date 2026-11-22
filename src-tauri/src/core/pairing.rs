@@ -39,8 +39,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::error::{AppError, AppResult};
-use crate::inprocess;
+use crate::core::error::{AppError, AppResult};
+use crate::core::inprocess;
 
 /// How long a connection string stays usable, in milliseconds.
 ///
@@ -131,7 +131,7 @@ fn keystore_path(data_dir: &str, key_uid: &str) -> String {
 /// @returns The connection string for the other device, and the code both sides compare.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when status-go refuses to start,
+/// Returns [`crate::core::error::ErrorKind::Backend`] when status-go refuses to start,
 /// which is usually a wrong password or a profile that is not logged in.
 pub fn start_sender(
     data_dir: &str,
@@ -167,7 +167,7 @@ pub fn start_sender(
         return Err(AppError::backend("pairing server returned no connection string"));
     }
     let code = confirmation_code(&text)?;
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "pairing sender started key={} stringLen={} syncMessages={sync_messages}",
         short_key(key_uid),
         text.len()
@@ -181,7 +181,7 @@ pub fn start_sender(
 /// @returns The connection string for the other device, and the code both sides compare.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when status-go refuses to start.
+/// Returns [`crate::core::error::ErrorKind::Backend`] when status-go refuses to start.
 pub fn start_receiver(data_dir: &str) -> AppResult<(String, String)> {
     let backend = inprocess::backend()?;
     let config = json!({
@@ -201,7 +201,7 @@ pub fn start_receiver(data_dir: &str) -> AppResult<(String, String)> {
         return Err(AppError::backend("pairing server returned no connection string"));
     }
     let code = confirmation_code(&text)?;
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "pairing receiver started stringLen={}",
         text.len()
     ));
@@ -425,7 +425,7 @@ pub fn is_valid_connection_string(connection_string: &str) -> bool {
 /// successful while `node.login` reports the failure.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the string is refused, the
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the string is refused, the
 /// transfer fails, or no account arrives within the timeout.
 pub async fn bootstrap_receiver(
     data_dir: &str,
@@ -468,7 +468,7 @@ pub async fn bootstrap_receiver(
         if !err.trim().is_empty() {
             return Err(AppError::backend(err.clone()));
         }
-        crate::trace::line("pairing reply reports a failure without a reason; waiting for the account");
+        crate::core::trace::line("pairing reply reports a failure without a reason; waiting for the account");
     }
 
     let account = match wait_for_account(&mut signals, ACCOUNT_TIMEOUT).await {
@@ -476,7 +476,7 @@ pub async fn bootstrap_receiver(
         // The events were traced as they arrived; the trace line says what stopped it.
         Err(e) => return Err(e),
     };
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "pairing received account key={} passwordLen={}",
         short_key(&account.key_uid),
         account.password.len()
@@ -490,10 +490,10 @@ pub async fn bootstrap_receiver(
             let _ = _backend.logout();
         }
     });
-    crate::trace::line("pairing backend teardown scheduled");
+    crate::core::trace::line("pairing backend teardown scheduled");
     tokio::spawn(async move {
         let _ = teardown.await;
-        crate::trace::line("pairing backend teardown finished");
+        crate::core::trace::line("pairing backend teardown finished");
     });
     Ok(account)
 }
@@ -512,7 +512,7 @@ pub async fn bootstrap_receiver(
 /// the profile.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the string is refused or the
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the string is refused or the
 /// transfer fails.
 pub async fn bootstrap_sender(
     data_dir: &str,
@@ -555,7 +555,7 @@ pub async fn bootstrap_sender(
     // than assumed: `StartUpSendingClient` returns before the payload has been
     // acknowledged, and an empty reply means "started", not "succeeded".
     wait_for_transfer(&mut signals).await?;
-    crate::trace::line(&format!("pairing sent account key={}", short_key(&key)));
+    crate::core::trace::line(&format!("pairing sent account key={}", short_key(&key)));
     Ok(())
 }
 
@@ -582,7 +582,7 @@ async fn wait_for_account(
         };
         // The type and the reason only: `received-account` carries the password, and the
         // password never goes anywhere near a log.
-        crate::trace::line(&format!(
+        crate::core::trace::line(&format!(
             "pairing event {event_type}{}",
             data.get("error")
                 .and_then(|e| e.as_str())
@@ -669,7 +669,7 @@ pub(crate) async fn wait_for_transfer(
         let Some((event_type, data)) = pairing_event(&raw) else {
             continue;
         };
-        crate::trace::line(&format!(
+        crate::core::trace::line(&format!(
             "pairing event {event_type}{}",
             data.get("error")
                 .and_then(|e| e.as_str())
@@ -1081,7 +1081,7 @@ pub struct ConnectionString {
 /// @param sync_messages - Whether the message history travels with the profile.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when status-go refuses to start
+/// Returns [`crate::core::error::ErrorKind::Backend`] when status-go refuses to start
 /// the server, usually because the profile is not logged in.
 #[tauri::command]
 pub async fn pairing_start_sending(
@@ -1106,7 +1106,7 @@ pub async fn pairing_start_sending(
 /// Starts this device as the receiver and returns the string to show.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when status-go refuses to start
+/// Returns [`crate::core::error::ErrorKind::Backend`] when status-go refuses to start
 /// the server.
 #[tauri::command]
 pub async fn pairing_start_receiving(data_dir: String) -> AppResult<ConnectionString> {
@@ -1153,7 +1153,7 @@ pub fn pairing_confirmation_code(connection_string: String) -> AppResult<String>
             let fields: Option<Vec<usize>> = normalised
                 .strip_prefix(CONNECTION_STRING_ID)
                 .map(|body| body.split(':').map(str::len).collect());
-            crate::trace::line(&format!(
+            crate::core::trace::line(&format!(
                 "pairing code unreadable len={} fields={:?}",
                 normalised.len(),
                 fields
@@ -1178,7 +1178,7 @@ pub fn pairing_confirmation_code(connection_string: String) -> AppResult<String>
 /// open, and nothing there needs it.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the transfer fails or times
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the transfer fails or times
 /// out.
 #[tauri::command]
 pub async fn pairing_receive(
@@ -1187,8 +1187,8 @@ pub async fn pairing_receive(
     network: String,
 ) -> AppResult<PairedAccount> {
     let account = bootstrap_receiver(&data_dir, &connection_string).await?;
-    let slot = crate::credentials::Slot::new(&network, &account.key_uid)?;
-    crate::credentials::stash_pending(slot, account.password.clone());
+    let slot = crate::core::credentials::Slot::new(&network, &account.key_uid)?;
+    crate::core::credentials::stash_pending(slot, account.password.clone());
     Ok(PairedAccount {
         key_uid: account.key_uid,
         name: account.name,
@@ -1199,7 +1199,7 @@ pub async fn pairing_receive(
 /// Sends this device's profile to the other one.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the transfer fails or times
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the transfer fails or times
 /// out.
 #[tauri::command]
 pub async fn pairing_send(

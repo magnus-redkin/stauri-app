@@ -1,0 +1,86 @@
+From f7278f3e1071573c9f5de733a1ec57c27a856064 Mon Sep 17 00:00:00 2001
+From: Magnus Redkin <magnus.f.redkin@proton.me>
+Date: Sun, 22 Nov 2026 07:28:22 +0000
+Subject: [PATCH] backend: add CloseAccounts so a host can reopen the
+ multiaccounts database
+
+OpenAccounts opens accounts.sql once and returns early on every later call, while
+UpdateRootDataDir still moves the keystore root. A host that changes its data
+directory without restarting the process therefore lists the first directory's
+accounts and looks for their keystore in the new one - a profile that is shown but
+cannot be opened.
+
+CloseAccounts detaches the database from the node, closes it and clears the field,
+so the next OpenAccounts reads the directory that UpdateRootDataDir set. It is
+idempotent and does nothing for existing callers, which never close it.
+
+Used by Stauri's network switch, where each network has its own data directory.
+---
+ mobile/status.go            | 17 +++++++++++++++++
+ pkg/backend/geth_backend.go | 22 ++++++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/mobile/status.go b/mobile/status.go
+index 976561cb0..98ee973d8 100644
+--- a/mobile/status.go
++++ b/mobile/status.go
+@@ -210,6 +210,23 @@ func OpenAccounts(datadir string) string {
+ 	return callWithResponse(openAccounts, datadir)
+ }
+ 
++// CloseAccounts closes the multiaccounts database.
++//
++// The next InitializeApplication or OpenAccounts opens the directory it is given, which
++// is what a host that changes its data directory without restarting the process needs.
++// Without it a new directory keeps returning the accounts of the first one, because
++// OpenAccounts opens the database only once. See StatusBackend.CloseAccounts.
++func CloseAccounts() string {
++	return callWithResponse(closeAccounts)
++}
++
++func closeAccounts() string {
++	if err := statusBackend.CloseAccounts(); err != nil {
++		return makeJSONResponse(err)
++	}
++	return "{}"
++}
++
+ // DEPRECATED: use InitializeApplication
+ // openAccounts opens database and returns accounts list.
+ func openAccounts(datadir string) string {
+diff --git a/pkg/backend/geth_backend.go b/pkg/backend/geth_backend.go
+index 5f9248b16..159a2a48b 100644
+--- a/pkg/backend/geth_backend.go
++++ b/pkg/backend/geth_backend.go
+@@ -307,6 +307,28 @@ func (b *StatusBackend) OpenAccounts() error {
+ 	return nil
+ }
+ 
++// CloseAccounts closes the multiaccounts database.
++//
++// OpenAccounts opens the database once and returns early afterwards, so a host that
++// changes rootDataDir without restarting keeps being served the first directory's
++// accounts while the keystore root has already moved. Closing detaches the database from
++// the node and releases the file; the next OpenAccounts then reads the directory that
++// UpdateRootDataDir set. Existing callers are unaffected: they never close it.
++func (b *StatusBackend) CloseAccounts() error {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++
++	if b.multiaccountsDB == nil {
++		return nil
++	}
++	db := b.multiaccountsDB
++	b.multiaccountsDB = nil
++	if b.statusNode != nil {
++		b.statusNode.SetMultiaccountsDB(nil)
++	}
++	return db.Close()
++}
++
+ func (b *StatusBackend) GetAccounts() ([]multiaccounts.Account, error) {
+ 	b.mu.Lock()
+ 	defer b.mu.Unlock()
+-- 
+2.53.0
+

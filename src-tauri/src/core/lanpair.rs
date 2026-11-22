@@ -42,7 +42,7 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// UDP port the receiver listens on and the sender probes.
 ///
@@ -172,7 +172,7 @@ fn fail(status: &Arc<Mutex<LanStatus>>, message: impl Into<String>) {
 
 /// Publishes the digits and moves to the comparison phase.
 fn publish_codes(status: &Arc<Mutex<LanStatus>>, digits: String) {
-    crate::trace::line("pairing lan codes ready");
+    crate::core::trace::line("pairing lan codes ready");
     let mut current = lock(status);
     current.digits = Some(digits);
     current.phase = "codes".to_string();
@@ -416,7 +416,7 @@ async fn receiver_handshake(
         .local_addr()
         .map_err(|e| AppError::network(format!("cannot read the handshake port: {e}")))?
         .port();
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "pairing lan receiver listening udp={discovery_port} tcp={port} local={:?}",
         local_ipv4()
     ));
@@ -438,7 +438,7 @@ async fn receiver_handshake(
             datagram = udp.recv_from(&mut buffer) => {
                 if let Ok((length, from)) = datagram {
                     if length >= 4 && &buffer[..4] == PROBE_TAG {
-                        crate::trace::line(&format!("pairing lan probe from {from}"));
+                        crate::core::trace::line(&format!("pairing lan probe from {from}"));
                         let mut reply = Vec::with_capacity(54);
                         reply.extend_from_slice(REPLY_TAG);
                         reply.extend_from_slice(&public);
@@ -455,7 +455,7 @@ async fn receiver_handshake(
         }
     };
 
-    crate::trace::line(&format!("pairing lan peer connected from {peer}"));
+    crate::core::trace::line(&format!("pairing lan peer connected from {peer}"));
     let _ = stream.set_nodelay(true);
 
     let hello = tokio::time::timeout(STEP_TIMEOUT, read_frame(&mut stream))
@@ -504,7 +504,7 @@ async fn sender_handshake(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), discovery_port),
         ],
     };
-    crate::trace::line(&format!(
+    crate::core::trace::line(&format!(
         "pairing lan searching targets={:?}",
         targets.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
     ));
@@ -532,7 +532,7 @@ async fn sender_handshake(
     };
 
     let address = SocketAddr::new(from.ip(), reply.port);
-    crate::trace::line(&format!("pairing lan peer announced at {address}"));
+    crate::core::trace::line(&format!("pairing lan peer announced at {address}"));
     let mut stream = tokio::time::timeout(STEP_TIMEOUT, TcpStream::connect(address))
         .await
         .map_err(|_| AppError::network("the other device did not answer"))?
@@ -588,8 +588,8 @@ async fn receiver_task(
         // other address of the same device fails that check inside the challenge request,
         // with no event and no message — which is what turned this into an unexplained
         // "pairing failed". So the check happens here, before status-go is involved.
-        let (advertised, port) = crate::pairing::addresses(&connection_string);
-        crate::trace::line(&format!(
+        let (advertised, port) = crate::core::pairing::addresses(&connection_string);
+        crate::core::trace::line(&format!(
             "pairing lan string len={} addresses={advertised:?} port={port:?}",
             connection_string.len()
         ));
@@ -620,22 +620,22 @@ async fn receiver_task(
             )));
         }
 
-        if !crate::pairing::is_valid_connection_string(&connection_string) {
+        if !crate::core::pairing::is_valid_connection_string(&connection_string) {
             return Err(AppError::backend("the other device sent an invalid connection code"));
         }
 
-        let account = crate::pairing::bootstrap_receiver(&data_dir, &connection_string).await?;
-        let slot = crate::credentials::Slot::new(&network, &account.key_uid)?;
-        crate::credentials::stash_pending(slot, account.password.clone());
+        let account = crate::core::pairing::bootstrap_receiver(&data_dir, &connection_string).await?;
+        let slot = crate::core::credentials::Slot::new(&network, &account.key_uid)?;
+        crate::core::credentials::stash_pending(slot, account.password.clone());
         publish_done(&status, Some(account.key_uid), account.name);
-        crate::trace::line("pairing lan received account");
+        crate::core::trace::line("pairing lan received account");
         Ok(())
     }
     .await;
 
     if let Err(e) = result {
         if !cancel.load(Ordering::SeqCst) {
-            crate::trace::line(&format!("pairing lan receiver failed: {}", e.message));
+            crate::core::trace::line(&format!("pairing lan receiver failed: {}", e.message));
             fail(&status, e.message);
         }
     }
@@ -676,21 +676,21 @@ async fn sender_task(
 
         // Subscribed before the server starts: its first event can arrive before the
         // call returns, and a later subscriber would wait for something that happened.
-        let mut signals = crate::inprocess::subscribe();
+        let mut signals = crate::core::inprocess::subscribe();
 
         let data = data_dir.clone();
         let key = key_uid.clone();
         let pass = password.clone();
         let device = device_type.clone();
         let (connection_string, _) = tokio::task::spawn_blocking(move || {
-            crate::pairing::start_sender(&data, &key, &pass, &device, sync_messages)
+            crate::core::pairing::start_sender(&data, &key, &pass, &device, sync_messages)
         })
         .await
         .map_err(|e| AppError::internal(format!("pairing start panicked: {e}")))??;
-        crate::trace::line(&format!(
+        crate::core::trace::line(&format!(
             "pairing lan issued len={} {}",
             connection_string.len(),
-            crate::pairing::describe(&connection_string)
+            crate::core::pairing::describe(&connection_string)
         ));
 
         let sealed = seal(&keys.sender_to_receiver, connection_string.as_bytes())?;
@@ -698,16 +698,16 @@ async fn sender_task(
             .await
             .map_err(|_| AppError::network("the other device stopped answering"))??;
 
-        crate::pairing::wait_for_transfer(&mut signals).await?;
+        crate::core::pairing::wait_for_transfer(&mut signals).await?;
         publish_done(&status, Some(key_uid), None);
-        crate::trace::line("pairing lan sent account");
+        crate::core::trace::line("pairing lan sent account");
         Ok(())
     }
     .await;
 
     if let Err(e) = result {
         if !cancel.load(Ordering::SeqCst) {
-            crate::trace::line(&format!("pairing lan sender failed: {}", e.message));
+            crate::core::trace::line(&format!("pairing lan sender failed: {}", e.message));
             fail(&status, e.message);
         }
     }

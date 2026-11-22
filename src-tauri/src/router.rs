@@ -21,8 +21,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-use crate::backend::Backend;
-use crate::error::{AppError, AppResult};
+use crate::core::backend::Backend;
+use crate::core::error::{AppError, AppResult};
 
 /// `fees.GasFeeMode`: Low=0, Medium=1, High=2.
 pub const GAS_FEE_MEDIUM: u64 = 1;
@@ -60,7 +60,7 @@ pub fn strip_hex_prefix(value: &str) -> &str {
 /// Reads a hex number from a backend reply (`0x…` or bare hex).
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the value is not a valid hex number.
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the value is not a valid hex number.
 pub fn hex_u128(value: &str) -> AppResult<u128> {
     u128::from_str_radix(strip_hex_prefix(value), 16)
         .map_err(|e| AppError::backend(format!("invalid hex number from backend: {e}")))
@@ -74,7 +74,7 @@ pub fn hex_u128(value: &str) -> AppResult<u128> {
 /// to 0/1 here.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the signature is not 130 hex characters
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the signature is not 130 hex characters
 /// after the prefix, or when `v` is outside 0/1 and 27/28.
 pub fn split_signature(signature: &str) -> AppResult<(String, String, String)> {
     let raw = strip_hex_prefix(signature);
@@ -133,7 +133,7 @@ pub fn unique_uuid() -> String {
 /// every signal status-go emits, and the first message to arrive may not be ours.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] on timeout, when the signal channel
+/// Returns [`crate::core::error::ErrorKind::Backend`] on timeout, when the signal channel
 /// closes, and when the backend reports an error in `sendDetails.errorResponse`.
 async fn wait_for_signal(
     rx: &mut broadcast::Receiver<String>,
@@ -213,8 +213,8 @@ async fn wait_for_signal(
 /// then be delivered to nobody.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Internal`] when `params` carries no uuid, and
-/// [`crate::error::ErrorKind::Backend`] when signals are unavailable for the backend or any
+/// Returns [`crate::core::error::ErrorKind::Internal`] when `params` carries no uuid, and
+/// [`crate::core::error::ErrorKind::Backend`] when signals are unavailable for the backend or any
 /// round step fails.
 pub async fn execute_route(
     backend: Backend,
@@ -260,7 +260,7 @@ pub struct SentTx {
 /// run the round again.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when a route step fails, when no transactions
+/// Returns [`crate::core::error::ErrorKind::Backend`] when a route step fails, when no transactions
 /// come back to sign, when no signature or hash is returned, or when the
 /// signals connection fails.
 pub async fn execute_round(

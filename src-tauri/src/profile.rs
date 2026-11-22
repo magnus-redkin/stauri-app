@@ -14,8 +14,8 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
-use crate::inprocess;
+use crate::core::error::{AppError, AppResult};
+use crate::core::inprocess;
 
 /// Shortest side an avatar may have, in pixels.
 ///
@@ -60,9 +60,9 @@ pub struct AvatarInput {
 /// outlive the profile.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the type or size is unacceptable,
-/// [`crate::error::ErrorKind::Backend`] when status-go refuses the image, and
-/// [`crate::error::ErrorKind::Io`] when the temporary file cannot be written.
+/// Returns [`crate::core::error::ErrorKind::Config`] when the type or size is unacceptable,
+/// [`crate::core::error::ErrorKind::Backend`] when status-go refuses the image, and
+/// [`crate::core::error::ErrorKind::Io`] when the temporary file cannot be written.
 #[tauri::command]
 pub async fn store_avatar(input: AvatarInput) -> AppResult<AvatarSaved> {
     let bytes = decode_avatar(&input)?;
@@ -117,8 +117,8 @@ pub async fn store_avatar(input: AvatarInput) -> AppResult<AvatarSaved> {
 /// reach a localhost port with a self-signed certificate.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the images cannot be listed or
-/// fetched, and [`crate::error::ErrorKind::Network`] when the media server does not
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the images cannot be listed or
+/// fetched, and [`crate::core::error::ErrorKind::Network`] when the media server does not
 /// answer.
 #[tauri::command]
 pub async fn get_avatar() -> AppResult<Option<String>> {
@@ -191,7 +191,7 @@ pub struct PasswordChange {
 /// reported rather than silently accepted.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the current password is wrong, the
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the current password is wrong, the
 /// backend does not export the call, or status-go refuses.
 #[tauri::command]
 pub async fn change_password(input: PasswordChange) -> AppResult<()> {
@@ -223,7 +223,7 @@ pub async fn change_password(input: PasswordChange) -> AppResult<()> {
 /// The profile's key uid, as status-go has it right now.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when settings cannot be read or carry
+/// Returns [`crate::core::error::ErrorKind::Backend`] when settings cannot be read or carry
 /// no key uid.
 async fn key_uid() -> AppResult<String> {
     let settings = inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;

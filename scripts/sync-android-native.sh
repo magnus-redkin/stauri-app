@@ -42,7 +42,7 @@ fi
 KOTLIN_DIR="$GEN/java/com/magnus/stauri_app"
 mkdir -p "$KOTLIN_DIR"
 # One file: the activity. The Keystore bridge that used to live here is gone with the
-# system-PIN scheme, see src-tauri/src/credentials.rs.
+# system-PIN scheme, see src-tauri/src/core/credentials.rs.
 cp "$SRC"/kotlin/MainActivity.kt "$KOTLIN_DIR/"
 
 # Resources: strings used by the unlock prompt, and the network policy the local

@@ -1,4 +1,4 @@
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;

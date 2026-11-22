@@ -5,8 +5,8 @@ secrets exist, where they live, and what happens on creation, recovery from a se
 phrase, and transfer to another device.
 
 Code: `src/lib/entry/entryFlow.ts` (the transition rules), `src/routes/+page.svelte`
-(state and handlers), `src-tauri/src/credentials.rs` (PIN and envelope),
-`src-tauri/src/pairing.rs` (local pairing).
+(state and handlers), `src-tauri/src/core/credentials.rs` (PIN and envelope),
+`src-tauri/src/core/pairing.rs` (local pairing).
 
 ---
 

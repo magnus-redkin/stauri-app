@@ -14,7 +14,7 @@
 
 use std::sync::Mutex;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
 /// The phrase in process memory. `None` until loaded and after clearing.
@@ -36,14 +36,14 @@ pub struct VerifyResult {
 /// Returns the word count only, never the phrase itself.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the
 /// `settings_getSettings` call fails or the response carries no usable mnemonic,
-/// and [`crate::error::ErrorKind::Internal`] when the library cannot be loaded.
+/// and [`crate::core::error::ErrorKind::Internal`] when the library cannot be loaded.
 #[tauri::command]
 pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
     // No HTTP: the seed is read over the library, in this process. The password
     // never passes through here.
-    let parsed = crate::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
+    let parsed = crate::core::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
 
     let words = mnemonic_words(&parsed)?;
 
@@ -55,7 +55,7 @@ pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
 
 /// Extracts the seed words from a `settings_getSettings` reply.
 ///
-/// @param reply - Reply of [`crate::inprocess::call_rpc`], which has already
+/// @param reply - Reply of [`crate::core::inprocess::call_rpc`], which has already
 ///   unwrapped the JSON-RPC envelope and returned the settings object itself.
 /// @returns The words, in order.
 /// @remarks
@@ -64,7 +64,7 @@ pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
 /// still present, and silently produced "mnemonic is not available" afterwards.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the reply has no `mnemonic`
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the reply has no `mnemonic`
 /// string or the phrase is empty.
 fn mnemonic_words(reply: &serde_json::Value) -> AppResult<Vec<String>> {
     let mnemonic = reply
@@ -82,8 +82,8 @@ fn mnemonic_words(reply: &serde_json::Value) -> AppResult<Vec<String>> {
 /// One word by index, for display to the user.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded,
-/// [`crate::error::ErrorKind::Internal`] when the index is out of range or a
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the phrase is not loaded,
+/// [`crate::core::error::ErrorKind::Internal`] when the index is out of range or a
 /// lock is poisoned.
 #[tauri::command]
 pub fn seed_word(index: usize) -> AppResult<String> {
@@ -100,8 +100,8 @@ pub fn seed_word(index: usize) -> AppResult<String> {
 /// Random distinct indices for checking that the phrase was memorised.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded or
-/// is empty, and [`crate::error::ErrorKind::Internal`] when a lock is poisoned.
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the phrase is not loaded or
+/// is empty, and [`crate::core::error::ErrorKind::Internal`] when a lock is poisoned.
 #[tauri::command]
 pub fn seed_challenge(count: usize) -> AppResult<Vec<usize>> {
     let guard = PHRASE.lock().map_err(|_| AppError::poisoned())?;
@@ -143,8 +143,8 @@ pub fn seed_challenge(count: usize) -> AppResult<Vec<usize>> {
 /// Comparison is case-insensitive and ignores surrounding whitespace.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Backend`] when the phrase is not loaded,
-/// [`crate::error::ErrorKind::Internal`] when the index is out of range or a
+/// Returns [`crate::core::error::ErrorKind::Backend`] when the phrase is not loaded,
+/// [`crate::core::error::ErrorKind::Internal`] when the index is out of range or a
 /// lock is poisoned.
 #[tauri::command]
 pub fn verify_seed_answer(index: usize, answer: String) -> AppResult<VerifyResult> {

@@ -6,12 +6,12 @@
 //! polymorphism: wallet and ENS code says `Backend` and never touches the
 //! library directly.
 //!
-//! Signals do not come from a socket either; see [`crate::inprocess::subscribe`].
+//! Signals do not come from a socket either; see [`crate::core::inprocess::subscribe`].
 
 use serde_json::Value;
 
-use crate::error::AppResult;
-use crate::inprocess;
+use crate::core::error::AppResult;
+use crate::core::inprocess;
 
 /// status-go, reached through the library loaded into this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,9 +30,9 @@ impl Backend {
     /// Makes a JSON-RPC call to `method` with `params`.
     ///
     /// # Errors
-    /// Returns [`crate::error::ErrorKind::Backend`] when status-go reports a
+    /// Returns [`crate::core::error::ErrorKind::Backend`] when status-go reports a
     /// JSON-RPC error or returns nothing, and
-    /// [`crate::error::ErrorKind::Internal`] when the library cannot be loaded.
+    /// [`crate::core::error::ErrorKind::Internal`] when the library cannot be loaded.
     pub async fn call(&self, method: &str, params: Value) -> AppResult<Value> {
         inprocess::call_rpc(method, params).await
     }

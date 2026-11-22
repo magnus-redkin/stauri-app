@@ -5,8 +5,8 @@
 восстановлении по сид-фразе и при передаче на другое устройство.
 
 Код: `src/lib/entry/entryFlow.ts` (правила переходов), `src/routes/+page.svelte`
-(состояние и обработчики), `src-tauri/src/credentials.rs` (PIN и конверт),
-`src-tauri/src/pairing.rs` (local pairing).
+(состояние и обработчики), `src-tauri/src/core/credentials.rs` (PIN и конверт),
+`src-tauri/src/core/pairing.rs` (local pairing).
 
 ---
 

@@ -28,7 +28,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 #[cfg(desktop)]
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 #[cfg(desktop)]
 use crate::providers::validate_external_url;
 
@@ -50,8 +50,8 @@ const DAPP_MIN_HEIGHT: f64 = 360.0;
 /// twice does not leave invisible copies stacked on each other.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] or [`crate::error::ErrorKind::Network`] from
-/// [`validate_external_url`], and [`crate::error::ErrorKind::Internal`] when the menu or the
+/// Returns [`crate::core::error::ErrorKind::Config`] or [`crate::core::error::ErrorKind::Network`] from
+/// [`validate_external_url`], and [`crate::core::error::ErrorKind::Internal`] when the menu or the
 /// window cannot be built.
 #[cfg(desktop)]
 #[tauri::command]
@@ -139,8 +139,8 @@ const DOC_WHITELIST: &[&str] = &[
 /// and its title says what it is.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] for a name outside the whitelist,
-/// and [`crate::error::ErrorKind::Internal`] when the window cannot be built.
+/// Returns [`crate::core::error::ErrorKind::Config`] for a name outside the whitelist,
+/// and [`crate::core::error::ErrorKind::Internal`] when the window cannot be built.
 #[cfg(desktop)]
 #[tauri::command]
 pub async fn open_doc(app: tauri::AppHandle, name: String) -> AppResult<String> {
@@ -179,7 +179,7 @@ pub async fn open_doc(app: tauri::AppHandle, name: String) -> AppResult<String> 
 /// loading, and there is no reason to fail the command over it.
 ///
 /// # Errors
-/// Always returns [`crate::error::ErrorKind::Internal`].
+/// Always returns [`crate::core::error::ErrorKind::Internal`].
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn open_dapp(_url: String) -> AppResult<String> {
@@ -194,7 +194,7 @@ pub async fn open_dapp(_url: String) -> AppResult<String> {
 /// nothing about why.
 ///
 /// # Errors
-/// Always returns [`crate::error::ErrorKind::Internal`].
+/// Always returns [`crate::core::error::ErrorKind::Internal`].
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn open_doc(_name: String) -> AppResult<String> {

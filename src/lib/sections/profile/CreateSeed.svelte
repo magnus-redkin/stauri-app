@@ -143,7 +143,7 @@
       onclick={startVerification}
       class="w-full py-2 bg-primary text-primary-foreground rounded-md font-medium mb-2"
     >
-      {i18n.t('Проверить сохраненную фразу')}
+      {i18n.t('Verify saved phrase')}
     </button>
     {#if onSkip}
       <!--
@@ -192,7 +192,7 @@
       disabled={!allCorrect}
       class="w-full py-2 bg-primary text-primary-foreground rounded-md font-medium mb-2 disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      {i18n.t('Сохранить seed-фразу')}
+      {i18n.t('Save seed phrase')}
     </button>
     <button onclick={() => step = 1} class="text-sm text-muted-foreground hover:underline">
       {i18n.t('Back to words')}

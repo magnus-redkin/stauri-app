@@ -22,7 +22,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// Response size cap: a feed must not exhaust memory.
 const MAX_BODY_BYTES: usize = 512 * 1024;

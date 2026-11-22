@@ -28,8 +28,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::backend::Backend;
-use crate::error::{AppError, AppResult};
+use crate::core::backend::Backend;
+use crate::core::error::{AppError, AppResult};
 
 /// Transfer request.
 #[derive(Debug, Deserialize)]
@@ -372,7 +372,7 @@ fn parse_amount(raw: &str) -> AppResult<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inprocess::describe_rpc_error;
+    use crate::core::inprocess::describe_rpc_error;
 
     fn request() -> TransferRequest {
         TransferRequest {

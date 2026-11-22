@@ -16,7 +16,7 @@
 
 use url::Url;
 
-use crate::error::{AppError, AppResult};
+use crate::core::error::{AppError, AppResult};
 
 /// Schemes that may be opened.
 ///
@@ -40,27 +40,42 @@ const ALLOWED_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
 /// to try.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the address cannot be parsed
-/// or its scheme is not allowed, and [`crate::error::ErrorKind::Internal`] when
+/// Returns [`crate::core::error::ErrorKind::Config`] when the address cannot be parsed
+/// or its scheme is not allowed, and [`crate::core::error::ErrorKind::Internal`] when
 /// the system has no handler for it.
 #[tauri::command]
-pub fn open_external(url: String) -> AppResult<()> {
+pub fn open_external(app: tauri::AppHandle, url: String) -> AppResult<()> {
     let parsed = parse(&url)?;
 
-    if let Some(tg) = telegram_deep_link(&parsed)
-        && open::that(&tg).is_ok()
+    // На Android у `open::that` нет обработчика вовсе: браузер запускается только
+    // Intent'ом, и его отправляет плагин opener. Схема уже проверена выше.
+    #[cfg(mobile)]
     {
-        return Ok(());
+        use tauri_plugin_opener::OpenerExt;
+        return app
+            .opener()
+            .open_url(parsed.as_str().to_string(), None::<String>)
+            .map_err(|e| AppError::internal(format!("no handler for this address: {e}")));
     }
 
-    open::that(parsed.as_str())
-        .map_err(|e| AppError::internal(format!("no handler for this address: {e}")))
+    #[cfg(not(mobile))]
+    {
+        let _ = &app;
+        if let Some(tg) = telegram_deep_link(&parsed)
+            && open::that(&tg).is_ok()
+        {
+            return Ok(());
+        }
+
+        open::that(parsed.as_str())
+            .map_err(|e| AppError::internal(format!("no handler for this address: {e}")))
+    }
 }
 
 /// Checks the scheme and parses the address.
 ///
 /// # Errors
-/// Returns [`crate::error::ErrorKind::Config`] when the address is malformed or
+/// Returns [`crate::core::error::ErrorKind::Config`] when the address is malformed or
 /// its scheme is not in [`ALLOWED_SCHEMES`].
 fn parse(raw: &str) -> AppResult<Url> {
     let url =

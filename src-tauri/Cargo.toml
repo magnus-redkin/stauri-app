@@ -44,6 +44,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ansi", "time"] }
 tracing-appender = "0.2.5"
 tauri-plugin-updater = "2"
+# Открытие ссылок системным обработчиком на Android: `open::that` мобильные
+# платформы не поддерживает, а Android-часть плагина запускает Intent.
+tauri-plugin-opener = "2"
 
 # Разбор ссылок-приглашений Status (src/invite.rs).
 #
