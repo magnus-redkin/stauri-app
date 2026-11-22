@@ -17,7 +17,6 @@
   import { error } from '$lib/utils/log';
   import { isAndroid } from '$lib/utils/platform';
   import { docUrl, resolveDocPath, type AboutSection } from './aboutSections';
-
   let {
     sections,
     topic = $bindable(),
@@ -36,27 +35,29 @@
   const current: AboutSection | null = $derived(sections.find((s) => s.id === topic) ?? null);
 
   /**
-   * Opens the document link.
+   * Opens a footer link.
    *
-   * @param url - Address to open.
+   * @param target - Link target as written in the document: a bundled `.md` path or an
+   *   `http(s)` address.
    * @remarks
-   * Desktop opens a dApp window with its own menu. A phone has no second window yet, so
-   * the address goes to the system handler through `open_external`, which checks the
-   * scheme in Rust — the shell plugin is not registered and would not work here.
+   * Two kinds of target, two doors. A bundled document opens in a dApp window on the
+   * desktop (`open_dapp` serves only whitelisted files, which is why the whitelist in
+   * `dapp.rs` must list every linked document); a phone has no second window yet, so it
+   * goes to the system handler. An outside address always goes to the system handler,
+   * which checks the scheme in Rust — the shell plugin is not registered and would not
+   * work here.
    */
-  async function openLink(url: string): Promise<void> {
+  async function openLink(target: string): Promise<void> {
+    const external = /^https?:/i.test(target);
+    const url = external ? target : docUrl(resolveDocPath(target, i18n.locale ?? 'en'));
+    if (!url) return;
     try {
-      if (isAndroid()) await invoke('open_external', { url });
+      if (external || isAndroid()) await invoke('open_external', { url });
       else await invoke<string>('open_dapp', { url });
     } catch (e) {
       error(`[home] cannot open ${url}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-
-  /** Address of the document link of the open subsection. */
-  const currentUrl = $derived(
-    current?.link ? docUrl(resolveDocPath(current.link, i18n.locale ?? 'en')) : ''
-  );
 </script>
 
 <div class="h-full flex flex-col overflow-y-auto bg-background">
@@ -93,14 +94,18 @@
           <h1 class="text-2xl font-bold text-foreground">{current.title}</h1>
         </div>
         {@html renderMarkdown(current.body)}
-        {#if currentUrl}
-          <button
-            onclick={() => openLink(currentUrl)}
-            class="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline break-all text-left"
-          >
-            <ExternalLink size={16} class="shrink-0" />
-            {currentUrl}
-          </button>
+        {#if current.links.length > 0}
+          <div class="flex flex-wrap gap-x-5 gap-y-2 pt-1">
+            {#each current.links as link (link.target)}
+              <button
+                onclick={() => openLink(link.target)}
+                class="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline text-left"
+              >
+                <ExternalLink size={16} class="shrink-0" />
+                {link.label}
+              </button>
+            {/each}
+          </div>
         {/if}
       </div>
     </article>

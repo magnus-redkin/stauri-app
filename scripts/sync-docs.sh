@@ -10,7 +10,10 @@
 # there must be added here too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FILES=(ru/web3im.md ru/architecture.md ru/comparison.md en/architecture.md)
+FILES=(
+  ru/web3im.md ru/architecture.md ru/auth_and_sync.md ru/comparison.md
+  en/web3im.md en/architecture.md en/auth_and_sync.md en/comparison.md
+)
 
 for f in "${FILES[@]}"; do
   src="$ROOT/docs/$f"

@@ -12,12 +12,21 @@ describe('aboutMarkdown', () => {
     expect(sections[0].body.length).toBeGreaterThan(0);
   });
 
-  it('у каждого подраздела, кроме роадмапа, есть ссылка на документ', () => {
+  it('в каждом подразделе есть хотя бы одна ссылка', () => {
+    // The screen draws these as footer buttons; a section without any is a section the
+    // user cannot follow up on.
     const sections = parseAbout(aboutMarkdown());
-    const withLinks = sections.filter((s) => s.link);
-    expect(withLinks.length).toBeGreaterThan(0);
-    for (const section of withLinks) {
-      expect(section.link).toMatch(/\.md$/);
+    for (const section of sections) {
+      expect(section.links.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('внутренние ссылки ведут на .md, внешние — на http(s)', () => {
+    const sections = parseAbout(aboutMarkdown());
+    const targets = sections.flatMap((s) => s.links.map((l) => l.target));
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of targets) {
+      expect(target).toMatch(/^(https?:|.*\.md$)/);
     }
   });
 });

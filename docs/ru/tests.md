@@ -3,8 +3,8 @@
 Документ описывает, что и как тестируется, почему выбраны именно эти
 инструменты и где проходят границы между уровнями тестов.
 
-Актуальные числа на 2026-11-08: **107 Rust-тестов**, **241 frontend-тест в
-23 файлах**, 1 E2E-сценарий.
+Актуальные числа на 2026-11-22: **160 Rust-тестов**, **402 frontend-теста в
+39 файлах**, 1 E2E-сценарий.
 
 ## 1. Уровни
 
@@ -50,6 +50,8 @@ cargo test
 | 🔒 `error.rs` | 3 | Виды ошибок, сериализация |
 | `dapp.rs` | 2 | Метка окна: стабильна и безопасна |
 | 🔒 `surface.rs` | 2 | Состав `core/` не изменился; поверхность команд не расширилась молча |
+| `profile.rs` | 6 | Аватар: размер, тип, запись под каталог профиля |
+| `commands.rs` | 1 | Тело `InitializeApplication` использует `dataDir`, а не выдуманное поле |
 | 🔒 `backend.rs` | 1 | Имя и поиск библиотеки |
 | `updater.rs` | 1 | camelCase в `UpdateInfo` |
 
@@ -97,29 +99,45 @@ pnpm tests         # frontend + rust подряд
 
 | Файл | Тестов |
 |---|---|
-| `stores/chatsStore.test.ts` | 39 |
+| `stores/chatsStore.test.ts` | 51 |
+| `stores/connectionStore.test.ts` | 30 |
+| `entry/entryFlow.test.ts` | 20 |
 | `utils/amount.test.ts` | 19 |
+| `status/api.test.ts` | 18 |
 | `utils/assetGroups.test.ts` | 18 |
-| `utils/totalBalance.test.ts` | 16 |
 | `stores/feedsStore.test.ts` | 16 |
+| `utils/password.test.ts` | 16 |
+| `utils/totalBalance.test.ts` | 16 |
+| `stores/statusStore.test.ts` | 14 |
 | `utils/tokens.test.ts` | 14 |
-| `stores/connectionStore.test.ts` | 15 |
+| `status/credentials.test.ts` | 12 |
 | `stores/navStore.test.ts` | 12 |
-| `status/api.test.ts` | 11 |
-| `stores/statusStore.test.ts` | 10 |
+| `sections/home/aboutSections.test.ts` | 11 |
+| `status/messaging.test.ts` | 11 |
+| `status/http.test.ts` | 10 |
 | `stores/walletStore.test.ts` | 10 |
 | `utils/explorer.test.ts` | 8 |
 | `utils/format.test.ts` | 8 |
 | `sections/auth/PasswordInput.test.ts` | 7 |
-| `status/http.test.ts` | 6 |
+| `sections/auth/ProfileLoginBlock.test.ts` | 7 |
+| `status/profile.test.ts` | 6 |
 | `stores/sendStore.test.ts` | 6 |
 | `sections/auth/NetworkPicker.test.ts` | 5 |
+| `status/channelRights.test.ts` | 5 |
+| `status/contactState.test.ts` | 5 |
 | `stores/contactsStore.test.ts` | 5 |
+| `utils/displayName.test.ts` | 5 |
+| `utils/markdown.test.ts` | 5 |
+| `locales.test.ts` | 4 |
 | `sections/auth/MainEntryScreen.test.ts` | 4 |
-| `sections/chat/ChatLeft.test.ts` | 4 |
 | `sections/profile/NetworkInfo.test.ts` | 4 |
-| `sections/auth/ProfileLoginBlock.test.ts` | 3 |
+| `i18n-locale.test.ts` | 3 |
 | `sections/contacts/ContactsLeft.test.ts` | 3 |
+| `status/channelKind.test.ts` | 3 |
+| `status/invite.test.ts` | 3 |
+| `sections/chat/ChatLeft.test.ts` | 2 |
+| `sections/home/aboutMarkdown.test.ts` | 2 |
+| `status/akk.test.ts` | 2 |
 
 Что именно важно в покрытом:
 

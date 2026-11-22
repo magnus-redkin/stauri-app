@@ -176,6 +176,12 @@ entry → Create Profile → (password generated) → PIN → repeat PIN → pro
    disk until the PIN is confirmed, so abandoning the flow is safe.
 3. **`CreateAccountAndLogin`** runs after the PIN. It logs in immediately, which is why
    the screen is held in place by a render condition until the envelope is saved.
+   Before it, `createAccount` **logs out of a live session if there is one**: leaving the
+   lock for the profile list deliberately keeps the backend logged in, and creating on top
+   of that broke — `CreateAccountAndLogin` started with the node running, `waitForLogin`
+   answered at once from the stale `isLoggedIn` flag, and the node then tried to log into
+   the **previous** profile with the **new** password; `status-go` replied
+   `failed to open database`.
 4. **If saving the envelope fails**, the profile that was just created is deleted: an
    account with an unknown password is worse than no account.
 5. **The PIN is entered twice.** A typo would encrypt the password under a value its

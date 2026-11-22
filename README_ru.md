@@ -8,7 +8,31 @@ Stauri — альтернативный неофициальный клиент 
 процесса, нет локального порта и нет отдельного бэкенда, который надо держать
 живым.
 
-№№ Документация
+## Две вещи, которые стоит знать до того, как доверять бинарнику
+
+**1. `status-go` — это upstream плюс один маленький патч.** Сборка берёт
+закреплённый коммит `766535cf3` и
+[`src-tauri/status-go/stauri-close-accounts.patch`](src-tauri/status-go/stauri-close-accounts.patch)
+(2 файла, 39 добавленных строк) — больше ничего. Патч добавляет один экспорт,
+`CloseAccounts`: он позволяет приложению заново открыть базу аккаунтов при смене
+каталога данных, и именно поэтому сеть переключается мгновенно, а не через
+перезапуск. Весь дифф целиком — в форке:
+[`magnus-redkin/status-go:stauri/close-accounts`](https://github.com/status-im/status-go/compare/766535cf336416a11a92f46faf4df5ac6af4a0b8...magnus-redkin:status-go:stauri/close-accounts).
+Он не трогает криптографию, транспорт и формат хранения; закрывается
+**незашифрованная** `accounts.sql` с метаданными профилей. Непропатченная
+библиотека тоже работает — только смена сети тогда честно сообщает, что нужна
+пересборка. Зачем, как проверить и что с upstream — в
+[`src-tauri/status-go/README.md`](src-tauri/status-go/README.md).
+
+**2. Ключевой материал лежит в отдельной папке.** [`src-tauri/src/core/`](src-tauri/src/core/)
+— конверт PIN (Argon2id + AES-GCM), seed-фраза, пейринг, RPC-форвардер и все
+вызовы status-go через FFI. Всё остальное — чаты, экраны кошелька, маркет, dApp —
+бизнес-логика вне её. Папка — маркер, а не замок компилятора: границу держат
+`.github/CODEOWNERS` (любое изменение там требует ревью) и
+`core/surface.rs` — тест, который падает, если состав ядра или поверхность
+команд молча изменились. Подробно: [`docs/ru/architecture.md`](docs/ru/architecture.md) §1.2.
+
+## Документация
 
 на русском в [`docs/ru/`](docs/ru/). Английская версия README — [`README.md`](README.md).
 
@@ -47,7 +71,7 @@ Stauri — альтернативный неофициальный клиент 
   чатов, с указанием источника у каждой строки.
 - **Market:** курсы с CoinGecko, напрямую из Rust, без зависимости от
   `status-go`.
-- **Оформление:** три темы, размер шрифта, четыре языка (en / ru / zh / es).
+- **Оформление:** четыре темы, размер шрифта, четыре языка (en / ru / zh / es).
 
 ## Преимущества
 
@@ -91,14 +115,19 @@ Stauri — альтернативный неофициальный клиент 
 ## Сборка
 
 Stauri требует заранее собранных `libstatus.so` и `libsds.so` — **из одного
-Nix-окружения**, иначе приложение падает с `SIGSEGV` при загрузке `libsds.so`.
+Nix-окружения** (иначе приложение падает с `SIGSEGV` при загрузке `libsds.so`)
+и **из upstream плюс патч Stauri**.
 
 ```bash
-# 1. Собрать библиотеку в Nix
+# 1. Собрать библиотеку в Nix: закреплённый upstream + один патч
+git clone https://github.com/status-im/status-go.git ~/ETH/github.status-go
 cd ~/ETH/github.status-go
-nix develop --extra-experimental-features 'nix-command flakes'
-unset CGO_LDFLAGS CGO_CFLAGS
-make statusgo-library
+git checkout 766535cf3
+git apply ~/ETH/stauri/stauri-app/src-tauri/status-go/stauri-close-accounts.patch
+
+env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
+  nix develop --extra-experimental-features 'nix-command flakes' \
+  --command make statusgo-shared-library
 
 # 2. Положить библиотеки в Stauri
 cp build/bin/libstatus.so.0 \
@@ -116,14 +145,20 @@ pnpm tauri dev
 ./scripts/release.sh 0.5.0
 ```
 
+Проверить, что патч попал в библиотеку:
+
+```bash
+nm -D --defined-only build/bin/libstatus.so | grep -w CloseAccounts
+```
+
 Подробности о сборке, `patchelf` и Nix-интерпретаторе — в
 [`docs/BUILDING.md`](docs/BUILDING.md).
 
 ## Тесты
 
 ```bash
-pnpm test        # frontend: 303 теста в 30 файлах
-pnpm test:rust   # backend: 105 тестов
+pnpm test        # frontend: 400 тестов в 39 файлах
+pnpm test:rust   # backend: 160 тестов
 pnpm test:e2e    # Playwright, запускает реальное приложение
 ./tests/integration/contact.sh   # ноды на libstatus, нужна сеть
 ```

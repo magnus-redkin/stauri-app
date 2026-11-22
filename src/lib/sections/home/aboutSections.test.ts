@@ -28,15 +28,35 @@ describe('parseAbout', () => {
     // The screen draws it as a button, so it must not also render as a paragraph.
     const md = ['## Topic', '', 'Some text.', '', '[Full document](ru/web3im.md)'].join('\n');
     const [section] = parseAbout(md);
-    expect(section.link).toBe('ru/web3im.md');
+    expect(section.links).toEqual([
+      { label: 'Full document', target: 'ru/web3im.md' },
+    ]);
     expect(section.body).toBe('Some text.');
     expect(section.body).not.toContain('Full document');
+  });
+
+  it('берёт несколько ссылок внизу в порядке файла', () => {
+    // A section points at its own document and at an outside source.
+    const md = [
+      '## Topic',
+      '',
+      'Some text.',
+      '',
+      '[Full document](web3im.md)',
+      '[Status](https://status.im)',
+    ].join('\n');
+    const [section] = parseAbout(md);
+    expect(section.links).toEqual([
+      { label: 'Full document', target: 'web3im.md' },
+      { label: 'Status', target: 'https://status.im' },
+    ]);
+    expect(section.body).toBe('Some text.');
   });
 
   it('не трогает ссылку в середине текста', () => {
     const md = ['## Topic', '', 'See [the doc](en/architecture.md) for details.', '', 'More.'].join('\n');
     const [section] = parseAbout(md);
-    expect(section.link).toBeUndefined();
+    expect(section.links).toEqual([]);
     expect(section.body).toContain('[the doc]');
   });
 
@@ -56,7 +76,7 @@ describe('parseAbout', () => {
 
   it('переживает CRLF и пустой файл', () => {
     expect(parseAbout('## A\r\n\r\ntext\r\n')).toEqual([
-      { id: 'a', title: 'A', body: 'text' },
+      { id: 'a', title: 'A', body: 'text', links: [] },
     ]);
     expect(parseAbout('')).toEqual([]);
   });

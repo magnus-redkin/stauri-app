@@ -8,13 +8,20 @@
  * menu without touching code. `###` and deeper stay part of the body; only level two
  * splits the document.
  *
- * The last line of a subsection may be a single link — `[Full document](ru/web3im.md)`.
- * It becomes the section's footer link and is removed from the body, because the screen
- * renders it as a button rather than as text.
+ * The last lines of a subsection may be single links, one per line —
+ * `[Full document](web3im.md)`, `[Status](https://status.im)`. They become the section's
+ * footer buttons and are removed from the body, because the screen renders them as
+ * buttons rather than as text. Several are allowed: a section usually points at its own
+ * document and at an outside source.
  */
 
-/** Target of the document link at the foot of a subsection. */
-export type DocTarget = string;
+/** One footer link of a subsection. */
+export interface DocLink {
+  /** Text shown on the button. */
+  label: string;
+  /** Target as written in the document: a bundled `.md` path or an `http(s)` address. */
+  target: string;
+}
 
 /** One subsection of the About document. */
 export interface AboutSection {
@@ -22,10 +29,10 @@ export interface AboutSection {
   id: string;
   /** Heading text exactly as written in the file. */
   title: string;
-  /** Markdown of the body, without the trailing document link. */
+  /** Markdown of the body, without the trailing links. */
   body: string;
-  /** Document link, when the subsection carries one. */
-  link?: DocTarget;
+  /** Footer links, in file order; empty when the subsection has none. */
+  links: DocLink[];
 }
 
 /** Heading line: exactly two hashes, so `###` stays inside the body. */
@@ -72,7 +79,7 @@ export function parseAbout(markdown: string): AboutSection[] {
 
   const flush = () => {
     if (title === null) return;
-    const { body, link } = takeLink(buffer.join('\n'));
+    const { body, links } = takeLinks(buffer.join('\n'));
     const base = sectionId(title);
     const count = (seen.get(base) ?? 0) + 1;
     seen.set(base, count);
@@ -80,7 +87,7 @@ export function parseAbout(markdown: string): AboutSection[] {
       id: count === 1 ? base : `${base}-${count}`,
       title,
       body,
-      ...(link ? { link } : {}),
+      links,
     });
   };
 
@@ -99,22 +106,31 @@ export function parseAbout(markdown: string): AboutSection[] {
 }
 
 /**
- * Removes the document link from the end of a section body.
+ * Removes the footer links from the end of a section body.
  *
  * @param body - Raw body lines joined.
- * @returns The body without the link line, and the link when there was one.
+ * @returns The body without the link lines, and the links in file order.
+ * @remarks
+ * Any run of consecutive link-only lines at the end counts, so a section can point at
+ * its own document and at an outside source without one of them being swallowed as text.
  */
-function takeLink(body: string): { body: string; link?: DocTarget } {
+function takeLinks(body: string): { body: string; links: DocLink[] } {
   const lines = body.split('\n');
   // Trailing blank lines are not part of the body.
   let end = lines.length - 1;
   while (end >= 0 && lines[end].trim() === '') end--;
-  if (end < 0) return { body: '' };
+  if (end < 0) return { body: '', links: [] };
 
-  const match = LINK_LINE.exec(lines[end].trim());
-  if (!match) return { body: body.trim() };
+  const links: DocLink[] = [];
+  while (end >= 0) {
+    const match = LINK_LINE.exec(lines[end].trim());
+    if (!match) break;
+    links.unshift({ label: match[1], target: match[2] });
+    end--;
+  }
 
-  return { body: lines.slice(0, end).join('\n').trim(), link: match[2] };
+  if (links.length === 0) return { body: body.trim(), links: [] };
+  return { body: lines.slice(0, end + 1).join('\n').trim(), links };
 }
 
 /**

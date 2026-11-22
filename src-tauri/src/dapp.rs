@@ -127,8 +127,12 @@ pub async fn open_dapp(app: tauri::AppHandle, url: String) -> AppResult<String> 
 const DOC_WHITELIST: &[&str] = &[
     "ru/web3im.md",
     "ru/architecture.md",
+    "ru/auth_and_sync.md",
     "ru/comparison.md",
+    "en/web3im.md",
     "en/architecture.md",
+    "en/auth_and_sync.md",
+    "en/comparison.md",
 ];
 
 /// Opens a bundled document in its own window.
