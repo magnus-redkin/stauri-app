@@ -66,7 +66,7 @@
 
   <releases>
     <!-- Версия подставляется release.sh из аргумента сборки. -->
-    <release version="0.5.0" date="2026-11-21">
+    <release version="0.5.1" date="2026-11-22">
       <description>
         <p>Синхронизация через локальную сеть, экран выбора профиля и политики PIN.</p>
       </description>
