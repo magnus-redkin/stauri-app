@@ -288,6 +288,23 @@ export async function createAccount(password: string) {
     return;
   }
   if (!isWsOpen()) await openWs();
+
+  // A new account is created on top of whatever state the backend is in, and that state
+  // can still be an open session: leaving the lock for the entry screen keeps the
+  // session up on purpose, so "back, then create" is an ordinary path, not an edge case.
+  // Two things then go wrong at once. status-go keeps the running node, and — worse —
+  // `waitForLogin` sees the stale `isLoggedIn` and resolves without waiting, so the key
+  // uid below is the *previous* profile's. The provider restart then logs into that
+  // profile with the new password and status-go answers `failed to open database`.
+  if (statusState.isLoggedIn) {
+    info('[boot] createAccount: a session is still open, logging out first');
+    const stopped = waitForNodeStopped(15000).catch(() => undefined);
+    await apiLogout().catch(() => undefined);
+    await stopped;
+    statusState.isLoggedIn = false;
+    statusState.accountKeyUid = '';
+  }
+
   await traceSecret('create', password);
   info('[boot] createAccount: calling CreateAccountAndLogin');
   const createResult = await createAccountAndLogin(statusState.backendDataDir, password);

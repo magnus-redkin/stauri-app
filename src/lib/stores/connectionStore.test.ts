@@ -544,6 +544,57 @@ describe('resetLocalProfileAndRestore', () => {
   });
 });
 
+describe('createAccount on top of an open session', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (startRpcProxy as any).mockResolvedValue(PROXY_PORT);
+    (getRpcProxySecret as any).mockResolvedValue(PROXY_SECRET);
+    (setRpcUpstreams as any).mockResolvedValue(undefined);
+    (setChainUserRpcProvider as any).mockResolvedValue({ result: null });
+    (getFlatEthereumChains as any).mockResolvedValue([
+      network(1, 'Ethereum', {
+        rpcProviders: [{ type: 'user', name: 'stauri-rpc', enabled: true, url: proxyUrl(1) }],
+      }),
+    ]);
+    (createAccountAndLogin as any).mockResolvedValue({ error: '' });
+    (waitForLogin as any).mockResolvedValue(undefined);
+    (waitForNodeStopped as any).mockResolvedValue(undefined);
+    (logout as any).mockResolvedValue({});
+    (startMessenger as any).mockResolvedValue({});
+  });
+
+  it('сначала выходит из живой сессии, потом создаёт профиль', async () => {
+    // Leaving the lock for the entry screen keeps the session up on purpose, so
+    // "back, then create" is an ordinary path. Without the logout, status-go keeps the
+    // running node and `waitForLogin` resolves from the stale flag, so the *old* key uid
+    // is logged into with the new password — `failed to open database`.
+    statusState.backendRunning = true;
+    statusState.isLoggedIn = true;
+    statusState.accountKeyUid = 'key-uid-old';
+
+    await createAccount('NewPass1!');
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    const logoutOrder = (logout as any).mock.invocationCallOrder[0];
+    const createOrder = (createAccountAndLogin as any).mock.invocationCallOrder[0];
+    expect(logoutOrder).toBeLessThan(createOrder);
+  });
+
+  it('не переиспользует key uid предыдущего профиля', async () => {
+    statusState.backendRunning = true;
+    statusState.isLoggedIn = true;
+    statusState.accountKeyUid = 'key-uid-old';
+    // Nothing arrives on the login signal, so no key uid is known after the create.
+    (waitForLogin as any).mockImplementation(async () => {});
+
+    await createAccount('NewPass1!');
+
+    // With no new key uid the provider restart is skipped; the old one must never be
+    // used for a login with the new profile's password.
+    expect(loginAccount).not.toHaveBeenCalledWith('NewPass1!', 'key-uid-old');
+  });
+});
+
 /**
  * Switching networks.
  *

@@ -1124,6 +1124,11 @@
       // The backend's message carries the attempts left, which is what the user needs;
       // a generic "cannot open" would hide it.
       entryError = formatError(e);
+      // The digits that just failed are cleared: leaving them on the pad means the next
+      // presses append to a value the user has already given up on, and the field runs
+      // into its length limit instead of accepting a fresh PIN.
+      entryPin = '';
+      entryPinFirst = '';
     } finally {
       entryBusy = false;
     }

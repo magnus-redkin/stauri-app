@@ -29,6 +29,26 @@
   let name = $state(initial);
   const problem = $derived(displayNameError(name));
 
+  /**
+   * Puts the caret in the field with the default name selected.
+   *
+   * @remarks
+   * The field arrives pre-filled with the name the profile was created under, and the
+   * usual intent is to replace it, not to append to it. Selecting it means one Backspace
+   * clears the whole value and typing overwrites it, instead of deleting eleven
+   * characters one press at a time. On focus rather than on mount alone: tapping back in
+   * after a failed save should behave the same way.
+   */
+  function selectAllOnFocus(event: FocusEvent): void {
+    const input = event.currentTarget as HTMLInputElement | null;
+    input?.select();
+  }
+
+  let field = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    field?.focus();
+  });
+
   function save(): void {
     if (!problem && !busy) onSave(name.trim());
   }
@@ -44,7 +64,9 @@
 
   <input
     type="text"
+    bind:this={field}
     bind:value={name}
+    onfocus={selectAllOnFocus}
     onkeydown={(e) => {
       if (e.key === 'Enter') save();
     }}

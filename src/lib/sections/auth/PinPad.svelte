@@ -94,7 +94,20 @@
     {/each}
   </div>
 
-  {#if error}
+  {#if busy}
+    <!--
+      A visible sign of work. Creating a profile hashes a password, starts the node and
+      waits for the login signal — seconds on a phone, and the pad looks frozen while it
+      happens. The dots stay; only the hint under them changes.
+    -->
+    <p class="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
+      <span
+        class="inline-block w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin"
+        aria-hidden="true"
+      ></span>
+      {i18n.t('Working…')}
+    </p>
+  {:else if error}
     <p class="text-sm text-destructive text-center max-w-md" aria-live="polite">{error}</p>
   {:else}
     <!-- Placeholder keeps the keypad from jumping when an error appears. -->
