@@ -52,6 +52,14 @@ export const ensState = $state({
   txHash: '',
   /** Full name after a successful registration. */
   fullName: '',
+  /**
+   * The name on screen came from {@link attachExistingName}, not from a registration.
+   *
+   * @remarks
+   * The success screen says "Name registered" and shows a transaction hash; neither is
+   * true for a name that was already on chain and only recorded in this profile.
+   */
+  linked: false,
   /** Networks where registration is impossible (neither mainnet nor Sepolia). */
   unsupportedChain: false,
   /**
@@ -77,6 +85,7 @@ export function resetEns(): void {
   ensState.error = '';
   ensState.txHash = '';
   ensState.fullName = '';
+  ensState.linked = false;
   ensState.unsupportedChain = false;
   ensState.profileNames = [];
 }
@@ -228,8 +237,13 @@ export async function checkName(): Promise<void> {
     ensState.fee = quote.fee === null ? null : BigInt(quote.fee);
     ensState.taken = !quote.available;
     ensState.owner = quote.owner;
+    // Owner and the profile's address list are logged together: "taken" plus no attach
+    // button means the check found the name but could not match its owner to this
+    // profile, and only these two values say which side is wrong.
     debug(
-      `[ens] quote for ${name}: price ${quote.price}, fee ${quote.fee}, available ${quote.available}`
+      `[ens] quote for ${name}: price ${quote.price}, fee ${quote.fee}, available ${quote.available}` +
+        ` owner=${quote.owner || '-'} wallet=${walletState.address || '-'}` +
+        ` accounts=${walletState.addresses.length}`
     );
   } catch (e) {
     // Not blocking: the price can be rechecked on confirmation, and the contract
@@ -365,4 +379,46 @@ export async function registerName(): Promise<boolean> {
 export function backToEnsForm(): void {
   ensState.step = 'form';
   ensState.error = '';
+}
+
+/**
+ * Records a name this wallet already owns in the current profile.
+ *
+ * @returns `true` when the name was attached.
+ * @remarks
+ * Registration happens on chain, the profile keeps its own list. A profile restored
+ * from its seed phrase starts with an empty list, so a name it owns is invisible to the
+ * interface — and re-registering it is impossible: the contract says the name is taken,
+ * by the user's own address. This is the missing half: take the name from the contract
+ * (already verified as owned by this wallet) and write it into the profile.
+ *
+ * No transaction is involved, so there is no password and no deposit.
+ */
+export async function attachExistingName(): Promise<boolean> {
+  if (!statusState.backendRunning) {
+    ensState.error = 'Wallet is not ready';
+    return false;
+  }
+  const name = ensState.username.trim();
+  if (!name || usernameError(name)) return false;
+
+  const full = `${name}.${ENS_DOMAIN}`;
+  ensState.isSending = true;
+  ensState.error = '';
+  try {
+    await addEnsUsername(statusState.chainId, full);
+    await loadProfileNames();
+    ensState.fullName = full;
+    ensState.txHash = '';
+    ensState.linked = true;
+    ensState.step = 'done';
+    info(`[ens] attached existing name ${full}`);
+    return true;
+  } catch (e) {
+    ensState.error = formatError(e, 'Failed to attach the name');
+    warn('[ens] attach failed:', e);
+    return false;
+  } finally {
+    ensState.isSending = false;
+  }
 }

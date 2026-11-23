@@ -2,10 +2,11 @@
   import { i18n } from '$lib/i18n';
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { User } from "lucide-svelte";
+  import { getVersion } from '@tauri-apps/api/app';
   import { statusState } from '$lib/stores/statusStore.svelte';
   import { ensState } from '$lib/stores/ensStore.svelte';
   import { profileAvatarState } from '$lib/stores/profileStore.svelte';
-  import { updateState } from '$lib/stores/updaterState.svelte';
+  import { updateState, runUpdateCheck } from '$lib/stores/updaterState.svelte';
   import NetworkInfo from './NetworkInfo.svelte';
 
   let {
@@ -38,6 +39,23 @@
 
   let copiedProfileId = $state(false);
   let copiedPubKey = $state(false);
+
+  /**
+   * Version of the running build, as compiled into the package.
+   *
+   * @remarks
+   * Read from Tauri rather than from `package.json`: only the binary knows what it was
+   * actually built as. Without it there is no way to tell an updated install from the
+   * old one, which is exactly the question a silent update leaves open.
+   */
+  let version = $state('');
+
+  getVersion()
+    .then((v) => (version = v))
+    .catch(() => {
+      // Outside the Tauri host (a browser preview, a unit test) there is no version to
+      // ask for; the line is simply not shown.
+    });
 
   async function copyProfileId() {
     if (!statusState.accountKeyUid) return;
@@ -190,6 +208,27 @@
         class="w-full p-2 rounded-md bg-warning text-warning-foreground text-xs font-semibold text-center hover:opacity-90 transition"
       >
         {i18n.t('Update Stauri to')} {updateState.available.version}
+      </button>
+    {/if}
+    {#if version}
+      <!--
+        The running version sits where the update offer appears, so "was I updated?" is
+        answerable without a terminal. Clicking asks the server again: the background
+        check runs once at start and then hourly, so right after a release the app can
+        legitimately have nothing to show for up to an hour. The title carries the last
+        check's outcome, because "current" and "check failed" look identical otherwise.
+      -->
+      <button
+        type="button"
+        onclick={() => void runUpdateCheck()}
+        class="w-full text-center text-[0.6875rem] text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+        title={updateState.error
+          ? `${i18n.t('Update check failed')}: ${updateState.error}`
+          : updateState.checking
+            ? i18n.t('Checking for updates…')
+            : i18n.t('No newer version found')}
+      >
+        Stauri v. {version}
       </button>
     {/if}
     <button

@@ -27,6 +27,7 @@
     checkName,
     goToConfirm,
     registerName,
+    attachExistingName,
     backToEnsForm,
     chainBalances,
     ENS_DOMAIN,
@@ -103,6 +104,26 @@
 
   const explorerUrl = $derived(explorerTxUrl(chainId, ensState.txHash));
 
+  /**
+   * Whether the taken name belongs to this very wallet.
+   *
+   * @remarks
+   * The common reason for "already taken" after a restore: the name is on chain, the
+   * profile's own list was reset with the local copy. Re-registering is impossible — the
+   * contract reports the user's own address as the owner — so the way forward is to
+   * attach the name to the profile, not to buy it again.
+   */
+  const ownedByMe = $derived.by(() => {
+    if (!ensState.taken || !ensState.owner) return false;
+    const owner = ensState.owner.toLowerCase();
+    // Any account of this profile counts: the name was registered against one of them,
+    // and that is not necessarily the one a transfer would sign from.
+    const mine = walletState.addresses.length > 0
+      ? walletState.addresses
+      : [walletState.address];
+    return mine.some((a) => !!a && a.toLowerCase() === owner);
+  });
+
   async function submitPassword() {
     if (!passwordInput.trim()) return;
     rememberPassword(passwordInput);
@@ -134,7 +155,9 @@
 
   {:else if ensState.step === 'done'}
     <div class="p-3 rounded-lg border border-success/30 bg-success/10 text-success">
-      <p class="text-sm font-medium">{i18n.t('Name registered')}</p>
+      <p class="text-sm font-medium">
+        {i18n.t(ensState.linked ? 'Name attached to this profile' : 'Name registered')}
+      </p>
       <p class="text-sm font-mono break-all mt-1">{ensState.fullName}</p>
       {#if ensState.txHash}
         <p class="text-xs font-mono break-all mt-2">{ensState.txHash}</p>
@@ -145,9 +168,11 @@
         {/if}
       {/if}
     </div>
-    <p class="text-xs text-muted-foreground">
-      {i18n.t('The deposit is held by the registrar and can be returned after a year.')}
-    </p>
+    {#if !ensState.linked}
+      <p class="text-xs text-muted-foreground">
+        {i18n.t('The deposit is held by the registrar and can be returned after a year.')}
+      </p>
+    {/if}
     <button
       onclick={backToEnsForm}
       class="text-sm text-primary hover:underline text-left"
@@ -173,9 +198,28 @@
     {:else if ensState.isChecking}
       <p class="text-xs text-muted-foreground">{i18n.t('Checking...')}</p>
     {:else if ensState.taken}
-      <p class="text-xs text-destructive break-all">
-        {i18n.t('This name is already taken')} — {ensState.owner}
-      </p>
+      <div class="rounded-md border border-warning/30 bg-warning/10 p-3 space-y-1">
+        <p class="text-xs text-warning font-medium">{i18n.t('This name is already taken')}</p>
+        <p class="text-xs text-muted-foreground font-mono break-all">{ensState.owner}</p>
+        {#if ownedByMe}
+          <!--
+            The owner is this very wallet: the name was registered by another copy of the
+            profile, or by this one before its local data was reset. The contract refuses
+            a second registration — the owner is the user — so what is missing is only the
+            profile's own list of names.
+          -->
+          <p class="text-xs text-foreground">
+            {i18n.t('It belongs to this wallet. Attach it to this profile to use it here.')}
+          </p>
+          <button
+            onclick={attachExistingName}
+            disabled={ensState.isSending}
+            class="w-full py-1.5 mt-1 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition disabled:opacity-50"
+          >
+            {ensState.isSending ? i18n.t('Attaching…') : i18n.t('Attach to this profile')}
+          </button>
+        {/if}
+      </div>
     {:else if ensState.checkError}
       <p class="text-xs text-muted-foreground">{ensState.checkError}</p>
     {:else if ensState.price !== null}

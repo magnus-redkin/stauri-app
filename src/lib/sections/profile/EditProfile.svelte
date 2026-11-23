@@ -46,6 +46,16 @@
   let displayName = $state(originalDisplayName);
   let showCreateSeed = $state(false);
   let saveError = $state('');
+  /**
+   * Whether the identity block was saved in this visit.
+   *
+   * @remarks
+   * Shown as a line under the button. The button used to navigate to Home on success,
+   * which read as a failure: the pane vanished, the user landed on an unrelated About
+   * section, and the only visible effect was the button turning grey. Saving now leaves
+   * the user where they are and says what happened.
+   */
+  let savedName = $state(false);
 
   /**
    * ENS name the profile had when this pane opened.
@@ -125,6 +135,7 @@
       savedEns = ensOfProfile;
       avatarChanged = false;
       saveError = '';
+      savedName = true;
       return true;
     } catch (e) {
       saveError = formatError(e);
@@ -299,13 +310,17 @@
            secrets below have their own buttons. -->
       <button
         onclick={async () => {
-          if (await saveProfile()) onNavigate?.('home');
+          // Stays on this pane: leaving it made a successful save look like a failure.
+          await saveProfile();
         }}
         disabled={!isChanged || !!nameProblem}
         class="w-full py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {i18n.t('Save name settings')}
       </button>
+      {#if savedName && !isChanged}
+        <p class="text-xs text-success" aria-live="polite">{i18n.t('Saved')}</p>
+      {/if}
 
       <div class="border-t border-border pt-4 flex flex-col gap-3">
         <ChangePassword />

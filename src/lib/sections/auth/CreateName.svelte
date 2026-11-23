@@ -13,7 +13,7 @@
 
   let {
     /** Name to start from; the backend's default when nothing was chosen yet. */
-    initial = 'Stauri User',
+    initial = 'New stauri user',
     busy = false,
     error = '',
     onSave,

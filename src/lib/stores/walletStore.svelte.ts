@@ -31,6 +31,16 @@ export const walletState = $state({
   error: '',
   loaded: false,
   address: '',
+  /**
+   * Every account address of this profile, in backend order.
+   *
+   * @remarks
+   * `address` is the first of them and is what a transfer signs from. Anything that
+   * asks "does this profile own X?" — an ENS name, for instance — must look at the whole
+   * list: a name is registered against one of the profile's accounts, and which one is
+   * first is up to status-go.
+   */
+  addresses: [] as string[],
   balances: [] as WalletToken[],
   /**
    * Token prices: key `chainId-address` → price in the reporting currency.
@@ -160,6 +170,7 @@ export async function loadWallet(force = false) {
         publicKey: a.publicKey || '',
       }));
 
+    walletState.addresses = addresses;
     walletState.address = addresses[0] || '';
     if (addresses.length === 0) throw new Error('Wallet address not found');
 
@@ -370,6 +381,7 @@ export function resetWallet() {
   walletState.loaded = false;
   walletState.isRefreshing = false;
   walletState.address = '';
+  walletState.addresses = [];
   walletState.balances = [];
   // Prices belong to the profile session: foreign rates in the total of a new
   // session would look real.
