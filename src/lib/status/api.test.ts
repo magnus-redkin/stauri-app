@@ -61,7 +61,7 @@ describe('Status API', () => {
       expect(http.statusFetch).toHaveBeenCalledWith('CreateAccountAndLogin',
         expect.objectContaining({
           rootDataDir: '/tmp/data',
-          displayName: 'Stauri User',
+          displayName: 'New stauri user',
           password: 'supersecret',
           customizationColor: 'primary',
           statusProxyStageName: 'prod',

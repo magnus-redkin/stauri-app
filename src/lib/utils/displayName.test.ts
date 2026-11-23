@@ -3,7 +3,7 @@ import { displayNameError } from './displayName';
 
 describe('displayNameError — mirrors status-go ValidateDisplayName', () => {
   it('accepts names status-go accepts', () => {
-    expect(displayNameError('Stauri User')).toBeNull();
+    expect(displayNameError('New stauri user')).toBeNull();
     expect(displayNameError('Константин')).toBeNull();
     expect(displayNameError('magnus-redkin')).toBeNull();
     expect(displayNameError('user_name 12')).toBeNull();

@@ -126,7 +126,7 @@ export async function createAccountAndLogin(
 ): Promise<any> {
   const payload: Record<string, any> = {
     rootDataDir: dataDir,
-    displayName: "Stauri User",
+    displayName: "New stauri user",
     password,
     customizationColor: "primary",
     thirdpartyServicesEnabled: true,
@@ -204,7 +204,7 @@ export async function restoreAccountAndLogin(
 ): Promise<any> {
   const payload: Record<string, any> = {
     rootDataDir: dataDir,
-    displayName: "Stauri User",
+    displayName: "New stauri user",
     password,
     mnemonic: mnemonic.trim().toLowerCase().replace(/\s+/g, ' '),
     customizationColor: "primary",

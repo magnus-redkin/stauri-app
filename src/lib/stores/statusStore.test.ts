@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { statusState, setNetworkInfo, setAccounts, resetState, processSignal, waitForLogin } from './statusStore.svelte';
+import { statusState, setNetworkInfo, setAccounts, resetState, processSignal, waitForLogin, waitForNodeCrash } from './statusStore.svelte';
 import { startMessenger } from '$lib/status/api';
 
 // Mocks the API so processSignal makes no real requests.
@@ -172,6 +172,54 @@ describe('statusStore', () => {
       processSignal(JSON.stringify({
         type: 'node.login',
         event: { settings: { 'key-uid': 'uid-3', 'public-key': '0xabc' } }
+      }));
+
+      await expect(waiting).resolves.toBeUndefined();
+      expect(statusState.isLoggedIn).toBe(true);
+    });
+
+    it('отклоняет waitForLogin с причиной node.crashed', async () => {
+      // A crash arrives right after node.login on a failed start. Without settling the
+      // wait, the sign-in proceeded to wakuext_startMessenger, which waits for a node
+      // that is already gone — the screen stayed on "Restoring…" with no reason.
+      statusState.backendRunning = true;
+      const waiting = waitForLogin(30_000);
+
+      processSignal(JSON.stringify({
+        type: 'node.crashed',
+        event: { error: 'waku: cannot start relay' }
+      }));
+
+      await expect(waiting).rejects.toThrow('waku: cannot start relay');
+      expect(statusState.crashError).toBe('waku: cannot start relay');
+      expect(statusState.isLoggedIn).toBe(false);
+    });
+
+    it('waitForNodeCrash сразу отвечает на уже случившийся краш', async () => {
+      // The crash usually lands milliseconds after node.login, before the messenger
+      // call is even made: waiting for the next one would time out.
+      processSignal(JSON.stringify({ type: 'node.crashed', event: { error: 'boom' } }));
+
+      await expect(waitForNodeCrash(30_000)).resolves.toBeUndefined();
+    });
+
+    it('waitForNodeCrash срабатывает по сигналу', async () => {
+      const waiting = waitForNodeCrash(30_000);
+      processSignal(JSON.stringify({ type: 'node.crashed', event: { error: 'boom' } }));
+
+      await expect(waiting).resolves.toBeUndefined();
+    });
+
+    it('waitForLogin не наследует ошибку прошлого краша', async () => {
+      // A crash from an earlier attempt must not fail a healthy sign-in with a stale
+      // message.
+      processSignal(JSON.stringify({ type: 'node.crashed', event: { error: 'old crash' } }));
+      const waiting = waitForLogin(30_000);
+      expect(statusState.crashError).toBe('');
+
+      processSignal(JSON.stringify({
+        type: 'node.login',
+        event: { settings: { 'key-uid': 'uid-4', 'public-key': '0xabc' } }
       }));
 
       await expect(waiting).resolves.toBeUndefined();

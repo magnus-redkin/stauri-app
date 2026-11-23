@@ -13,6 +13,7 @@ import {
   statusState,
   setAccounts,
   setNetworkInfo,
+  setSeedSaved,
   waitForNodeStopped,
   waitForLogin,
 } from './statusStore.svelte';
@@ -66,7 +67,9 @@ vi.mock('./statusStore.svelte', () => ({
   setAccounts: vi.fn(),
   setNetworkInfo: vi.fn(),
   processSignal: vi.fn(),
+  setSeedSaved: vi.fn(),
   waitForLogin: vi.fn(),
+  waitForNodeCrash: vi.fn().mockResolvedValue(undefined),
   waitForNodeStopped: vi.fn(),
 }));
 
@@ -374,6 +377,9 @@ describe('restoreAccount', () => {
     // The whole point: restore would be refused with `keypair already added`.
     expect(restoreAccountAndLogin).not.toHaveBeenCalled();
     expect(startMessenger).toHaveBeenCalledTimes(1);
+    // The phrase was typed and accepted: the "seed phrase not saved" warning must not
+    // appear on a profile the user just restored from that very phrase.
+    expect(setSeedSaved).toHaveBeenCalledWith(true);
   });
 
   it('восстанавливает профиль, которого на устройстве нет', async () => {
@@ -385,6 +391,7 @@ describe('restoreAccount', () => {
     expect(outcome).toBe('restored');
     expect(restoreAccountAndLogin).toHaveBeenCalledWith('/data/mainnet', 'Passw0rd!', PHRASE);
     expect(loginAccount).not.toHaveBeenCalled();
+    expect(setSeedSaved).toHaveBeenCalledWith(true);
   });
 
   it('восстанавливает профиль, когда список профилей пуст', async () => {

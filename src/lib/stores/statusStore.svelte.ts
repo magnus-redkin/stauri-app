@@ -45,6 +45,16 @@ export const statusState = $state({
    */
   pendingContactUpdates: [] as any[],
   isSeedSaved: false,
+  /**
+   * Reason status-go gave in the last `node.crashed` signal.
+   *
+   * @remarks
+   * Kept because the crash is otherwise invisible: the node dies while the sign-in
+   * sequence is still running, the next RPC call waits for a node that will never
+   * answer, and the screen stays on "Restoring…" forever with no reason on it. The
+   * sign-in code checks this and fails with the text instead.
+   */
+  crashError: '',
 });
 
 /**
@@ -59,6 +69,8 @@ let loginPending: { resolve: () => void; reject: (e: Error) => void } | null = n
 let loginTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let stoppedResolver: (() => void) | null = null;
 let stoppedTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let crashResolver: (() => void) | null = null;
+let crashTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * One-line summary of a signal for the trace: counts and flags only.
@@ -91,6 +103,12 @@ function signalSummary(parsed: StatusEvent): string {
   if (parsed.type === 'waku.connection.status.change') {
     const event = (parsed as GenericEvent).event ?? {};
     return `state=${event.state ?? '?'} online=${event.isOnline ?? '?'}`;
+  }
+  if (parsed.type === 'node.crashed') {
+    // The reason is the whole point of the signal: without it the log says only
+    // "crashed" and the cause has to be guessed. Capped so one line cannot fill the file.
+    const reason = String((parsed as GenericEvent).event?.error ?? '?');
+    return `error=${reason.length > 300 ? `${reason.slice(0, 300)}…` : reason}`;
   }
   if (parsed.type === 'envelope.sent' || parsed.type === 'history.request.completed') {
     return `count=${(parsed as GenericEvent).event?.messages?.length ?? (parsed as GenericEvent).event?.count ?? 0}`;
@@ -159,6 +177,32 @@ export function processSignal(rawJson: string) {
       // connectionStore.login() after configureWalletRpc().
     }
 
+    if (parsed.type === 'node.crashed') {
+      const reason = String((parsed as GenericEvent).event?.error ?? 'the node crashed');
+      statusState.crashError = reason || 'the node crashed';
+      // The node is gone, so nothing is logged in any more. `node.crashed` is delivered
+      // right after `node.login` on a failed start (the login signal comes from the
+      // backend before the node finishes coming up), so `isLoggedIn` can already be true
+      // when the crash arrives.
+      statusState.isLoggedIn = false;
+      // Settle a pending sign-in with the real reason instead of letting the caller wait
+      // out its timeout and then hang on the next call to a node that no longer exists.
+      if (loginPending) {
+        if (loginTimeoutId) clearTimeout(loginTimeoutId);
+        const pending = loginPending;
+        loginPending = null;
+        loginTimeoutId = null;
+        pending.reject(new Error(`The node stopped: ${statusState.crashError}`));
+      }
+      if (crashResolver) {
+        if (crashTimeoutId) clearTimeout(crashTimeoutId);
+        const resolveCrash = crashResolver;
+        crashResolver = null;
+        crashTimeoutId = null;
+        resolveCrash();
+      }
+    }
+
     if (parsed.type === 'node.stopped') {
       // The node stopped: `isLoggedIn` no longer reflects reality. Without this a repeated
       // `waitForLogin()` would resolve at once on the stale flag, and a node restart would
@@ -218,9 +262,38 @@ export function waitForNodeStopped(timeoutMs = 15000): Promise<void> {
   });
 }
 
+/**
+ * Waits for the next `node.crashed` signal.
+ *
+ * @param timeoutMs - How long to wait before giving up.
+ * @returns Resolves on the signal, or on timeout (a missing crash is not an error).
+ * @remarks
+ * Paired with work that depends on a live node — `wakuext_startMessenger` is the one
+ * that hung forever: the RPC call waits for a node that crashed a moment earlier, and
+ * nothing bounds it. Racing the call against this settles the sequence with the reason
+ * status-go gave, instead of leaving the screen on "Restoring…".
+ */
+export function waitForNodeCrash(timeoutMs = 15000): Promise<void> {
+  return new Promise((resolve) => {
+    // A crash that already happened is the answer, not a reason to wait for another.
+    if (statusState.crashError) return resolve();
+    crashResolver = resolve;
+    crashTimeoutId = setTimeout(() => {
+      if (crashResolver === resolve) {
+        crashResolver = null;
+        crashTimeoutId = null;
+      }
+      resolve();
+    }, timeoutMs);
+  });
+}
+
 export function waitForLogin(timeoutMs = 30000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (statusState.isLoggedIn) return resolve();
+    // A crash from an earlier attempt says nothing about this one; keeping it would
+    // fail a healthy sign-in with a stale message.
+    statusState.crashError = '';
     loginPending = { resolve, reject };
     loginTimeoutId = setTimeout(() => {
       if (loginPending?.resolve === resolve) {
@@ -324,4 +397,5 @@ export function resetState() {
   statusState.pendingChatIds.clear();
   statusState.pendingContactUpdates = [];
   statusState.isSeedSaved = false;
+  statusState.crashError = '';
 }

@@ -10,7 +10,9 @@ import {
   statusState,
   setAccounts,
   setNetworkInfo,
+  setSeedSaved,
   waitForLogin,
+  waitForNodeCrash,
   waitForNodeStopped,
 } from './statusStore.svelte';
 import { invoke } from '@tauri-apps/api/core';
@@ -177,6 +179,46 @@ export async function switchNetwork(network: string): Promise<void> {
  * Restarting happens once only: a second pass would not change the outcome, and
  * a login loop is not acceptable.
  */
+/**
+ * Upper bound on `wakuext_startMessenger`.
+ *
+ * @remarks
+ * A healthy start answers in milliseconds; a fresh profile spends seconds fetching
+ * curated communities. Two minutes is far above both, and the bound exists only so a
+ * dead node cannot leave the screen waiting forever. A crash ends the wait at once
+ * through {@link startMessengerGuarded}.
+ */
+const MESSENGER_TIMEOUT_MS = 120_000;
+
+/**
+ * Starts the messenger, but gives up as soon as the node it talks to is gone.
+ *
+ * @remarks
+ * `wakuext_startMessenger` is the last step of every sign-in and the one that hung
+ * forever when status-go crashed right after `node.login`: the RPC call waits for a
+ * node that no longer exists, and neither the call nor the screen has a timeout. The
+ * race turns that into an error carrying the crash reason, so the recovery screen says
+ * what happened instead of showing "Restoring…" indefinitely.
+ */
+async function startMessengerGuarded(): Promise<void> {
+  let settled = false;
+  const messenger = startMessenger().finally(() => {
+    settled = true;
+  });
+  // If the crash wins the race this rejection would otherwise go unhandled.
+  messenger.catch(() => {});
+
+  await Promise.race([messenger, waitForNodeCrash(MESSENGER_TIMEOUT_MS)]);
+
+  if (!settled) {
+    throw new Error(
+      statusState.crashError
+        ? `The node stopped: ${statusState.crashError}`
+        : `The messenger did not start within ${MESSENGER_TIMEOUT_MS / 1000} seconds`
+    );
+  }
+}
+
 async function restartNodeForProviders(password: string, keyUid: string): Promise<boolean> {
   if (!statusState.backendRunning || !keyUid) return false;
 
@@ -197,7 +239,7 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
   await waitForLoginReady(30000);
 
   await configureWalletRpc();
-  await startMessenger();
+  await startMessengerGuarded();
   return true;
 }
 
@@ -267,7 +309,7 @@ export async function login(password: string, keyUid: string) {
   const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
-  await startMessenger();
+  await startMessengerGuarded();
 }
 
 /**
@@ -319,7 +361,7 @@ export async function createAccount(password: string) {
   const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
-  await startMessenger();
+  await startMessengerGuarded();
 }
 
 /**
@@ -367,6 +409,28 @@ export class LocalProfileLockedError extends Error {
 
 /** How the restore screen ended: opened an existing profile, or created a new one. */
 export type RestoreOutcome = 'opened' | 'restored';
+
+/**
+ * Whether the phrase belongs to a profile this device already holds.
+ *
+ * @param mnemonic - The twelve words.
+ * @returns `true` when the derived key uid is already in the local account list.
+ * @remarks
+ * The recovery screen needs the answer *before* the password is typed: it decides which
+ * choice to show. A profile that is here can only be opened with the password it was
+ * created with, so the screen offers "enter that password" or "create a new local copy".
+ * A profile that is not here has no old password to ask for — any password starts a fresh
+ * local copy, and offering a choice there would only confuse.
+ *
+ * The answer is an opinion, not a guarantee: the phrase may be valid while the account
+ * list is not loaded yet. A wrong `false` only hides the choice; the restore path still
+ * reports `LocalProfileLockedError` when the profile turns out to be local.
+ */
+export async function isMnemonicProfileLocal(mnemonic: string): Promise<boolean> {
+  const keyUid = await keyUidFromMnemonic(mnemonic).catch(() => null);
+  if (!keyUid) return false;
+  return statusState.accounts.some((a: any) => a?.['key-uid'] === keyUid);
+}
 
 /**
  * Whether a failed login of a local profile means its password is wrong.
@@ -450,6 +514,10 @@ export async function restoreAccount(
       throw new Error(reason);
     }
     await finishSignIn(password);
+    // The twelve words are on screen and were accepted: the phrase is known by
+    // definition, so the red "seed phrase not saved" warning would be a false alarm.
+    // The flag is per profile and a fresh local copy starts without it.
+    setSeedSaved(true);
     return 'opened';
   }
 
@@ -466,6 +534,8 @@ export async function restoreAccount(
   }
 
   await finishSignIn(password);
+  // Restored from the phrase itself: it is known, so the warning is not applicable.
+  setSeedSaved(true);
   return 'restored';
 }
 
@@ -499,15 +569,22 @@ export async function resetLocalProfileAndRestore(
   const keyUid = await keyUidFromMnemonic(mnemonic);
   if (!keyUid) throw new Error('The seed phrase is not valid');
 
-  info('[boot] resetLocalProfileAndRestore: deleting the local copy');
-  // The keystore lives under the profile directory, one folder per profile; `DeleteMultiaccount`
-  // removes exactly that folder together with the databases and the wrapped key.
-  const keyStoreDir = `${statusState.backendDataDir}/keystore/${keyUid}`;
-  await deleteProfile(keyUid, keyStoreDir);
+  // Deleting is only meaningful for a profile that is actually here. The screen offers
+  // the "new local copy" path to everyone (it is the only way in when the old password is
+  // forgotten), and for a profile that is not here the call would ask status-go to delete
+  // something that does not exist.
+  const isLocal = statusState.accounts.some((a: any) => a?.['key-uid'] === keyUid);
+  if (isLocal) {
+    info('[boot] resetLocalProfileAndRestore: deleting the local copy');
+    // The keystore lives under the profile directory, one folder per profile; `DeleteMultiaccount`
+    // removes exactly that folder together with the databases and the wrapped key.
+    const keyStoreDir = `${statusState.backendDataDir}/keystore/${keyUid}`;
+    await deleteProfile(keyUid, keyStoreDir);
 
-  // The account list still contains the deleted profile: without this the next
-  // `restoreAccount` would find it and try to log in again.
-  setAccounts(statusState.accounts.filter((a: any) => a?.['key-uid'] !== keyUid));
+    // The account list still contains the deleted profile: without this the next
+    // `restoreAccount` would find it and try to log in again.
+    setAccounts(statusState.accounts.filter((a: any) => a?.['key-uid'] !== keyUid));
+  }
 
   return restoreAccount(mnemonic, password);
 }
@@ -526,7 +603,7 @@ async function finishSignIn(password: string): Promise<void> {
   const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
 
-  await startMessenger();
+  await startMessengerGuarded();
 }
 
 /** Waits for the `node.login` signal. */

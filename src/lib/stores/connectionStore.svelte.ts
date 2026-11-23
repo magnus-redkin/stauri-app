@@ -20,6 +20,7 @@ export {
   createAccount,
   restoreAccount,
   resetLocalProfileAndRestore,
+  isMnemonicProfileLocal,
   disconnect,
 } from './connection.svelte';
 
