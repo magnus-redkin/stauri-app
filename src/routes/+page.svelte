@@ -24,6 +24,7 @@
     createAccount,
     restoreAccount,
     resetLocalProfileAndRestore,
+    isMnemonicProfileLocal,
     disconnect
   } from '$lib/stores/connectionStore.svelte';
 
@@ -547,6 +548,8 @@
     const outcome = await restoreAccount(mnemonic, password);
     info(`[boot] handleRestoreAccount: ${outcome}`);
     finishSignInUi(password);
+    // The value chosen on the recovery screen is this profile's PIN from now on.
+    await ensureEnvelope(password, statusState.accountKeyUid);
   }
 
   /**
@@ -564,6 +567,7 @@
     const outcome = await resetLocalProfileAndRestore(mnemonic, password);
     info(`[boot] handleResetProfile: ${outcome}`);
     finishSignInUi(password);
+    await ensureEnvelope(password, statusState.accountKeyUid);
   }
 
   /**
@@ -587,6 +591,17 @@
     mobileEditProfile = false;
     mobileSendProfile = false;
     showCreateSeed = false;
+    // The recovery screen is rendered by `entryPhase`, not only by `showRecovery`, and the
+    // entry branch is chosen while `sessionOpen` is false. Clearing only the flag left a
+    // successfully restored profile sitting on its own password screen with no message:
+    // the backend had logged it in, the interface never noticed. Same tail as
+    // `loginWithStoredPassword`.
+    sessionHasPin = false;
+    loginGrace = true;
+    sessionOpen = true;
+    entryPhase = { kind: 'login' };
+    entrySelected = null;
+    setTimeout(() => (loginGrace = false), 2500);
     activeSection = 'home';
   }
 
@@ -608,15 +623,6 @@
    * what catches it. Kept here rather than in the pad, so the pad stays a dumb keypad.
    */
   let entryPinFirst = $state('');
-  /**
-   * Whether the PIN being chosen converts an old profile rather than creating a new one.
-   *
-   * @remarks
-   * A profile from before this scheme has no envelope, and the password it was opened with
-   * is the only thing that can create one. The phrase is already saved for such a profile,
-   * so the seed screen is not shown again — only the PIN is added.
-   */
-  let pinUpgrade = $state(false);
   /**
    * Password for a profile that is about to be created.
    *
@@ -968,10 +974,6 @@
     entrySelected = profile;
     entryPin = '';
     entryPinFirst = '';
-    // Reset here as well as on the way out of the pad: the flag belongs to one profile,
-    // and a second profile opened from the list must not inherit it and skip the seed
-    // screen it still needs.
-    pinUpgrade = false;
     pendingPin = false;
     entryBusy = true;
     try {
@@ -1017,12 +1019,11 @@
         if (!opened) return;
         entryPin = '';
         entryPinFirst = '';
-        // A profile can be in this branch for exactly one reason: it was created before
-        // this scheme and has no envelope. Leaving it that way would mean the password
-        // is typed on every start, forever — so the PIN is asked for right now, while
-        // the password is in hand, and the profile ends up like any other.
-        pinUpgrade = true;
-        entryPhase = { kind: 'set-pin', profile: phase.profile, password };
+        // One credential per platform: the value just accepted IS the PIN — digits on a
+        // phone, a passphrase on a desktop. It is wrapped silently here. Asking to
+        // "choose a PIN" right after accepting a password asked for the same thing
+        // twice, and the screen read as "the password did not work".
+        await ensureEnvelope(password, phase.profile.keyUid);
       } finally {
         entryBusy = false;
       }
@@ -1095,16 +1096,6 @@
       sessionHasPin = true;
       sessionSlot = { network: entryNetwork, keyUid: phase.profile.keyUid };
       entryPhase = { kind: 'login' };
-      const upgraded = pinUpgrade;
-      pinUpgrade = false;
-      if (upgraded) {
-        // An old profile that just gained its PIN. Its phrase was saved back when the
-        // profile was created, so sending the user to the seed screen would be a step
-        // that asks them to redo something already done.
-        setSessionPassword(password);
-        activeSection = 'home';
-        return;
-      }
       // A profile that arrived over pairing is not signed in yet: the keys are on the
       // device, but this one still has to open the database with the password that
       // arrived. Landing on the profile section instead would show a session that does
@@ -1134,6 +1125,35 @@
     }
   }
 
+  /**
+   * Gives a profile an envelope without asking the user for anything extra.
+   *
+   * @param password - Value just typed and proven: the password at entry, or the one
+   *   chosen on the recovery screen.
+   * @param keyUid - Profile to cover.
+   *
+   * @remarks
+   * On both platforms the typed value *is* the PIN; only the creation policy differs
+   * (digits on a phone, four classes on a desktop). So a profile without an envelope gets
+   * one wrapping that same value, and the next start asks for it exactly once.
+   *
+   * A failure is not fatal: the profile still opens by password, which is the previous
+   * behaviour. It happens when the stored value does not satisfy the creation policy —
+   * a phone holding a legacy alphanumeric password, for instance.
+   */
+  async function ensureEnvelope(password: string, keyUid: string): Promise<void> {
+    if (!canStorePin || !keyUid || !password) return;
+    try {
+      if ((await pinState(entryNetwork, keyUid)) !== 'ready') {
+        await savePin(entryNetwork, keyUid, password, password);
+      }
+      sessionHasPin = true;
+      sessionSlot = { network: entryNetwork, keyUid };
+    } catch (e) {
+      info(`[entry] envelope not stored: ${formatError(e)}`);
+    }
+  }
+
   /** Leaves the PIN pad. */
   async function handlePinBack(): Promise<void> {
     const phase = entryPhase;
@@ -1147,7 +1167,6 @@
     }
     entryPin = '';
     entryPinFirst = '';
-    pinUpgrade = false;
     entryCreatePassword = '';
     entryError = '';
     entryPhase = { kind: 'login' };
@@ -1244,7 +1263,7 @@
    */
   function finishCreation(): void {
     const keyUid = statusState.accountKeyUid || selectedAccountKeyUid;
-    rememberProfileName(keyUid, statusState.alias || 'Stauri User');
+    rememberProfileName(keyUid, statusState.alias || 'New stauri user');
     entryPhase = { kind: 'login' };
     showCreateSeed = false;
     activeSection = 'home';
@@ -2037,6 +2056,8 @@ onSave={() => {
         }}
         onRestore={handleRestoreAccount}
         onReset={handleResetProfile}
+        onCheckLocal={isMnemonicProfileLocal}
+        pinRules={credentialRules}
       />
     {:else if entryPhase.kind === 'pairing-enter'}
       <!--
@@ -2073,9 +2094,9 @@ onSave={() => {
         onSkip={() => (entryPhase = { kind: 'create-name' })}
       />
     {:else if entryPhase.kind === 'create-name'}
-      <!-- The third step: a setting, not a prerequisite. Skipping keeps "Stauri User". -->
+      <!-- The third step: a setting, not a prerequisite. Skipping keeps "New stauri user". -->
       <CreateName
-        initial={statusState.alias || 'Stauri User'}
+        initial={statusState.alias || 'New stauri user'}
         busy={entryBusy}
         error={entryError}
         onSave={handleCreateName}
