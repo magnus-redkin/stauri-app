@@ -22,12 +22,12 @@
     { id: 'home', icon: Home, label: 'Home' },
     { id: 'profile', icon: User, label: 'Profile' },
     { id: 'chat', icon: MessageCircle, label: 'Chat' },
+    { id: 'wallet', icon: Wallet, label: 'Wallet' },
     // The community directory is a provider rather than a section of its own
     // (docs/ru/providers_and_dapps.md): it returns a list of addresses and the app performs
     // the join request. It lives in the dApps section instead of taking a place in the main
     // navigation next to what the user already has.
     { id: 'dapps', icon: Blocks, label: 'dApps' },
-    { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'market', icon: Store, label: 'Market' },
   ];
 </script>

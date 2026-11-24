@@ -85,17 +85,6 @@
     <div class="p-4 border-b border-border font-bold text-lg text-primary">
       {i18n.t('Profile')}
     </div>
-
-    <!-- Link to editing: on a wide screen the header has no pencil, only this link. -->
-    <div class="px-4 py-2 border-b border-border">
-    <button
-      type="button"
-      onclick={() => onEditProfile?.()}
-      class="text-sm font-medium text-primary hover:underline"
-    >
-      {i18n.t('Edit profile')}
-    </button>
-  </div>
   {/if}
 
   <ScrollArea class="flex-1 min-h-0 overflow-x-hidden">
