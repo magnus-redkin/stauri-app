@@ -54,6 +54,33 @@ echo "  versionName=$VERSION versionCode=$VC"
 pnpm tauri android build --apk --target aarch64 2>&1 | sed 's/^/  /'
 
 APK_SRC="$ANDROID_DIR/app/build/outputs/apk/universal/release/app-universal-release.apk"
+
+# Signing does not live in the generated project. `tauri android init` recreates
+# `src-tauri/gen/android/` without a signingConfigs block, so after any
+# regeneration Gradle builds an *unsigned* APK and the release step would stop
+# here. Signing the artefact ourselves keeps the release independent of the
+# generated project and of whatever Gradle happened to inherit.
+find_apksigner() {
+  command -v apksigner || ls -d "${ANDROID_HOME:-$HOME/Android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1
+}
+if [[ ! -f "$APK_SRC" ]]; then
+  UNSIGNED="$ANDROID_DIR/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk"
+  if [[ -f "$UNSIGNED" ]]; then
+    APKSIGNER="$(find_apksigner)"
+    if [[ -z "$APKSIGNER" ]]; then
+      echo "ERROR: APK собран без подписи, а apksigner не найден" >&2
+      exit 1
+    fi
+    echo "  подпись: $UNSIGNED → $(basename "$APK_SRC")"
+    "$APKSIGNER" sign \
+      --ks "$KS_PATH" \
+      --ks-key-alias "${STAURI_ANDROID_KEY_ALIAS:-stauri}" \
+      --ks-pass env:STAURI_ANDROID_KEYSTORE_PASSWORD \
+      --key-pass env:STAURI_ANDROID_KEYSTORE_PASSWORD \
+      --out "$APK_SRC" \
+      "$UNSIGNED"
+  fi
+fi
 if [[ ! -f "$APK_SRC" ]]; then
   echo "ERROR: APK не собран: $APK_SRC" >&2
   exit 1
@@ -64,7 +91,7 @@ cp "$APK_SRC" "$APK_PATH"
 echo "  apk: $(basename "$APK_PATH")"
 
 # Signature check: the APK must be signed with our key, not the debug key.
-APKSIGNER="$(command -v apksigner || ls -d "${ANDROID_HOME:-$HOME/Android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+APKSIGNER="$(find_apksigner)"
 if [[ -n "$APKSIGNER" ]]; then
   "$APKSIGNER" verify --print-certs "$APK_PATH" >/dev/null 2>&1 && echo "  ✓ подпись APK проверена" || {
     echo "ERROR: подпись APK не проходит apksigner verify" >&2
