@@ -85,6 +85,8 @@ What works today, and what is next. The list is short on purpose: only what shap
 **TODO**
 
 - Windows build.
+- `.eth` names in Stauri: register, renew and set records without a dApp
+  browser. Plan and stages: [`.eth` names](ens_eth.md).
 - Buying crypto for fiat (a placeholder now).
 - `window.ethereum` inside dApp windows.
 - Transaction history, NFTs, bridge.

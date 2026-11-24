@@ -85,6 +85,8 @@ Lo que funciona hoy y lo que viene. La lista es corta a propósito: solo lo que 
 **PENDIENTE**
 
 - Compilación para Windows.
+- Nombres `.eth` en Stauri: registrar, renovar y configurar registros sin un
+  navegador dApp. Plan y etapas: [nombres `.eth`](en/ens_eth.md).
 - Comprar cripto con dinero fiat (por ahora, marcador).
 - `window.ethereum` en las ventanas de dApp.
 - Historial de transacciones, NFT, puente.

@@ -85,6 +85,7 @@ ENS 是地址的可读名称：别人看到 `yourname.eth` 而不是一长串字
 **计划**
 
 - Windows 构建。
+- Stauri 中的 `.eth` 名称：注册、续期和设置记录，无需 dApp 浏览器。计划和阶段：[`.eth` 名称](en/ens_eth.md)。
 - 法币购买加密货币（目前为占位）。
 - dApp 窗口中的 `window.ethereum`。
 - 交易历史、NFT、跨链桥。

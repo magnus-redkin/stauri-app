@@ -212,12 +212,26 @@ ARCH=arm64 make -o build-libsds-android statusgo-android-library
 падает с `libsds.so is incompatible with aarch64linux`. Если `P` утерян,
 пересобери `libsds` командой выше и возьми `<out>/jni`.
 
-Копирование в проект (копии, не ссылки):
+Копирование в проект — в `src-tauri/binaries/android/`, **не** в `gen/`:
 
 ```bash
-cp -L <out>/jni/libsds.so    ~/ETH/stauri/stauri-app/src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libsds.so
-cp -L build/bin/libstatus.so.0 ~/ETH/stauri/stauri-app/src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libstatus.so
+mkdir -p ~/ETH/stauri/stauri-app/src-tauri/binaries/android/arm64-v8a
+cp -L <out>/jni/libsds.so      ~/ETH/stauri/stauri-app/src-tauri/binaries/android/arm64-v8a/libsds.so
+cp -L build/bin/libstatus.so.0 ~/ETH/stauri/stauri-app/src-tauri/binaries/android/arm64-v8a/libstatus.so
 ```
+
+Почему не в `gen/android`: этот каталог в `.gitignore`, `tauri android init`
+пересоздаёт его целиком, и всё, что лежало в `jniLibs`, пропадает. Именно так
+сборка однажды выпустила APK без `libstatus.so` — приложение запускалось, но
+бэкенд не загружался и создание профиля падало с «the backend is not running».
+
+`scripts/sync-android-native.sh` копирует файлы из
+`src-tauri/binaries/android/<abi>/` в `gen/android/app/src/main/jniLibs/<abi>/`
+при каждой сборке (его вызывает `beforeBuildCommand`), а если
+`arm64-v8a/libstatus.so` нет — останавливает сборку с ошибкой, а не выпускает
+нерабочий APK. `src-tauri/binaries/*` игнорируется git (см. `.gitignore`),
+поэтому сами библиотеки в репозиторий не попадают: их нужно получить по
+инструкции выше на каждой машине.
 
 ## 8. Android: APK
 
