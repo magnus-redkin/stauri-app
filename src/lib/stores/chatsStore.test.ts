@@ -25,6 +25,7 @@ import {
   channelIdFromInvite,
   communityIdFromInvite,
 } from '$lib/status/messaging';
+import { ensPublicKeyOf } from '$lib/status/wallet';
 
 // Mocks the messaging API. `communityChannels` and the predicates stay real: they are pure logic,
 // and mocking them would only test the mock.
@@ -45,8 +46,15 @@ vi.mock('$lib/status/messaging', async (importOriginal) => {
 });
 
 vi.mock('./statusStore.svelte', () => ({
-  statusState: { backendRunning: true, publicKey: '0xownkey' },
+  statusState: { backendRunning: true, publicKey: '0xownkey', chainId: 1 },
 }));
+
+// ENS resolution is a network call: the name-to-key lookup is mocked, the
+// key handling around it is not.
+vi.mock('$lib/status/wallet', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/status/wallet')>();
+  return { ...actual, ensPublicKeyOf: vi.fn() };
+});
 
 vi.mock('$lib/utils/user', () => ({
   getDisplayName: (entity: any) =>
@@ -661,6 +669,41 @@ describe('joinByInput: приглашения от контакта и кана�
 
   it('текст без ключа и ссылки — понятная ошибка', async () => {
     const result = await joinByInput('привет, как дела');
+    expect(result.status).toBe('failed');
+    expect(sendContactRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('joinByInput: имя .stateofus.eth', () => {
+  // The real key of stauri.stateofus.eth; Y ends in 0x3f, so the compressed
+  // prefix is 03.
+  const X = '98c24f13509037c1b0c236da7e7304463121130d455221fa17653da8c96cf837';
+  const Y = '0393f38a2abc5430d4f1d5be0b409d55c83fda618dcdaa65903a311edad2a33f';
+
+  beforeEach(() => {
+    resetChats();
+    vi.clearAllMocks();
+    (getChats as any).mockResolvedValue([]);
+    (getContacts as any).mockResolvedValue({ result: [] });
+    (sendContactRequest as any).mockResolvedValue({});
+    (ensPublicKeyOf as any).mockResolvedValue(`0x04${X}${Y}`);
+  });
+
+  it.each([
+    ['полное имя', 'stauri.stateofus.eth', 'stauri.stateofus.eth'],
+    ['голое имя', 'stauri', 'stauri.stateofus.eth'],
+  ])('%s — заявка по чат-ключу из записи', async (_label, input, expectedName) => {
+    const result = await joinByInput(input);
+    expect(result.status).toBe('contact');
+    expect(ensPublicKeyOf).toHaveBeenCalledWith(1, expectedName);
+    const [sentId] = (sendContactRequest as any).mock.calls[0];
+    // The uncompressed 0x04 key is compressed: odd Y gives the 03 prefix.
+    expect(sentId).toBe(`0x03${X}`);
+  });
+
+  it('имя без записи ключа — ошибка, запрос не отправлен', async () => {
+    (ensPublicKeyOf as any).mockResolvedValue('');
+    const result = await joinByInput('stauri.stateofus.eth');
     expect(result.status).toBe('failed');
     expect(sendContactRequest).not.toHaveBeenCalled();
   });

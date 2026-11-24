@@ -32,6 +32,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha3::{Digest, Keccak256};
 
 use crate::core::backend::Backend;
 use crate::core::error::{AppError, AppResult};
@@ -42,6 +43,13 @@ use crate::router::{
 /// `SendType` from `pkg/services/wallet/router/sendtype/send_type.go`:
 /// Transfer=0, ENSRegister=1, ENSRelease=2, ENSSetPubKey=3, StickersBuy=4,
 /// Bridge=5, ERC721Transfer=6, ERC1155Transfer=7, Swap=8, …
+///
+/// Only registration goes through the Router. The chat-key rewrite does not:
+/// the Router asks status-go for the resolver address, status-go asks the ENS
+/// Universal Resolver, and for `.stateofus.eth` that answers with a read-only
+/// resolver (`0x394d…` on mainnet) instead of the contract holding the records
+/// (`0x5FfC…`). The result is `execution reverted` on gas estimation. See
+/// [`update_ens_public_key`].
 const SEND_TYPE_ENS_REGISTER: u64 = 1;
 
 /// SNT/STT contract address per network.
@@ -156,6 +164,92 @@ fn full_name(username: &str) -> String {
     format!("{}.stateofus.eth", username.trim())
 }
 
+/// ENS `namehash`, as the registry computes it.
+///
+/// @param name - Full name, e.g. `stauri.stateofus.eth`.
+/// @returns The 32-byte node.
+/// @remarks
+/// Right to left, each label is hashed with keccak256 and folded into the
+/// running node: `node = keccak256(node ‖ keccak256(label))`. Needed because the
+/// chat-key rewrite builds its own `setPubkey(node, x, y)` calldata instead of
+/// going through the Router, which would compute the node internally.
+///
+/// Lowercased first: ENS names are case-insensitive, while a case-sensitive
+/// hash would produce a node nobody else looks at.
+fn namehash(name: &str) -> [u8; 32] {
+    let mut node = [0u8; 32];
+    let lower = name.trim().to_lowercase();
+    if lower.is_empty() {
+        return node;
+    }
+    for label in lower.split('.').rev() {
+        let label_hash = Keccak256::digest(label.as_bytes());
+        let mut hasher = Keccak256::new();
+        hasher.update(node);
+        hasher.update(label_hash);
+        node.copy_from_slice(&hasher.finalize());
+    }
+    node
+}
+
+/// `setPubkey(bytes32,bytes32,bytes32)` selector.
+const SET_PUBKEY_SELECTOR: &str = "29cd62ea";
+
+/// Resolver that holds the `.stateofus.eth` records.
+///
+/// @param chain_id - Network the name lives on.
+/// @returns The resolver address.
+/// @remarks
+/// Deliberately not asked from status-go: its lookup goes through the ENS
+/// Universal Resolver, which for these names answers with a resolver that can
+/// only read. The contract below is the one that holds the records — its
+/// `pubkey(node)` returns the stored key and its `setPubkey` accepts a call from
+/// the name owner.
+///
+/// Mainnet only: the same address has no code on Sepolia, and the Sepolia
+/// deployment has not been verified the same way.
+fn stateofus_resolver(chain_id: u64) -> AppResult<&'static str> {
+    match chain_id {
+        1 => Ok("0x5FfC014343cd971B7eb70732021E26C35B744cc4"),
+        _ => Err(AppError::config(
+            "rewriting the chat key is supported only on Ethereum mainnet",
+        )),
+    }
+}
+
+/// Calldata for `setPubkey(node, x, y)`.
+///
+/// @param full_name - Name including the domain.
+/// @param public_key - Uncompressed chat key, `0x04` + X + Y.
+/// @returns `0x` + selector + node + X + Y.
+/// @remarks
+/// Coordinates are copied as the hex text they already are; nothing is decoded
+/// and re-encoded, so the bytes on chain are exactly the bytes of the key.
+///
+/// # Errors
+/// `ErrorKind::Backend` when the key is not an uncompressed public key — the
+/// resolver would store zero coordinates, and the name would keep resolving to
+/// a key no client holds.
+fn set_pubkey_calldata(full_name: &str, public_key: &str) -> AppResult<String> {
+    let key = strip_hex_prefix(public_key);
+    if key.len() != 130 || !key.starts_with("04") {
+        return Err(AppError::backend(
+            "profile chat key is not an uncompressed public key",
+        ));
+    }
+
+    let node = namehash(full_name);
+    let mut data = String::with_capacity(2 + SET_PUBKEY_SELECTOR.len() + 64 * 3);
+    data.push_str("0x");
+    data.push_str(SET_PUBKEY_SELECTOR);
+    for byte in node {
+        data.push_str(&format!("{byte:02x}"));
+    }
+    data.push_str(&key[2..66]);
+    data.push_str(&key[66..130]);
+    Ok(data)
+}
+
 /// The name in the form `ens_ownerOf` expects.
 ///
 /// Two reads of the same name hash it differently in status-go, as written in
@@ -215,18 +309,52 @@ fn route_params(
     }))
 }
 
-/// Public key of the wallet — taken from the profile accounts, not from the
-/// frontend.
+/// The chat public key of the profile — the key messages are encrypted to.
+///
+/// @remarks
+/// This is the value Status clients read from the name when they send a contact
+/// request or a message: `PublicKeyOf` in status-go returns the resolver's
+/// `pubkey(bytes32)` record, and the official client compares it with its own
+/// `settings.public-key`. Writing any other key leaves the name resolvable but
+/// silent — the request is sent, and nobody is listening on it.
+///
+/// Deliberately not taken from `accounts_getAccounts`: that list answers with
+/// the public key of each **wallet** account, and a wallet key is not the chat
+/// identity. The two are different keys derived from the same seed phrase, so
+/// the wallet key derives to the wallet's address and decrypts nothing addressed
+/// to the profile.
 ///
 /// `ExtractCoordinates` in status-go splits the string as `0x04` + X + Y, so
 /// only that form is accepted: another key would make registration assemble
 /// calldata full of zeros, recording the name against a garbage public key.
 ///
 /// # Errors
-/// `ErrorKind::Backend` when the accounts cannot be listed or the matching
-/// account has no usable key; `ErrorKind::Config` when the account is not part
-/// of this profile.
-async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
+/// `ErrorKind::Backend` when the settings cannot be read or carry no usable key.
+async fn chat_key(backend: Backend) -> AppResult<String> {
+    let settings = backend.call("settings_getSettings", json!([])).await?;
+    let key = settings
+        .get("public-key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let key = strip_hex_prefix(key);
+    if key.len() != 130 || !key.starts_with("04") {
+        return Err(AppError::backend(
+            "profile has no usable chat public key for ENS",
+        ));
+    }
+    Ok(format!("0x{key}"))
+}
+
+/// Whether `from` is one of the profile's wallet accounts.
+///
+/// The name is owned by a wallet address and the transaction is signed with its
+/// key, so an address from another profile would fail later with an opaque
+/// signing error. Refused early, with a sentence that names the problem.
+///
+/// # Errors
+/// `ErrorKind::Backend` when the accounts cannot be listed; `ErrorKind::Config`
+/// when the address is not part of this profile.
+async fn ensure_account_member(backend: Backend, from: &str) -> AppResult<()> {
     let accounts = backend.call("accounts_getAccounts", json!([])).await?;
     let list = accounts
         .as_array()
@@ -237,21 +365,9 @@ async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
             .get("address")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if !address.eq_ignore_ascii_case(from) {
-            continue;
+        if address.eq_ignore_ascii_case(from) {
+            return Ok(());
         }
-        let key = account
-            .get("public-key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        // Without `0x04…` the Router cannot parse the coordinates.
-        let key = strip_hex_prefix(key);
-        if key.len() != 130 || !key.starts_with("04") {
-            return Err(AppError::backend(
-                "wallet account has no usable public key for ENS",
-            ));
-        }
-        return Ok(format!("0x{key}"));
     }
 
     Err(AppError::config("account not found in this profile"))
@@ -268,11 +384,7 @@ async fn public_key_of(backend: Backend, from: &str) -> AppResult<String> {
 /// or the chain has no registrar; `ErrorKind::Backend` when the price or the
 /// owner cannot be read.
 #[tauri::command]
-pub async fn get_ens_quote(
-    chain_id: u64,
-    from: String,
-    username: String,
-) -> AppResult<EnsQuote> {
+pub async fn get_ens_quote(chain_id: u64, from: String, username: String) -> AppResult<EnsQuote> {
     let backend = Backend::new();
     validate_username(&username)?;
     if !is_address(&from) {
@@ -316,7 +428,7 @@ pub async fn get_ens_quote(
     // unavailable) — that is not a reason to refuse the price and availability,
     // but showing zero instead of "unknown" is not acceptable either.
     let mut fee: Option<String> = None;
-    if let Ok(public_key) = public_key_of(backend, &from).await {
+    if let Ok(public_key) = chat_key(backend).await {
         let uuid = unique_uuid();
         if let Ok(params) = route_params(&uuid, chain_id, &from, name, &public_key, price)
             && let Ok(route) = backend
@@ -353,8 +465,7 @@ fn route_fee(route: &Value) -> Option<String> {
 /// comes back.
 #[tauri::command]
 pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegisterResult> {
-    let backend =
-        Backend::new();
+    let backend = Backend::new();
     validate_username(&request.username)?;
     if !is_address(&request.from) {
         return Err(AppError::config("invalid wallet address"));
@@ -365,7 +476,8 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
     snt_address(request.chain_id)?;
 
     let name = request.username.trim();
-    let public_key = public_key_of(backend, &request.from).await?;
+    ensure_account_member(backend, &request.from).await?;
+    let public_key = chat_key(backend).await?;
 
     // The price comes from the contract, not the frontend: the registrar
     // decides the approve amount, and any other figure would be rejected.
@@ -400,6 +512,128 @@ pub async fn register_ens_name(request: EnsRegisterRequest) -> AppResult<EnsRegi
     Ok(EnsRegisterResult {
         tx_hash,
         full_name: full_name(name),
+    })
+}
+
+/// Request to rewrite the chat key recorded on a name.
+///
+/// @remarks
+/// Same fields as registration, different transaction: `setPubkey` on the
+/// resolver instead of a registration. The name must already belong to `from` —
+/// the contract rejects anyone else.
+#[derive(Debug, Deserialize)]
+pub struct EnsUpdateKeyRequest {
+    pub chain_id: u64,
+    /// Wallet address that owns the name and signs the transaction.
+    pub from: String,
+    /// Name without the domain: `myname` → `myname.stateofus.eth`.
+    pub username: String,
+    /// Profile password. Used only inside this call.
+    pub password: String,
+}
+
+/// Rewrites the chat key recorded on an existing name.
+///
+/// # Errors
+/// `ErrorKind::Config` for a stopped backend, an invalid name, a bad wallet
+/// address, an empty password or an unsupported chain; `ErrorKind::Backend`
+/// when a backend call fails, the chat key is unusable, or no transaction hash
+/// comes back.
+///
+/// @remarks
+/// Separate from registration because the two are different on-chain writes:
+/// this one touches only the resolver record, costs gas and no deposit, and does
+/// not extend the name. Needed for names registered by builds that wrote a
+/// wallet key instead of the profile's chat key — such a name resolves, but
+/// everything addressed to it goes to a key no client holds.
+#[tauri::command]
+pub async fn update_ens_public_key(request: EnsUpdateKeyRequest) -> AppResult<EnsRegisterResult> {
+    let backend = Backend::new();
+    validate_username(&request.username)?;
+    if !is_address(&request.from) {
+        return Err(AppError::config("invalid wallet address"));
+    }
+    if request.password.is_empty() {
+        return Err(AppError::config("password is required"));
+    }
+    let resolver = stateofus_resolver(request.chain_id)?;
+
+    let name = request.username.trim();
+    ensure_account_member(backend, &request.from).await?;
+    let public_key = chat_key(backend).await?;
+
+    let full = full_name(name);
+    let data = set_pubkey_calldata(&full, &public_key)?;
+    // Diagnostic: not secrets — the address, the name, the contracts. A
+    // reverting `setPubkey` is either a sender that does not own the name or a
+    // call to the wrong contract, and these values tell the two apart.
+    tracing::info!(
+        "[ens] setPubkey: from={} name={} resolver={} calldata_bytes={}",
+        request.from,
+        full,
+        resolver,
+        (data.len() - 2) / 2
+    );
+
+    // 1. Build. The Router is not used here on purpose: see
+    //    SEND_TYPE_ENS_REGISTER. `wallet_buildTransaction` takes arbitrary
+    //    calldata and computes nonce and gas, exactly as for a transfer.
+    let args = json!({
+        "from": request.from,
+        "to": resolver,
+        "value": "0x0",
+        "data": data,
+    });
+    let built = backend
+        .call(
+            "wallet_buildTransaction",
+            json!([request.chain_id, args.to_string()]),
+        )
+        .await?;
+
+    let message = built
+        .get("messageToSign")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::backend("backend returned no hash to sign"))?
+        .to_string();
+    let tx_args = built
+        .get("txArgs")
+        .cloned()
+        .ok_or_else(|| AppError::backend("backend returned no transaction arguments"))?;
+
+    // 2. Sign. The password lives only inside this call.
+    let signature = backend
+        .call(
+            "wallet_signMessage",
+            json!([message, request.from, request.password]),
+        )
+        .await?
+        .as_str()
+        .ok_or_else(|| AppError::backend("backend returned no signature"))?
+        .to_string();
+
+    // 3. Send. The signature goes without `0x`: status-go parses it with
+    //    `hex.DecodeString`, which rejects the prefix.
+    let sent = backend
+        .call(
+            "wallet_sendTransactionWithSignature",
+            json!([
+                request.chain_id,
+                "WalletTransfer",
+                tx_args.to_string(),
+                strip_hex_prefix(&signature)
+            ]),
+        )
+        .await?;
+
+    let tx_hash = sent.as_str().unwrap_or_default().to_string();
+    if tx_hash.is_empty() {
+        return Err(AppError::backend("backend returned no transaction hash"));
+    }
+
+    Ok(EnsRegisterResult {
+        tx_hash,
+        full_name: full,
     })
 }
 
@@ -492,6 +726,46 @@ mod tests {
         assert_eq!(params["username"], "myname");
         assert_eq!(params["fromChainID"], 11155111);
         assert_eq!(params["toChainID"], 11155111);
+    }
+
+    /// The node the transaction writes to must be the one the registry uses.
+    /// Reference value from `cast namehash stauri.stateofus.eth`.
+    #[test]
+    fn namehash_matches_the_registry() {
+        let node = namehash("stauri.stateofus.eth");
+        let hex: String = node.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "eba8de136a68d214256b2d7192944eeb9e26df3e81f1a616da59cb17cb79b0cd"
+        );
+
+        // The ENS root hashes to zero.
+        assert_eq!(namehash(""), [0u8; 32]);
+        // Case does not change the node: names are case-insensitive.
+        assert_eq!(namehash("Stauri.StateOfUs.ETH"), node);
+    }
+
+    /// Selector, node and two coordinates — 4 + 32 + 32 + 32 bytes. A shorter
+    /// calldata would write garbage coordinates into the resolver.
+    #[test]
+    fn calldata_carries_selector_node_and_coordinates() {
+        let key = format!("0x04{}{}", "aa".repeat(32), "bb".repeat(32));
+        let data = set_pubkey_calldata("stauri.stateofus.eth", &key).expect("calldata");
+
+        assert!(data.starts_with("0x29cd62ea"), "setPubkey selector");
+        assert_eq!((data.len() - 2) / 2, 4 + 32 + 32 + 32);
+        // Coordinates are copied verbatim, not re-derived.
+        assert!(data.ends_with(&format!("{}{}", "aa".repeat(32), "bb".repeat(32))));
+    }
+
+    #[test]
+    fn calldata_refuses_a_compressed_or_short_key() {
+        assert!(set_pubkey_calldata("stauri.stateofus.eth", "0x04aa").is_err());
+        // Compressed keys start with 02/03: the resolver expects 0x04 + X + Y.
+        assert!(
+            set_pubkey_calldata("stauri.stateofus.eth", &format!("0x02{}", "aa".repeat(32)))
+                .is_err()
+        );
     }
 
     #[test]

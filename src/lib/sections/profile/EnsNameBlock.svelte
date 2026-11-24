@@ -28,17 +28,26 @@
     goToConfirm,
     registerName,
     attachExistingName,
-    backToEnsForm,
+    resetEnsForm,
+    setEnsDomain,
+    fullEnsName,
+    ENS_DOMAINS,
     chainBalances,
-    ENS_DOMAIN,
+    backToEnsForm,
   } from '$lib/stores/ensStore.svelte';
   import { formatUnits } from '$lib/utils/amount';
   import { CHAIN_NAMES } from '$lib/utils/assetGroups';
   import { explorerTxUrl } from '$lib/utils/explorer';
   import PasswordInput from '$lib/sections/auth/PasswordInput.svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { onMount } from 'svelte';
 
   let passwordInput = $state('');
+
+  // Every visit starts from an empty form: a price, a "taken" answer or a
+  // "Name registered" banner left over from the previous visit would describe a
+  // name the user is no longer looking at.
+  onMount(resetEnsForm);
 
   const chainId = $derived(statusState.chainId);
   const chainName = $derived(CHAIN_NAMES[chainId] ?? String(chainId));
@@ -48,7 +57,20 @@
   const stakeSymbol = $derived(chainId === 11155111 ? 'STT' : 'SNT');
 
   const nameError = $derived(usernameError(ensState.username));
-  const canReview = $derived(!!ensState.username.trim() && !nameError && supported);
+  // A taken name cannot be registered: the contract refuses it, and the
+  // confirmation screen would only say so after the password step. Kept out of
+  // reach here, where the reason is already on screen. Registration itself is
+  // the Status registrar only; a plain `.eth` name is attached, not bought.
+  const canReview = $derived(
+    ensState.domain === 'stateofus.eth' &&
+      !!ensState.username.trim() &&
+      !nameError &&
+      supported &&
+      !ensState.taken
+  );
+
+  const isStatusDomain = $derived(ensState.domain === 'stateofus.eth');
+  const fullName = $derived(fullEnsName(ensState.username));
 
   /**
    * Balances that decide whether registration can succeed.
@@ -181,6 +203,32 @@
     </button>
 
   {:else if ensState.step === 'form'}
+    <!--
+      The domain decides what the name means. `.stateofus.eth` is the Status
+      registrar, paid in SNT/STT and bought in Stauri; `.eth` is the regular ENS
+      domain, which Stauri can attach but not register yet. Defaults to the
+      registrar, since that is the flow that works end to end here.
+    -->
+    <div
+      class="flex items-center gap-4 text-sm"
+      role="radiogroup"
+      aria-label={i18n.t('Domain')}
+    >
+      {#each ENS_DOMAINS as domain}
+        <label class="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="radio"
+            name="ens-domain"
+            value={domain}
+            checked={ensState.domain === domain}
+            onchange={() => setEnsDomain(domain)}
+            class="accent-primary"
+          />
+          <span class="font-mono text-xs">.{domain}</span>
+        </label>
+      {/each}
+    </div>
+
     <div class="flex items-center gap-2">
       <input
         id="ens-name"
@@ -190,7 +238,7 @@
         spellcheck="false"
         class="flex-1 h-10 border border-input rounded-md px-3 bg-background font-mono text-sm"
       />
-      <span class="text-sm text-muted-foreground shrink-0">.{ENS_DOMAIN}</span>
+      <span class="text-sm text-muted-foreground shrink-0">.{ensState.domain}</span>
     </div>
 
     {#if nameError && ensState.username.trim()}
@@ -222,55 +270,69 @@
       </div>
     {:else if ensState.checkError}
       <p class="text-xs text-muted-foreground">{ensState.checkError}</p>
-    {:else if ensState.price !== null}
+    {:else if isStatusDomain && ensState.price !== null}
       <p class="text-xs text-muted-foreground">
         {i18n.t('Available')} — {formatUnits(ensState.price, 18)} {stakeSymbol}
       </p>
+    {:else if !isStatusDomain && ensState.checkedName === fullName}
+      <p class="text-xs text-muted-foreground">{i18n.t('Available')}</p>
     {/if}
 
-    <button
-      disabled={!canReview}
-      onclick={goToConfirm}
-      class="w-full py-2 border border-border rounded-md text-sm font-medium disabled:opacity-50"
-    >
-      {i18n.t('Register')}
-    </button>
+    {#if isStatusDomain}
+      <button
+        disabled={!canReview}
+        onclick={goToConfirm}
+        class="w-full py-2 border border-border rounded-md text-sm font-medium disabled:opacity-50"
+      >
+        {i18n.t('Register')}
+      </button>
 
-    <!--
-      What the account holds. Without it the only answer to "why does this not go through"
-      would be an error after the button is pressed: the route is not built without the
-      stake, and the fee stays unknown.
-    -->
-    <div class="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
-      <span>
-        {stakeSymbol}:
-        <span class="font-mono {stakeShort ? 'text-destructive' : ''}">
-          {#if balances.stake !== null}
-            {formatUnits(balances.stake, 18)}
-          {:else}
-            —
-          {/if}
+      <!--
+        What the account holds. Without it the only answer to "why does this not go through"
+        would be an error after the button is pressed: the route is not built without the
+        stake, and the fee stays unknown.
+      -->
+      <div class="text-xs text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
+        <span>
+          {stakeSymbol}:
+          <span class="font-mono {stakeShort ? 'text-destructive' : ''}">
+            {#if balances.stake !== null}
+              {formatUnits(balances.stake, 18)}
+            {:else}
+              —
+            {/if}
+          </span>
         </span>
-      </span>
-      <span>
-        ETH:
-        <span class="font-mono {nativeShort ? 'text-destructive' : ''}">
-          {#if balances.native !== null}
-            {formatUnits(balances.native, 18)}
-          {:else}
-            —
-          {/if}
+        <span>
+          ETH:
+          <span class="font-mono {nativeShort ? 'text-destructive' : ''}">
+            {#if balances.native !== null}
+              {formatUnits(balances.native, 18)}
+            {:else}
+              —
+            {/if}
+          </span>
         </span>
-      </span>
-    </div>
+      </div>
 
-    {#if stakeShort}
-      <p class="text-xs text-destructive">
-        {i18n.t('Not enough for the deposit')} — {i18n.t('Top up the wallet first')}
-      </p>
-    {:else if nativeShort}
-      <p class="text-xs text-destructive">
-        {i18n.t('No ETH on this network to pay the network fee')}
+      {#if stakeShort}
+        <p class="text-xs text-destructive">
+          {i18n.t('Not enough for the deposit')} — {i18n.t('Top up the wallet first')}
+        </p>
+      {:else if nativeShort}
+        <p class="text-xs text-destructive">
+          {i18n.t('No ETH on this network to pay the network fee')}
+        </p>
+      {/if}
+    {:else}
+      <!--
+        Buying a `.eth` name is a different contract with a commit/register pair
+        and a 60-second wait (docs/en/ens_eth.md). Until that exists here, the
+        honest offer is to find out whether the name is already yours and to
+        attach it.
+      -->
+      <p class="text-xs text-muted-foreground">
+        {i18n.t('Stauri cannot register .eth names yet. Register it in a dApp browser, then attach it here.')}
       </p>
     {/if}
 
@@ -284,7 +346,7 @@
       </div>
       <div class="p-2">
         <div class="text-xs text-muted-foreground">{i18n.t('Name')}</div>
-        <div class="font-mono break-all mt-1">{ensState.username.trim()}.{ENS_DOMAIN}</div>
+        <div class="font-mono break-all mt-1">{fullName}</div>
       </div>
       <div class="p-2 flex justify-between gap-3">
         <span class="text-xs text-muted-foreground">{i18n.t('Deposit')}</span>

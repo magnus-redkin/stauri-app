@@ -30,6 +30,7 @@ import {
   validateChannelInput,
   type CreateChannelParams,
 } from '$lib/status/akk';
+import { ensPublicKeyOf } from '$lib/status/wallet';
 import { getDisplayName } from '$lib/utils/user';
 import { isMutual } from '$lib/status/contactState';
 import { scenarioLog, short } from '$lib/utils/scenario';
@@ -465,6 +466,51 @@ export async function requestContactById(rawKey: string): Promise<JoinResult> {
 }
 
 /**
+ * Sends a contact request to a `.stateofus.eth` name.
+ *
+ * @param label - Name as typed: `stauri` or `stauri.stateofus.eth`.
+ * @returns `contact` when the request went out, otherwise the reason.
+ * @remarks
+ * A name is only a pointer: the key to write to is the `pubkey` record behind
+ * it. `ens_publicKeyOf` reads that record and answers with an uncompressed key
+ * (`0x04` + X + Y), while `sendContactRequest` expects a compressed one
+ * (`0x02`/`0x03` + X), so the key is compressed here: the parity of Y's last
+ * byte decides the prefix. Sending the uncompressed form is refused by
+ * status-go as an invalid key type.
+ *
+ * A name without a key record is not an error of the network: the name exists,
+ * but nobody wrote a key, so there is nowhere to send a request.
+ */
+async function requestContactByEnsName(label: string): Promise<JoinResult> {
+  if (!statusState.backendRunning) return { status: 'failed', error: 'Backend is not running' };
+
+  const name = label.includes('.') ? label : `${label}.stateofus.eth`;
+  try {
+    const key = await ensPublicKeyOf(statusState.chainId, name);
+    if (!/^0x04[0-9a-fA-F]{128}$/.test(key)) {
+      return {
+        status: 'failed',
+        error: `У имени ${name} не записан чат-ключ: писать некуда`,
+      };
+    }
+
+    const x = key.slice(4, 68);
+    const prefix = parseInt(key.slice(-2), 16) % 2 === 0 ? '02' : '03';
+    const compressed = `0x${prefix}${x}`;
+
+    scenarioLog('reply-sync', 'contact-request-1-start', { contact: short(compressed) });
+    await sendContactRequest(compressed, '');
+    scenarioLog('reply-sync', 'contact-request-2-sent', { contact: short(compressed) });
+    await loadChats(true);
+    return { status: 'contact', name };
+  } catch (e) {
+    const error = formatError(e, `Не удалось отправить запрос на ${name}`);
+    scenarioLog('reply-sync', 'contact-request-error', { error }, 'warn');
+    return { status: 'failed', error };
+  }
+}
+
+/**
  * Opens a community for reading without joining (`wakuext_spectateCommunity`).
  *
  * Sets `Spectated = true`, initialises filters and creates `Chat` rows for the channels, which is
@@ -740,12 +786,21 @@ export async function joinByInput(raw: string): Promise<JoinResult> {
     return await spectateCommunityById(value);
   }
 
+  // A `.stateofus.eth` name, with or without the domain. There is no catalogue
+  // of names to search, but a name carries a chat key on chain, so a request
+  // can be sent to it exactly like to a bare key. Handled after the link and
+  // key shapes above, so `status.app/…` and `zQ3…` never reach here.
+  const ensName = value.match(/^([a-zA-Z0-9-]{3,31})(?:\.stateofus\.eth)?$/);
+  if (ensName) {
+    return await requestContactByEnsName(ensName[1]);
+  }
+
   // A Telegram profile or channel link is deliberately not handled here: it is an external source,
   // not a Status channel. See providers_and_dapps.md §9.
   return {
     status: 'failed',
     error:
-      'Вставьте ссылку на канал (status.app/cc/…). Найти канал по имени нельзя: каталога каналов нет.',
+      'Не удалось разобрать ввод. Вставьте ссылку на канал (status.app/cc/…), код контакта (zQ3…) или имя (name.stateofus.eth).',
   };
 }
 

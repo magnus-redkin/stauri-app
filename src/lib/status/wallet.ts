@@ -573,6 +573,57 @@ export async function ensExpireAt(
   return res.result || '';
 }
 
+/**
+ * Owner of a name according to the ENS registry.
+ *
+ * @param chainId - Chain to read on.
+ * @param username - Full name, e.g. `stauri.eth`.
+ * @returns The owner address, or the zero address when the name is free.
+ * @remarks
+ * Works for any `.eth` name, unlike the Status registrar calls, which only know
+ * `.stateofus.eth`. A wrapped name reports the NameWrapper as its owner — the
+ * registry owner is what the contract says, not the person.
+ */
+export async function ensOwnerOf(
+  chainId: number,
+  username: string
+): Promise<string> {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
+    jsonrpc: '2.0',
+    id: 22,
+    method: 'ens_ownerOf',
+    params: [chainId, username],
+  });
+  return res.result || '';
+}
+
+/**
+ * Chat key recorded on a name.
+ *
+ * @param chainId - Chain to resolve on.
+ * @param username - Full name, e.g. `stauri.stateofus.eth`.
+ * @returns Uncompressed key, `0x04` + X + Y; empty when the record is absent.
+ * @remarks
+ * This is the record Status clients read when someone writes to a name: the
+ * name itself is only a pointer, and messages go to the key stored here.
+ *
+ * `ens_publicKeyOf` → `EnsResolver.PublicKeyOf` (status-go
+ * pkg/services/ens/api.go), which reads `pubkey(bytes32)` and answers with
+ * `0x04…`; the empty string means the name exists but no key was written.
+ */
+export async function ensPublicKeyOf(
+  chainId: number,
+  username: string
+): Promise<string> {
+  const res = await statusFetch<{ result?: string }>('CallRPC', {
+    jsonrpc: '2.0',
+    id: 21,
+    method: 'ens_publicKeyOf',
+    params: [chainId, username],
+  });
+  return res.result || '';
+}
+
 // ===========================================================================
 // PRICES
 // ===========================================================================

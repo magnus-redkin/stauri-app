@@ -21,9 +21,9 @@ use tauri::Manager;
 mod appdirs;
 // The safety core: keys, envelopes, status-go FFI, pairing. See `core/mod.rs` for what
 // belongs there and what deliberately does not.
-mod core;
 mod commands;
 mod config;
+mod core;
 mod dapp;
 mod ens;
 mod env;
@@ -155,6 +155,7 @@ pub fn run() {
             transfer::estimate_transfer_fee,
             ens::get_ens_quote,
             ens::register_ens_name,
+            ens::update_ens_public_key,
             swap::get_swap_quote,
             swap::swap_tokens,
             swap::native_token_address
