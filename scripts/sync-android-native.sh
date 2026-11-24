@@ -86,7 +86,32 @@ MANIFEST="$GEN/AndroidManifest.xml"
 if ! grep -q 'android:allowBackup=' "$MANIFEST"; then
   # Backups carry the databases but never the keystore key, so a restored profile
   # would be unopenable. See CredentialVault for the whole scheme.
-  perl -0pi -e 's/(<application\n)(\s+)/$1$2android:allowBackup="false"\n$2android:networkSecurityConfig"\@xml\/network_security_config"\n$2/' "$MANIFEST"
+  perl -0pi -e 's/(<application\n)(\s+)/$1$2android:allowBackup="false"\n$2android:networkSecurityConfig="\@xml\/network_security_config"\n$2/' "$MANIFEST"
+fi
+
+# Native libraries. `tauri android init` recreates the whole tree, and the jniLibs it
+# had are not restored: without `libstatus.so` the backend cannot load (the app reports
+# "the backend is not running"), and without `libsds.so` status-go crashes at startup.
+# The files are large (87 MB and 0.8 MB), so they live outside git — in
+# `src-tauri/binaries/android/`, ignored by the same rule as the desktop builds — and
+# are copied in on every build. See docs/BUILDING.md.
+NATIVE_SRC="$ROOT/src-tauri/binaries/android"
+NATIVE_DST="$GEN_ROOT/app/src/main/jniLibs"
+if [[ -d "$NATIVE_SRC" ]]; then
+  for abi_dir in "$NATIVE_SRC"/*/; do
+    [[ -d "$abi_dir" ]] || continue
+    abi="$(basename "$abi_dir")"
+    mkdir -p "$NATIVE_DST/$abi"
+    cp -f "$abi_dir"/*.so "$NATIVE_DST/$abi/" 2>/dev/null || true
+    echo "  native libraries: $abi"
+  done
+  if [[ ! -f "$NATIVE_DST/arm64-v8a/libstatus.so" ]]; then
+    echo "ERROR: в $NATIVE_SRC нет arm64-v8a/libstatus.so — APK соберётся без status-go." >&2
+    echo "       Положите android-сборку в src-tauri/binaries/android/arm64-v8a/ (docs/BUILDING.md)." >&2
+    exit 1
+  fi
+else
+  echo "WARNING: нет $NATIVE_SRC — native-библиотеки не скопированы, APK будет без status-go." >&2
 fi
 
 echo "Android native sources synced into $GEN"

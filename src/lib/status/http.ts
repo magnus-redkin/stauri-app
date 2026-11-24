@@ -45,6 +45,36 @@ function methodOf(body: any): string {
 }
 
 /**
+ * Error text from whatever the RPC layer rejected with.
+ *
+ * @param e - The rejection: a Tauri `AppError` (`{kind, message}`), a
+ *   status-go JSON-RPC error (`{code, details}`), an `Error`, or a string.
+ * @returns The most informative text available.
+ * @remarks
+ * Without this an object became `String(e)` — the literal `[object Object]` —
+ * and the cause of a failed call was lost exactly where it was needed.
+ */
+function errorText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'string') return e;
+  if (e && typeof e === 'object') {
+    const obj = e as Record<string, unknown>;
+    if (typeof obj.message === 'string' && obj.message) return obj.message;
+    if (typeof obj.details === 'string' && obj.details) {
+      return typeof obj.code === 'string' || typeof obj.code === 'number'
+        ? `${obj.code}: ${obj.details}`
+        : obj.details;
+    }
+    try {
+      return JSON.stringify(e);
+    } catch {
+      // A value without a JSON form falls through to the generic text.
+    }
+  }
+  return String(e);
+}
+
+/**
  * Calls a lifecycle endpoint by name.
  *
  * `InitializeApplication`, `LoginAccount`, `CreateAccountAndLogin` and `Logout`
@@ -114,7 +144,7 @@ export async function statusFetch<T>(endpoint: string, body: any): Promise<T> {
     // `parseResult` already rejected an error body; what is left is the result.
     return { result: value?.result ?? value } as T;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errorText(e);
     error(`[statusFetch] ← ${label} error: ${message}`);
     throw e instanceof Error ? e : new Error(message);
   }

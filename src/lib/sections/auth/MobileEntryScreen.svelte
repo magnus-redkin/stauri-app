@@ -164,6 +164,7 @@
     {busy}
     {error}
     onSubmit={onSubmitPin}
+    onBack={onPinBack}
   />
 
 {:else}

@@ -273,9 +273,14 @@ pub async fn execute_round(
 ) -> AppResult<Vec<SentTx>> {
     // 1. Route. First round only.
     if let Some(params) = params {
-        backend
+        let route = backend
             .call("wallet_getSuggestedRoutes", json!([params]))
             .await?;
+        // Diagnostic: the route is public data — addresses, calldata, fees; no
+        // secrets. Truncated because it can be large. This is what tells a
+        // refusal apart from a route built for the wrong sender or target.
+        let text: String = route.to_string().chars().take(1500).collect();
+        tracing::info!("[router] suggested route: {text}");
     }
 
     // 2. Build the transactions.

@@ -327,7 +327,10 @@ export async function createAccount(password: string) {
   info(`[boot] createAccount: backendRunning=${statusState.backendRunning} passwordLength=${password.length}`);
   if (!statusState.backendRunning) {
     error('[boot] createAccount: no backend port, nothing sent');
-    return;
+    // Silence here made the caller report "the backend created no profile" for a
+    // backend that never received the request at all. The two are different
+    // problems and want different fixes.
+    throw new Error('the backend is not running');
   }
   if (!isWsOpen()) await openWs();
 
@@ -356,7 +359,25 @@ export async function createAccount(password: string) {
   // `node.login` through the signal callback.
   await waitForLogin(30000);
 
-  const keyUid = statusState.accountKeyUid;
+  // The signal carries the key uid, but it is not the only source: on a phone the
+  // login can settle on a payload whose settings lack it, and then the profile exists
+  // while its id is unknown. The caller would report "the backend created no profile"
+  // and leave behind a profile nobody can open — the generated password is only in
+  // memory until the PIN envelope is written. One settings call removes that dead end.
+  let keyUid = statusState.accountKeyUid;
+  if (!keyUid) {
+    try {
+      const settings = await getSettings();
+      keyUid = settings?.result?.['key-uid'] ?? '';
+      if (keyUid) statusState.accountKeyUid = keyUid;
+      info(`[boot] createAccount: key uid recovered from settings: ${keyUid ? 'yes' : 'no'}`);
+    } catch (e) {
+      // Not fatal on its own: the caller reports the missing profile, and this line
+      // says why.
+      debug('[boot] createAccount: settings_getSettings failed:', formatError(e));
+    }
+  }
+
   const modeChanged = await applyNetworkMode();
   const { wroteProviders } = await configureWalletRpc();
   if ((modeChanged || wroteProviders) && (await restartNodeForProviders(password, keyUid))) return;
