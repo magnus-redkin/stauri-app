@@ -59,7 +59,9 @@ pub fn init() {
     // Android: logs go to logcat (tag "stauri"); there is no file path on a phone.
     #[cfg(target_os = "android")]
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Debug).with_tag("stauri"),
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Debug)
+            .with_tag("stauri"),
     );
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         // Foreign noise (tauri, reqwest, hyper) is kept at warn: their debug

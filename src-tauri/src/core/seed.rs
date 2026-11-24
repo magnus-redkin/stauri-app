@@ -43,7 +43,8 @@ pub struct VerifyResult {
 pub async fn fetch_seed_phrase() -> AppResult<SeedInfo> {
     // No HTTP: the seed is read over the library, in this process. The password
     // never passes through here.
-    let parsed = crate::core::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
+    let parsed =
+        crate::core::inprocess::call_rpc("settings_getSettings", serde_json::json!([])).await?;
 
     let words = mnemonic_words(&parsed)?;
 

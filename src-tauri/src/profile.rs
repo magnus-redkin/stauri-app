@@ -398,7 +398,11 @@ mod tests {
             media_type: None,
         };
         let err = decode_avatar(&input).expect_err("pdf must be refused");
-        assert!(err.message.contains("unsupported image type"), "{}", err.message);
+        assert!(
+            err.message.contains("unsupported image type"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
@@ -408,8 +412,8 @@ mod tests {
 
     #[test]
     fn reports_a_real_error() {
-        let err = error_from_reply(r#"{"error":"incorrect current password"}"#)
-            .expect_err("must fail");
+        let err =
+            error_from_reply(r#"{"error":"incorrect current password"}"#).expect_err("must fail");
         assert!(err.message.contains("incorrect current password"));
     }
 }

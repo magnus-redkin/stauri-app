@@ -22,7 +22,11 @@ pub fn set_dir(dir: PathBuf) {
 /// When enabled, responses are written up to 4000 characters instead of 200.
 pub fn debug_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("STAURI_DEBUG_TRACE").map(|v| v == "1").unwrap_or(false))
+    *ON.get_or_init(|| {
+        std::env::var("STAURI_DEBUG_TRACE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    })
 }
 
 /// Appends one line with a timestamp.
@@ -39,10 +43,14 @@ pub fn line(text: &str) {
     log::info!("{text}");
     let Some(path) = TRACE_PATH.get() else { return };
     let stamp = std::time::SystemTime::now()
- .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(f, "{stamp} {text}");
     }
 }

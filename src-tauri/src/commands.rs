@@ -388,7 +388,11 @@ pub fn status_call(endpoint: String, body: String) -> crate::core::error::AppRes
     let res = crate::core::inprocess::backend()?.direct(&endpoint, &body);
     match &res {
         Ok(text) => {
-            let limit = if crate::core::trace::debug_enabled() { 4000 } else { 200 };
+            let limit = if crate::core::trace::debug_enabled() {
+                4000
+            } else {
+                200
+            };
             crate::core::trace::line(&format!(
                 "ok {endpoint} len={} text={}",
                 text.len(),

@@ -232,7 +232,6 @@ pub async fn send_transfer(request: TransferRequest) -> AppResult<TransferResult
 /// `ErrorKind::Config` for a zero `chain_id`, a bad
 /// address, an empty password, a non-integer amount or a zero amount.
 fn validate(request: &TransferRequest) -> AppResult<()> {
-
     // chainId 0 is not a network. The upper bound is generous: real networks
     // fit in u64, so 0 and garbage are rejected here.
     if request.chain_id == 0 {

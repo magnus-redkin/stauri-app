@@ -20,7 +20,8 @@ fn main() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     // OUT_DIR is `<target>/<profile>/build/<pkg>-<hash>/out`; the fourth ancestor
     // is the profile directory that holds the executable.
@@ -47,6 +48,10 @@ fn copy_if_present(src: &Path, dst: &Path) {
         return;
     }
     if let Err(e) = std::fs::copy(src, dst) {
-        println!("cargo:warning=cannot copy {} to {}: {e}", src.display(), dst.display());
+        println!(
+            "cargo:warning=cannot copy {} to {}: {e}",
+            src.display(),
+            dst.display()
+        );
     }
 }

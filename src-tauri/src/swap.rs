@@ -31,9 +31,7 @@ use std::time::Duration;
 
 use crate::core::backend::Backend;
 use crate::core::error::{AppError, AppResult};
-use crate::router::{
-    GAS_FEE_MEDIUM, execute_round, hex_u128, is_address, unique_uuid,
-};
+use crate::router::{GAS_FEE_MEDIUM, execute_round, hex_u128, is_address, unique_uuid};
 
 /// `SendType` from `pkg/services/wallet/router/sendtype/send_type.go`: Swap=8.
 const SEND_TYPE_SWAP: u64 = 8;

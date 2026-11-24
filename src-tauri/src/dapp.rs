@@ -187,7 +187,9 @@ pub async fn open_doc(app: tauri::AppHandle, name: String) -> AppResult<String> 
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn open_dapp(_url: String) -> AppResult<String> {
-    Err(AppError::internal("dApp windows are not available on mobile yet"))
+    Err(AppError::internal(
+        "dApp windows are not available on mobile yet",
+    ))
 }
 
 /// Opens a bundled document in a separate window.
@@ -202,7 +204,9 @@ pub async fn open_dapp(_url: String) -> AppResult<String> {
 #[cfg(mobile)]
 #[tauri::command]
 pub async fn open_doc(_name: String) -> AppResult<String> {
-    Err(AppError::internal("document windows are not available on mobile yet"))
+    Err(AppError::internal(
+        "document windows are not available on mobile yet",
+    ))
 }
 
 /// Evaluates a navigation call inside the foreign page.

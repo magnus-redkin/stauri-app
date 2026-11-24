@@ -104,7 +104,9 @@ pub enum Role {
 ///
 /// @returns `true` when status-go exports the pairing functions.
 pub fn available() -> bool {
-    inprocess::backend().map(|b| b.supports_pairing()).unwrap_or(false)
+    inprocess::backend()
+        .map(|b| b.supports_pairing())
+        .unwrap_or(false)
 }
 
 /// Reads the profile's keystore directory under the application's data dir.
@@ -164,7 +166,9 @@ pub fn start_sender(
     // otherwise. A successful string is base58 and much longer than a message.
     let text = raw.trim().to_string();
     if text.is_empty() {
-        return Err(AppError::backend("pairing server returned no connection string"));
+        return Err(AppError::backend(
+            "pairing server returned no connection string",
+        ));
     }
     let code = confirmation_code(&text)?;
     crate::core::trace::line(&format!(
@@ -198,7 +202,9 @@ pub fn start_receiver(data_dir: &str) -> AppResult<(String, String)> {
     let raw = backend.pairing_start_receiver(&config.to_string())?;
     let text = raw.trim().to_string();
     if text.is_empty() {
-        return Err(AppError::backend("pairing server returned no connection string"));
+        return Err(AppError::backend(
+            "pairing server returned no connection string",
+        ));
     }
     let code = confirmation_code(&text)?;
     crate::core::trace::line(&format!(
@@ -255,7 +261,10 @@ fn aes_key_of(connection_string: &str) -> Option<Vec<u8>> {
     let fields: Vec<&str> = body.split(':').collect();
     // version, ips, port, public key, AES key.
     let encoded = fields.get(4)?;
-    bs58::decode(encoded).into_vec().ok().filter(|k| !k.is_empty())
+    bs58::decode(encoded)
+        .into_vec()
+        .ok()
+        .filter(|k| !k.is_empty())
 }
 
 /// Strips everything a copied string can pick up on the way.
@@ -468,7 +477,9 @@ pub async fn bootstrap_receiver(
         if !err.trim().is_empty() {
             return Err(AppError::backend(err.clone()));
         }
-        crate::core::trace::line("pairing reply reports a failure without a reason; waiting for the account");
+        crate::core::trace::line(
+            "pairing reply reports a failure without a reason; waiting for the account",
+        );
     }
 
     let account = match wait_for_account(&mut signals, ACCOUNT_TIMEOUT).await {
@@ -697,7 +708,10 @@ fn pairing_event(raw: &str) -> Option<(String, serde_json::Value)> {
     }
     let event = envelope.get("event")?;
     let kind = event.get("type").and_then(|t| t.as_str())?.to_string();
-    let mut data = event.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let mut data = event
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     // status-go writes the reason on the event itself —
     // `{"type":"connection-error","error":"…"}` — not inside `data`. Reading only `data`
     // left every failure as the generic "pairing failed", which is exactly what the
@@ -709,7 +723,10 @@ fn pairing_event(raw: &str) -> Option<(String, serde_json::Value)> {
     {
         match &mut data {
             serde_json::Value::Object(map) => {
-                map.insert("error".to_string(), serde_json::Value::String(reason.to_string()));
+                map.insert(
+                    "error".to_string(),
+                    serde_json::Value::String(reason.to_string()),
+                );
             }
             _ => data = serde_json::json!({ "error": reason }),
         }
@@ -897,7 +914,9 @@ mod tests {
         let (_, data) = pairing_event(raw).expect("event");
         assert_eq!(event_error_message(&data), "boom");
         assert_eq!(
-            data.get("account").and_then(|a| a.get("keyUid")).and_then(|k| k.as_str()),
+            data.get("account")
+                .and_then(|a| a.get("keyUid"))
+                .and_then(|k| k.as_str()),
             Some("x")
         );
     }
@@ -947,7 +966,10 @@ mod tests {
         let text = describe(&cs);
         assert!(text.contains("192.168.1.7"), "{text}");
         assert!(text.contains("50000"), "{text}");
-        assert!(!text.contains(&bs58::encode([0x11u8; 32]).into_string()), "{text}");
+        assert!(
+            !text.contains(&bs58::encode([0x11u8; 32]).into_string()),
+            "{text}"
+        );
         assert_eq!(describe("nonsense"), "unparsed");
     }
 
@@ -964,7 +986,10 @@ mod tests {
             bs58::encode([0x11u8; 32]).into_string(),
         );
         let (listed, port) = addresses(&cs);
-        assert_eq!(listed, vec!["192.168.1.7".parse::<std::net::Ipv4Addr>().expect("ip")]);
+        assert_eq!(
+            listed,
+            vec!["192.168.1.7".parse::<std::net::Ipv4Addr>().expect("ip")]
+        );
         assert_eq!(port, Some(50000));
         assert_eq!(addresses("nonsense"), (Vec::new(), None));
     }
@@ -1049,7 +1074,11 @@ mod tests {
         // string with installation id and key uid must still produce the same digits.
         let key = [0x33u8; 32];
         let short = string_with_key(&key);
-        let long = format!("{short}:{}:{}", bs58::encode([1u8]).into_string(), bs58::encode(b"0xab").into_string());
+        let long = format!(
+            "{short}:{}:{}",
+            bs58::encode([1u8]).into_string(),
+            bs58::encode(b"0xab").into_string()
+        );
         assert_eq!(
             confirmation_code(&short).expect("code"),
             confirmation_code(&long).expect("code")

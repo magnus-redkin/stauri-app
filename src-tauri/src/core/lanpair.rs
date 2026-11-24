@@ -195,7 +195,12 @@ fn stop_running() {
 }
 
 /// Installs a new attempt, replacing any previous one.
-fn install(status: Arc<Mutex<LanStatus>>, confirm: Arc<Notify>, cancel: Arc<AtomicBool>, task: tokio::task::JoinHandle<()>) {
+fn install(
+    status: Arc<Mutex<LanStatus>>,
+    confirm: Arc<Notify>,
+    cancel: Arc<AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+) {
     stop_running();
     *lock(&RUNNING) = Some(Running {
         status,
@@ -323,8 +328,7 @@ fn open(key: &[u8; 32], frame: &[u8]) -> Option<Vec<u8>> {
 
 /// Writes one length-prefixed frame.
 async fn write_frame(stream: &mut TcpStream, body: &[u8]) -> AppResult<()> {
-    let length = u32::try_from(body.len())
-        .map_err(|_| AppError::internal("frame too long"))?;
+    let length = u32::try_from(body.len()).map_err(|_| AppError::internal("frame too long"))?;
     stream
         .write_all(&length.to_be_bytes())
         .await
@@ -348,7 +352,9 @@ async fn read_frame(stream: &mut TcpStream) -> AppResult<Vec<u8>> {
         .map_err(|e| AppError::network(format!("the other device stopped answering: {e}")))?;
     let length = u32::from_be_bytes(length) as usize;
     if length > MAX_FRAME {
-        return Err(AppError::network("the other device sent an oversized frame"));
+        return Err(AppError::network(
+            "the other device sent an oversized frame",
+        ));
     }
     let mut body = vec![0u8; length];
     stream
@@ -462,7 +468,9 @@ async fn receiver_handshake(
         .await
         .map_err(|_| AppError::network("the other device said nothing"))??;
     if hello.len() != 4 + 32 + 16 || &hello[..4] != HELLO_TAG {
-        return Err(AppError::network("the other device speaks a different protocol"));
+        return Err(AppError::network(
+            "the other device speaks a different protocol",
+        ));
     }
     let mut sender_public = [0u8; 32];
     sender_public.copy_from_slice(&hello[4..36]);
@@ -506,7 +514,10 @@ async fn sender_handshake(
     };
     crate::core::trace::line(&format!(
         "pairing lan searching targets={:?}",
-        targets.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
+        targets
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
     ));
 
     let mut buffer = [0u8; 128];
@@ -524,7 +535,9 @@ async fn sender_handshake(
                 }
             }
             Ok(Err(e)) => {
-                return Err(AppError::network(format!("searching for the other device failed: {e}")));
+                return Err(AppError::network(format!(
+                    "searching for the other device failed: {e}"
+                )));
             }
             Err(_) => {}
         }
@@ -598,13 +611,11 @@ async fn receiver_task(
         if let Some(port) = port {
             for ip in &advertised {
                 let target = SocketAddr::new(IpAddr::V4(*ip), port);
-                let answered = tokio::time::timeout(
-                    Duration::from_millis(800),
-                    TcpStream::connect(target),
-                )
-                .await
-                .map(|result| result.is_ok())
-                .unwrap_or(false);
+                let answered =
+                    tokio::time::timeout(Duration::from_millis(800), TcpStream::connect(target))
+                        .await
+                        .map(|result| result.is_ok())
+                        .unwrap_or(false);
                 if answered {
                     reachable = true;
                     break;
@@ -621,10 +632,13 @@ async fn receiver_task(
         }
 
         if !crate::core::pairing::is_valid_connection_string(&connection_string) {
-            return Err(AppError::backend("the other device sent an invalid connection code"));
+            return Err(AppError::backend(
+                "the other device sent an invalid connection code",
+            ));
         }
 
-        let account = crate::core::pairing::bootstrap_receiver(&data_dir, &connection_string).await?;
+        let account =
+            crate::core::pairing::bootstrap_receiver(&data_dir, &connection_string).await?;
         let slot = crate::core::credentials::Slot::new(&network, &account.key_uid)?;
         crate::core::credentials::stash_pending(slot, account.password.clone());
         publish_done(&status, Some(account.key_uid), account.name);
@@ -832,9 +846,7 @@ pub async fn pairing_lan_send_start(
             match host.parse::<Ipv4Addr>() {
                 Ok(ip) => Some(ip),
                 Err(_) => {
-                    return Err(AppError::network(
-                        "the address must look like 192.168.1.7",
-                    ));
+                    return Err(AppError::network("the address must look like 192.168.1.7"));
                 }
             }
         }
@@ -1025,12 +1037,20 @@ mod tests {
         // The receiver derives from the announcement; the sender from the hello. They
         // must still agree, which is the whole point of the comparison screen.
         assert_eq!(sender_keys.digits, receiver_keys.digits);
-        assert_eq!(sender_keys.sender_to_receiver, receiver_keys.sender_to_receiver);
-        assert_eq!(receiver_keys.digits, lock(&status_r).digits.clone().unwrap());
+        assert_eq!(
+            sender_keys.sender_to_receiver,
+            receiver_keys.sender_to_receiver
+        );
+        assert_eq!(
+            receiver_keys.digits,
+            lock(&status_r).digits.clone().unwrap()
+        );
 
         // Finish the exchange the way the screens do, to prove the frames flow.
         let ready = seal(&receiver_keys.receiver_to_sender, b"ready").expect("seal");
-        write_frame(&mut receiver_stream, &ready).await.expect("send ready");
+        write_frame(&mut receiver_stream, &ready)
+            .await
+            .expect("send ready");
         let frame = read_frame(&mut sender_stream).await.expect("read ready");
         assert_eq!(
             open(&sender_keys.receiver_to_sender, &frame),
@@ -1038,7 +1058,9 @@ mod tests {
         );
 
         let sealed = seal(&sender_keys.sender_to_receiver, b"cs3:x:y").expect("seal");
-        write_frame(&mut sender_stream, &sealed).await.expect("send string");
+        write_frame(&mut sender_stream, &sealed)
+            .await
+            .expect("send string");
         let frame = read_frame(&mut receiver_stream).await.expect("read string");
         assert_eq!(
             open(&receiver_keys.sender_to_receiver, &frame),

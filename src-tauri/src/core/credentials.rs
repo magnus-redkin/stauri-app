@@ -161,7 +161,10 @@ static PENDING: Lazy<Mutex<HashMap<(String, String), PendingPassword>>> =
 /// Remembers a password that arrived with a paired profile.
 pub fn stash_pending(slot: Slot, password: String) {
     if let Ok(mut pending) = PENDING.lock() {
-        pending.insert((slot.network.clone(), slot.key_uid.clone()), PendingPassword { slot, password });
+        pending.insert(
+            (slot.network.clone(), slot.key_uid.clone()),
+            PendingPassword { slot, password },
+        );
     }
 }
 
@@ -171,7 +174,11 @@ pub fn stash_pending(slot: Slot, password: String) {
 pub fn drop_pending(network: &str, key_uid: &str) -> bool {
     PENDING
         .lock()
-        .map(|mut pending| pending.remove(&(network.to_string(), key_uid.to_string())).is_some())
+        .map(|mut pending| {
+            pending
+                .remove(&(network.to_string(), key_uid.to_string()))
+                .is_some()
+        })
         .unwrap_or(false)
 }
 
@@ -256,7 +263,10 @@ impl Slot {
     fn dir(&self) -> AppResult<std::path::PathBuf> {
         let base = crate::appdirs::data_dir()
             .ok_or_else(|| AppError::internal("cannot determine app data dir"))?;
-        Ok(base.join("credentials").join(&self.network).join(&self.key_uid))
+        Ok(base
+            .join("credentials")
+            .join(&self.network)
+            .join(&self.key_uid))
     }
 
     /// Path of the envelope.
@@ -304,9 +314,7 @@ pub fn creation_problem(pin: &str) -> Option<&'static str> {
         let has_digit = pin.bytes().any(|b| b.is_ascii_digit());
         let has_symbol = pin.bytes().any(|b| !b.is_ascii_alphanumeric());
         if !(has_lower && has_upper && has_digit && has_symbol) {
-            return Some(
-                "the PIN must mix lowercase, uppercase, digits and symbols",
-            );
+            return Some("the PIN must mix lowercase, uppercase, digits and symbols");
         }
     }
     None
@@ -382,9 +390,8 @@ pub fn save_pin(slot: &Slot, pin: &str, password: &str) -> AppResult<()> {
 /// webview: `pairing_receive` parks it in [`PENDING`], and this call is what wraps it.
 pub fn save_pending_pin(network: &str, key_uid: &str, pin: &str) -> AppResult<()> {
     let slot = Slot::new(network, key_uid)?;
-    let pending = take_pending(&slot.network, &slot.key_uid).ok_or_else(|| {
-        AppError::config("this profile has no password waiting for a PIN")
-    })?;
+    let pending = take_pending(&slot.network, &slot.key_uid)
+        .ok_or_else(|| AppError::config("this profile has no password waiting for a PIN"))?;
     let result = save_pin(&pending.slot, pin, &pending.password);
     if result.is_err() {
         // A refused PIN must not lose the password: the user retypes it, and the profile
@@ -505,7 +512,9 @@ fn check_envelope(envelope: &Envelope) -> AppResult<()> {
 fn attempt_guard() -> std::sync::MutexGuard<'static, ()> {
     static ATTEMPTS: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
     // A panic inside a lock is not possible here: the body only reads and writes files.
-    ATTEMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    ATTEMPTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Whether a PIN is set for this profile.
@@ -695,11 +704,20 @@ fn create_private_dir(dir: &std::path::Path) -> AppResult<()> {
 ///
 /// Returns the key wrapped in [`zeroize::Zeroizing`]: the buffer is cleared when it goes
 /// out of scope, so the derived key does not linger in freed memory.
-fn derive_key(pin: &str, salt: &[u8], params: &KdfParams) -> AppResult<zeroize::Zeroizing<[u8; KEY_LEN]>> {
+fn derive_key(
+    pin: &str,
+    salt: &[u8],
+    params: &KdfParams,
+) -> AppResult<zeroize::Zeroizing<[u8; KEY_LEN]>> {
     use argon2::{Algorithm, Argon2, Params, Version};
 
-    let params = Params::new(params.memory_kib, params.time_cost, params.lanes, Some(KEY_LEN))
-        .map_err(|e| AppError::internal(format!("argon2 parameters: {e}")))?;
+    let params = Params::new(
+        params.memory_kib,
+        params.time_cost,
+        params.lanes,
+        Some(KEY_LEN),
+    )
+    .map_err(|e| AppError::internal(format!("argon2 parameters: {e}")))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut key = zeroize::Zeroizing::new([0u8; KEY_LEN]);
@@ -740,8 +758,7 @@ fn decrypt(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> AppResult<Vec<u8>> {
 /// Cryptographically secure random bytes.
 fn random_bytes(len: usize) -> AppResult<Vec<u8>> {
     let mut buf = vec![0u8; len];
-    getrandom::getrandom(&mut buf)
-        .map_err(|e| AppError::internal(format!("random: {e}")))?;
+    getrandom::getrandom(&mut buf).map_err(|e| AppError::internal(format!("random: {e}")))?;
     Ok(buf)
 }
 
@@ -804,7 +821,10 @@ mod tests {
         assert_eq!(MAX_ATTEMPTS, 10);
         let body = b"{ not json";
         let parsed: Option<Attempts> = serde_json::from_slice(body).ok();
-        assert!(parsed.is_none(), "the test documents the failure path it assumes");
+        assert!(
+            parsed.is_none(),
+            "the test documents the failure path it assumes"
+        );
     }
 
     #[test]
@@ -829,9 +849,17 @@ mod tests {
             ciphertext: String::new(),
         };
         assert!(check_envelope(&envelope).is_ok());
-        envelope.kdf = KdfParams { memory_kib: 8, time_cost: 3, lanes: 1 };
+        envelope.kdf = KdfParams {
+            memory_kib: 8,
+            time_cost: 3,
+            lanes: 1,
+        };
         assert!(check_envelope(&envelope).is_err());
-        envelope.kdf = KdfParams { memory_kib: 4_000_000, time_cost: 3, lanes: 1 };
+        envelope.kdf = KdfParams {
+            memory_kib: 4_000_000,
+            time_cost: 3,
+            lanes: 1,
+        };
         assert!(check_envelope(&envelope).is_err());
     }
 
@@ -891,20 +919,32 @@ mod tests {
             assert!(creation_problem("58291").is_none());
             assert!(creation_problem("7463521").is_none());
             assert!(creation_problem("746352198").is_none());
-            assert!(creation_problem("5829").is_some(), "a 4-digit PIN is too short");
+            assert!(
+                creation_problem("5829").is_some(),
+                "a 4-digit PIN is too short"
+            );
             assert!(creation_problem("582913746359").is_none());
             assert!(creation_problem("5829137463590").is_some(), "13 digits");
-            assert!(creation_problem("A12345").is_some(), "letters are not on the keypad");
+            assert!(
+                creation_problem("A12345").is_some(),
+                "letters are not on the keypad"
+            );
             assert!(creation_problem("12345").is_some(), "a sequence");
             assert!(creation_problem("54321").is_some(), "a descending sequence");
             assert!(creation_problem("55555").is_some(), "one repeated digit");
         }
         if pin_policy::REQUIRE_CLASSES {
             assert!(creation_problem("Tr0ub4dor&3!").is_none());
-            assert!(creation_problem("a1b2c3d4").is_some(), "no uppercase or symbol");
+            assert!(
+                creation_problem("a1b2c3d4").is_some(),
+                "no uppercase or symbol"
+            );
             assert!(creation_problem("aB1!cD3!").is_none());
             assert!(creation_problem("aB1!cD").is_some(), "under the minimum");
-            assert!(creation_problem("58291").is_some(), "digits alone lack letter classes");
+            assert!(
+                creation_problem("58291").is_some(),
+                "digits alone lack letter classes"
+            );
             assert!(creation_problem("Tr0ub4dor&3").is_none());
         }
     }

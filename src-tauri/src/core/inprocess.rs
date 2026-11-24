@@ -266,9 +266,8 @@ impl InProcessBackend {
     fn load() -> AppResult<Self> {
         let path = library_path()?;
         // SAFETY: loading a trusted library built from our own status-go tree.
-        let lib = unsafe { Library::new(&path) }.map_err(|e| {
-            AppError::internal(format!("cannot load {}: {e}", path.display()))
-        })?;
+        let lib = unsafe { Library::new(&path) }
+            .map_err(|e| AppError::internal(format!("cannot load {}: {e}", path.display())))?;
 
         // SAFETY: names and signatures come from mobile/status.go.
         unsafe {
@@ -297,14 +296,8 @@ impl InProcessBackend {
             // Both are optional for the same reason: a library built without the
             // profile-management exports still runs, it just cannot offer the
             // "open an existing profile from its phrase" path.
-            let validate_mnemonic = lib
-                .get::<CStrFn>(b"ValidateMnemonicV2\0")
-                .ok()
-                .map(|s| *s);
-            let delete_multiaccount = lib
-                .get::<CStrFn>(b"DeleteMultiaccount\0")
-                .ok()
-                .map(|s| *s);
+            let validate_mnemonic = lib.get::<CStrFn>(b"ValidateMnemonicV2\0").ok().map(|s| *s);
+            let delete_multiaccount = lib.get::<CStrFn>(b"DeleteMultiaccount\0").ok().map(|s| *s);
             // Local pairing is optional as a group: a library built without it still
             // runs every other flow, and the screens hide the sync option rather than
             // offering a button that cannot work.
@@ -404,8 +397,8 @@ impl InProcessBackend {
     /// NUL byte, and [`crate::core::error::ErrorKind::Backend`] when status-go returns
     /// a null pointer.
     fn invoke(&self, f: CStrFn, json: &str) -> AppResult<String> {
-        let input = CString::new(json)
-            .map_err(|_| AppError::internal("request contains a NUL byte"))?;
+        let input =
+            CString::new(json).map_err(|_| AppError::internal("request contains a NUL byte"))?;
         let raw = input.into_raw();
         // SAFETY: raw is our C string until the call returns.
         let out = unsafe { f(raw) };
@@ -415,7 +408,9 @@ impl InProcessBackend {
             return Err(AppError::backend("status-go returned no response"));
         }
         // SAFETY: out is a C string returned by status-go.
-        let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
+        let text = unsafe { CStr::from_ptr(out) }
+            .to_string_lossy()
+            .into_owned();
         // SAFETY: out is no longer used after the copy.
         unsafe { free(out as *mut std::ffi::c_void) };
         Ok(text)
@@ -445,7 +440,9 @@ impl InProcessBackend {
             return Err(AppError::backend("status-go returned no response"));
         }
         // SAFETY: out is a C string returned by status-go.
-        let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
+        let text = unsafe { CStr::from_ptr(out) }
+            .to_string_lossy()
+            .into_owned();
         // SAFETY: out is no longer used after the copy.
         unsafe { free(out as *mut std::ffi::c_void) };
         Ok(text)
@@ -473,7 +470,9 @@ impl InProcessBackend {
     /// pairing, and propagates status-go's error.
     pub fn pairing_start_sender(&self, config_json: &str) -> AppResult<String> {
         let f = self.connection_string_sender.ok_or_else(|| {
-            AppError::internal("status-go does not export GetConnectionStringForBootstrappingAnotherDevice")
+            AppError::internal(
+                "status-go does not export GetConnectionStringForBootstrappingAnotherDevice",
+            )
         })?;
         self.invoke(f, config_json)
     }
@@ -528,7 +527,9 @@ impl InProcessBackend {
         config_json: &str,
     ) -> AppResult<String> {
         let f = self.bootstrap_sender.ok_or_else(|| {
-            AppError::internal("status-go does not export InputConnectionStringForBootstrappingAnotherDevice")
+            AppError::internal(
+                "status-go does not export InputConnectionStringForBootstrappingAnotherDevice",
+            )
         })?;
         self.invoke2(f, connection_string, config_json)
     }
@@ -685,7 +686,9 @@ fn owned_reply(out: *mut c_char) -> AppResult<String> {
         return Err(AppError::backend("status-go returned no response"));
     }
     // SAFETY: out is a C string returned by status-go.
-    let text = unsafe { CStr::from_ptr(out) }.to_string_lossy().into_owned();
+    let text = unsafe { CStr::from_ptr(out) }
+        .to_string_lossy()
+        .into_owned();
     // SAFETY: out is no longer used after the copy.
     unsafe { free(out as *mut std::ffi::c_void) };
     Ok(text)

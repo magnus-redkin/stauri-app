@@ -208,8 +208,8 @@ pub fn save_network(network: &str) -> AppResult<()> {
             "the network is fixed by STAURI_NETWORK={fixed}; unset it to switch inside the app"
         )));
     }
-    let path = config_path()
-        .ok_or_else(|| AppError::config("cannot determine the config directory"))?;
+    let path =
+        config_path().ok_or_else(|| AppError::config("cannot determine the config directory"))?;
     save_network_to(&path, network)
 }
 
@@ -379,7 +379,10 @@ mod tests {
         let err = save_network_to(&path, "../../x").expect_err("unknown network must fail");
 
         assert_eq!(err.kind, crate::core::error::ErrorKind::Config);
-        assert!(!path.exists(), "an unknown network must not create the file");
+        assert!(
+            !path.exists(),
+            "an unknown network must not create the file"
+        );
     }
 
     #[test]
