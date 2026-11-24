@@ -39,7 +39,7 @@
 <div class="flex-1 flex flex-col items-center justify-center p-6 gap-4">
   <h2 class="text-lg font-semibold text-foreground">{i18n.t('Join by invite')}</h2>
   <p class="text-xs text-muted-foreground text-center max-w-md">
-    {i18n.t('Paste an invite link: a channel (status.app/cc/…) or a contact (status.app/u/…).')}
+    {i18n.t('Paste an invite link: a channel (status.app/cc/…), a contact (status.app/u/…), a contact code (zQ3…) or a name (name.stateofus.eth).')}
   </p>
 
   <div class="w-full max-w-xl flex flex-col gap-2">
