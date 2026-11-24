@@ -66,6 +66,11 @@
 
   <releases>
     <!-- Версия подставляется release.sh из аргумента сборки. -->
+    <release version="0.5.3" date="2026-11-24">
+      <description>
+        <p>Привязка имён .eth, проверка ENS-имён на входе и починка Android-сборки.</p>
+      </description>
+    </release>
     <release version="0.5.2" date="2026-11-23">
       <description>
         <p>Синхронизация через локальную сеть, экран выбора профиля и политики PIN.</p>
