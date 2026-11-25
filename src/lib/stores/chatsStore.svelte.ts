@@ -408,6 +408,12 @@ export function setSelectedChat(chat: ChatItem | null) {
   if (chat && chat.unreadCount && statusState.backendRunning) {
     markChatRead(chat.id).catch(() => {});
     chatsState.items = chatsState.items.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
+    // The previews are the source `buildItems` reads, and they keep the old count.
+    // Without zeroing them the 10-second poll rebuilds the list from stale previews
+    // and the badge returns — which is what made it look self-restoring.
+    chatsState.previews = chatsState.previews.map((p: any) =>
+      p?.id === chat.id ? { ...p, unviewedMessagesCount: 0 } : p
+    );
   }
 }
 
