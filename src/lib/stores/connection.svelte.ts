@@ -32,6 +32,7 @@ import {
 } from '$lib/status/api';
 import { ensureTestNetworkMode, getSettings } from '$lib/status/wallet';
 import { configureWalletRpc } from './rpcConfig';
+import { rememberProfileName } from './profileNames';
 import { isWsOpen, openWs, closeWs } from './ws';
 
 export const connectionState = $state({
@@ -237,6 +238,7 @@ async function restartNodeForProviders(password: string, keyUid: string): Promis
   await traceSecret('login', password);
   await loginAccount(password, keyUid);
   await waitForLoginReady(30000);
+  await recoverIdentity();
 
   await configureWalletRpc();
   await startMessengerGuarded();
@@ -280,6 +282,41 @@ async function applyNetworkMode(): Promise<boolean> {
 }
 
 /**
+ * Fills the identity fields the `node.login` signal may omit.
+ *
+ * @remarks
+ * On Android the login signal can settle without `settings`, and then
+ * `statusState.publicKey` stays empty: every message looks like it came from a
+ * contact, and the account's own posts are shown under the contact record's name
+ * instead of "You". One settings call fixes the identity the rest of the UI
+ * relies on. A value that is already known is never overwritten.
+ */
+async function recoverIdentity(): Promise<void> {
+  if (!statusState.backendRunning || statusState.publicKey) return;
+  try {
+    const settings = await getSettings();
+    const result = settings?.result ?? {};
+    const publicKey = String(result['public-key'] ?? '');
+    if (publicKey) statusState.publicKey = publicKey;
+    if (!statusState.alias) {
+      const name = String(
+        result['preferred-name'] || result['display-name'] || result['alias'] || ''
+      );
+      if (name) {
+        statusState.alias = name;
+        rememberProfileName(statusState.accountKeyUid, name);
+      }
+    }
+    info(
+      `[boot] identity recovered from settings: publicKey=${publicKey ? 'yes' : 'no'}`
+    );
+  } catch (e) {
+    // Not fatal: messages fall back to the contact record, the log says why.
+    debug('[boot] identity recovery failed:', formatError(e));
+  }
+}
+
+/**
  * Logs into the account.
  *
  * @param password - Profile password used to unlock the key.
@@ -301,6 +338,7 @@ export async function login(password: string, keyUid: string) {
   await traceSecret('login', password);
   await loginAccount(password, keyUid);
   await waitForLoginReady(30000);
+  await recoverIdentity();
 
   // The network mode comes before the providers: it decides which networks they
   // are written for.
@@ -358,6 +396,7 @@ export async function createAccount(password: string) {
   // One path on every platform: status-go runs in this process and delivers
   // `node.login` through the signal callback.
   await waitForLogin(30000);
+  await recoverIdentity();
 
   // The signal carries the key uid, but it is not the only source: on a phone the
   // login can settle on a payload whose settings lack it, and then the profile exists
