@@ -46,6 +46,11 @@ pub struct FeedItem {
     pub title: String,
     /// Excerpt text. Text only: HTML never reaches this field (see §9.5).
     pub summary: String,
+    /// The excerpt with the source's formatting, already reduced to a safe set of
+    /// tags by [`html_to_safe_html`]: paragraphs, emphasis, lists, quotes, links.
+    /// Images are dropped. Source markup itself never reaches this field.
+    #[serde(default)]
+    pub html: String,
     /// Publication time in milliseconds, when it could be parsed.
     pub published_at: Option<i64>,
 }
@@ -386,6 +391,7 @@ fn parse_rss(xml: &str, source: &str) -> AppResult<FeedResponse> {
                         url: String::new(),
                         title: String::new(),
                         summary: String::new(),
+                        html: String::new(),
                         published_at: None,
                     });
                 } else {
@@ -533,6 +539,7 @@ fn apply_field(item: &mut FeedItem, field: &str, text: &str) {
                 // or a list, and collapsing it into one paragraph destroys
                 // both the meaning and the shape.
                 item.summary = clean_text_lines(text);
+                item.html = html_to_safe_html(text);
             }
         }
         "link" => {
@@ -657,6 +664,177 @@ fn clean_text_lines(input: &str) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Reduces the source HTML of an excerpt to a small, safe set of tags.
+///
+/// Source markup never reaches the UI (see §9.5): this rewrites it into
+/// paragraphs, emphasis, lists, quotes, code and links, escaping every text
+/// character. Images are dropped — the feed shows no media. Links keep only
+/// `http(s)` targets; anything else (`javascript:`, `data:`) is unwrapped to its
+/// text, so nothing dangerous remains even before the click handler runs.
+fn html_to_safe_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut stack: Vec<&'static str> = Vec::new();
+    // Tag assembly
+    let mut tag = String::new();
+    let mut in_tag = false;
+    let mut quote: Option<char> = None;
+
+    // Closing tag to emit for a borrowed name, or None when the tag is dropped.
+    fn opening(name: &str, tag: &str) -> Option<(&'static str, String)> {
+        match name {
+            "br" => Some(("", "<br>".to_string())),
+            "p" | "div" => Some(("p", "<p>".to_string())),
+            "b" | "strong" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                Some(("strong", "<strong>".to_string()))
+            }
+            "i" | "em" => Some(("em", "<em>".to_string())),
+            "u" => Some(("u", "<u>".to_string())),
+            "s" | "strike" | "del" => Some(("s", "<s>".to_string())),
+            "code" | "pre" => Some(("code", "<code>".to_string())),
+            "blockquote" => Some(("blockquote", "<blockquote>".to_string())),
+            "ul" => Some(("ul", "<ul>".to_string())),
+            "ol" => Some(("ol", "<ol>".to_string())),
+            "li" => Some(("li", "<li>".to_string())),
+            "a" => attributed_href(tag).map(|href| {
+                (
+                    "a",
+                    format!(
+                        "<a href=\"{}\">",
+                        href.replace('&', "&amp;").replace('"', "&quot;")
+                    ),
+                )
+            }),
+            _ => None,
+        }
+    }
+
+    fn attributed_href(tag: &str) -> Option<String> {
+        let lower = tag.to_ascii_lowercase();
+        let at = lower.find("href")?;
+        let rest = &tag[at + 4..];
+        let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+        let value = if let Some(q) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') {
+            let body = &rest[q.len_utf8()..];
+            &body[..body.find(q).unwrap_or(body.len())]
+        } else {
+            rest.split_whitespace().next().unwrap_or("")
+        };
+        let value = value.trim();
+        let scheme_ok = value
+            .get(..7)
+            .map(|p| p.eq_ignore_ascii_case("http://"))
+            .unwrap_or(false)
+            || value
+                .get(..8)
+                .map(|p| p.eq_ignore_ascii_case("https://"))
+                .unwrap_or(false);
+        scheme_ok.then(|| value.to_string())
+    }
+
+    for ch in input.chars() {
+        if in_tag {
+            match ch {
+                '>' if quote.is_none() => {
+                    in_tag = false;
+                    let raw = tag.trim();
+                    let closing = raw.starts_with('/');
+                    let name: String = raw
+                        .trim_start_matches('/')
+                        .split(|c: char| c.is_whitespace() || c == '/')
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let self_closing = raw.ends_with('/');
+                    if closing {
+                        let expected = match name.as_str() {
+                            "p" | "div" => "p",
+                            "b" | "strong" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "strong",
+                            "i" | "em" => "em",
+                            "u" => "u",
+                            "s" | "strike" | "del" => "s",
+                            "code" | "pre" => "code",
+                            "blockquote" => "blockquote",
+                            "ul" => "ul",
+                            "ol" => "ol",
+                            "li" => "li",
+                            "a" => "a",
+                            _ => "",
+                        };
+                        if !expected.is_empty() && stack.last() == Some(&expected) {
+                            stack.pop();
+                            match expected {
+                                "p" => out.push_str("</p>"),
+                                "strong" => out.push_str("</strong>"),
+                                "em" => out.push_str("</em>"),
+                                "u" => out.push_str("</u>"),
+                                "s" => out.push_str("</s>"),
+                                "code" => out.push_str("</code>"),
+                                "blockquote" => out.push_str("</blockquote>"),
+                                "ul" => out.push_str("</ul>"),
+                                "ol" => out.push_str("</ol>"),
+                                "li" => out.push_str("</li>"),
+                                "a" => out.push_str("</a>"),
+                                _ => {}
+                            }
+                        }
+                    } else if !self_closing {
+                        if let Some((close, html)) = opening(&name, raw) {
+                            if !close.is_empty() {
+                                stack.push(close);
+                            }
+                            out.push_str(&html);
+                        }
+                    } else if name == "br" {
+                        out.push_str("<br>");
+                    }
+                    tag.clear();
+                }
+                '"' | '\'' if quote == Some(ch) => {
+                    quote = None;
+                    tag.push(ch);
+                }
+                c if quote.is_some() => tag.push(c),
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    tag.push(ch);
+                }
+                c => tag.push(c),
+            }
+        } else {
+            match ch {
+                '<' => {
+                    in_tag = true;
+                    tag.clear();
+                }
+                '&' => out.push_str("&amp;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                c => out.push(c),
+            }
+        }
+    }
+
+    // Close whatever stayed open, innermost first.
+    while let Some(name) = stack.pop() {
+        match name {
+            "p" => out.push_str("</p>"),
+            "strong" => out.push_str("</strong>"),
+            "em" => out.push_str("</em>"),
+            "u" => out.push_str("</u>"),
+            "s" => out.push_str("</s>"),
+            "code" => out.push_str("</code>"),
+            "blockquote" => out.push_str("</blockquote>"),
+            "ul" => out.push_str("</ul>"),
+            "ol" => out.push_str("</ol>"),
+            "li" => out.push_str("</li>"),
+            "a" => out.push_str("</a>"),
+            _ => {}
+        }
+    }
+
+    out.replace("<p></p>", "").replace("<p> </p>", "").trim().to_string()
 }
 
 /// The same for markup delivered as plain text (an HTML page).
@@ -841,6 +1019,7 @@ fn parse_telegram_html(html: &str, source: &str) -> AppResult<FeedResponse> {
                     summary
                 }
             },
+            html: String::new(),
             published_at: published,
         });
     }
@@ -988,6 +1167,31 @@ mod tests {
         assert_eq!(clean_text_lines("a<br><br><br>b"), "a\nb");
         // A list keeps its items on separate lines.
         assert_eq!(clean_text_lines("<ul><li>one</li><li>two</li></ul>"), "one\ntwo");
+    }
+
+    #[test]
+    fn keeps_safe_formatting_in_html() {
+        assert_eq!(
+            html_to_safe_html("<p>Hello <b>world</b> and <i>all</i></p>"),
+            "<p>Hello <strong>world</strong> and <em>all</em></p>"
+        );
+        // Links survive only with an http(s) target.
+        assert_eq!(
+            html_to_safe_html(r#"<a href="https://example.org/x">link</a>"#),
+            r#"<a href="https://example.org/x">link</a>"#
+        );
+        assert_eq!(
+            html_to_safe_html(r#"<a href="javascript:alert(1)">x</a>"#),
+            "x"
+        );
+        // Images are dropped, text is escaped. The input is the reader's stream,
+        // where entities are already expanded, so `&` arrives raw.
+        assert_eq!(html_to_safe_html(r#"<img src="a.png">a & b"#), "a &amp; b");
+        assert_eq!(
+            html_to_safe_html("<ul><li>one</li><li>two</li></ul>"),
+            "<ul><li>one</li><li>two</li></ul>"
+        );
+        assert_eq!(html_to_safe_html("line<br>line"), "line<br>line");
     }
 
     #[test]

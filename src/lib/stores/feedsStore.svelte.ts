@@ -27,6 +27,8 @@ export interface FeedItem {
   url: string;
   title: string;
   summary: string;
+  /** The same excerpt with its formatting, as a safe tag subset from Rust. */
+  html?: string;
   /** Publication time in milliseconds, when it could be parsed. */
   published_at: number | null;
 }
@@ -75,7 +77,7 @@ const STORAGE_KEY = 'stauri:feeds';
  * Version 2 stores snippets up to 4000 characters and lets layout do the shortening. Bump the
  * version on any `FeedItem` shape change that cannot be fixed on the fly.
  */
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 
 /** What goes to disk: the version and the subscriptions themselves. */
 interface StoredFeeds {

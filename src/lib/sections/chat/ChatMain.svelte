@@ -212,6 +212,24 @@
    * arbitrary programs. The `open_external` command validates the scheme in Rust
    * and tries to open a Telegram link in Telegram itself.
    */
+  /**
+   * Opens a link from a feed entry in the system browser.
+   *
+   * @param e - Click event inside the rendered entry.
+   * @remarks
+   * The entry is rendered with `{@html}` from Rust-generated, sanitised markup, so
+   * its links are ordinary `<a>` elements; letting the webview navigate would open
+   * the page inside the app window, which a Tauri window does not expect. The href
+   * is handed to `open_external`, which checks the scheme again.
+   */
+  function handleFeedLink(e: MouseEvent) {
+    const anchor = (e.target as HTMLElement | null)?.closest?.('a');
+    if (!anchor) return;
+    const href = anchor.getAttribute('href') || '';
+    e.preventDefault();
+    if (href) void openExternal(href);
+  }
+
   async function openExternal(url: string) {
     try {
       await invoke('open_external', { url });
@@ -650,25 +668,40 @@
               <div class="p-3 rounded-md bg-secondary/40">
                 {#if item.summary}
                   <!--
-                    A collapsed item is a button: clicking expands the text. A link
-                    inside a button is invalid, so the source button sits separately
-                    below the text.
+                    Collapsed: plain text clamped to four lines, as a button. Expanded:
+                    the entry's own formatting — paragraphs, emphasis, lists, links.
+                    The HTML comes from `html_to_safe_html` in Rust: only a fixed set
+                    of tags, every text character escaped, images dropped. Links open
+                    through the Rust command, not inside the window.
                   -->
-                  <button
-                    onclick={() => toggleItem(key)}
-                    class="w-full text-left"
-                    aria-expanded={open}
-                  >
+                  {#if open}
                     <div class="text-sm font-medium text-foreground">{item.title}</div>
                     <div
-                      class="text-sm text-muted-foreground mt-1 {open ? 'whitespace-pre-wrap' : 'line-clamp-4 whitespace-pre-line'} break-words"
+                      class="text-sm leading-relaxed mt-1 break-words [&_p]:mb-2 [&_p:last-child]:mb-0 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_code]:font-mono [&_code]:text-[0.9em] [&_code]:bg-secondary [&_code]:px-1 [&_code]:rounded"
+                      onclick={handleFeedLink}
                     >
-                      {item.summary}
+                      {@html item.html || item.summary}
                     </div>
-                    {#if !open}
+                    <button
+                      onclick={() => toggleItem(key)}
+                      class="text-xs text-primary mt-1 hover:underline"
+                      aria-expanded={true}
+                    >
+                      {i18n.t('Show less')}
+                    </button>
+                  {:else}
+                    <button
+                      onclick={() => toggleItem(key)}
+                      class="w-full text-left"
+                      aria-expanded={false}
+                    >
+                      <div class="text-sm font-medium text-foreground">{item.title}</div>
+                      <div class="text-sm text-muted-foreground mt-1 line-clamp-4 whitespace-pre-line break-words">
+                        {item.summary}
+                      </div>
                       <div class="text-[0.625rem] text-primary mt-1">{i18n.t('Show more')}</div>
-                    {/if}
-                  </button>
+                    </button>
+                  {/if}
                 {:else}
                   <div class="text-sm font-medium text-foreground">{item.title}</div>
                 {/if}

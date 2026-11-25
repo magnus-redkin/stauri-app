@@ -155,7 +155,7 @@ describe('loadFeeds', () => {
     localStorage.setItem(
       'stauri:feeds',
       JSON.stringify({
-        version: 2,
+        version: 3,
         feeds: [
           {
             url: 'https://example.com/feed',
