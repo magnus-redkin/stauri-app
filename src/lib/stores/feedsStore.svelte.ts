@@ -226,17 +226,21 @@ function persist(): void {
 }
 
 /**
- * Adds a subscription: validates the address and stores it.
+ * Adds a subscription and starts fetching it in the background.
  *
- * @param raw - Address as typed or pasted; normalised before checking.
- * @returns `ok` when stored, `failed` with the reason otherwise.
+ * @param raw - Address as typed or pasted; normalised before storing.
+ * @returns `ok` as soon as the record exists.
  * @remarks
- * Validation lives entirely in Rust (`fetch_feed`), which filters the address and parses the XML.
- * An error here is the answer to "this is not a feed": an HTML page, a 404, a Cloudflare
- * interstitial or an empty feed. The frontend neither decides whether the address may be fetched
- * nor parses the response itself. The address is normalised first, because users paste links from
- * catalogs or `@name` handles, and checking the raw input would reject what they consider a valid
- * address.
+ * The panel must not sit on a spinner while a public mirror takes its time: the
+ * RSSHub mirror intermittently drops the first connection, and waiting for the
+ * retry made "connect" a minute-long operation. The subscription is stored at
+ * once and the app switches to it; the fetch runs behind it, and a failure lands
+ * in the same record as "Update failed: …" — which the chat row already shows —
+ * and in `feedsState.error` for the panel.
+ *
+ * The address is normalised first, because users paste links from catalogs or
+ * `@name` handles, and storing the raw input would create a second record for a
+ * feed they already have.
  */
 export async function addFeed(raw: string): Promise<{ ok: boolean; error?: string }> {
   const url = normalizeFeedUrl(raw);
@@ -245,37 +249,60 @@ export async function addFeed(raw: string): Promise<{ ok: boolean; error?: strin
     return { ok: false, error: feedsState.error };
   }
 
-  feedsState.isAdding = true;
+  const existing = feedsState.subscriptions.get(url);
+  if (!existing) {
+    feedsState.subscriptions.set(url, {
+      url,
+      title: hostOf(url),
+      source: hostOf(url),
+      items: [],
+      fetchedAt: 0,
+      error: '',
+      seen: [],
+    });
+    persist();
+  }
   feedsState.error = '';
+  info(`[feeds] added ${url}, fetching in background`);
+
+  // Not awaited: the caller navigates to the chat immediately.
+  void refreshFeed(url);
+  return { ok: true };
+}
+
+/**
+ * Fetches one subscription and writes the result back into it.
+ *
+ * @param url - Subscription address.
+ * @returns `true` when the fetch succeeded.
+ * @remarks
+ * One source failing must not break the others (§13): the error goes into that
+ * record only. A failed first fetch keeps the stored title and leaves `items`
+ * empty, so the chat row says what went wrong instead of pretending to be empty.
+ */
+export async function refreshFeed(url: string): Promise<boolean> {
+  const current = feedsState.subscriptions.get(url);
+  if (!current) return false;
   try {
     const res = await invoke<FeedResponse>('fetch_feed', { url });
-
-    // An empty feed is no reason to add a record: in the chat list it would look like a channel
-    // with nothing in it, and the user would not know what broke.
-    if (!res.items.length) {
-      throw new Error('The feed is empty: no items found');
-    }
-
-    const subscription: FeedSubscription = {
-      url,
-      title: res.title || hostOf(url),
-      source: res.source || hostOf(url),
+    if (!res.items.length) throw new Error('The feed is empty: no items found');
+    feedsState.subscriptions.set(url, {
+      ...current,
+      title: res.title || current.title,
+      source: res.source || current.source,
       items: res.items.slice(0, MAX_STORED_ITEMS),
       fetchedAt: Date.now(),
       error: '',
-    };
-
-    feedsState.subscriptions.set(url, subscription);
+    });
     persist();
-    info(`[feeds] added ${url} (${res.items.length} items)`);
-    return { ok: true };
+    return true;
   } catch (e) {
     const error = formatError(e);
+    feedsState.subscriptions.set(url, { ...current, error });
     feedsState.error = error;
-    warn(`[feeds] add ${url} failed:`, e);
-    return { ok: false, error };
-  } finally {
-    feedsState.isAdding = false;
+    warn(`[feeds] refresh ${url} failed:`, e);
+    persist();
+    return false;
   }
 }
 
@@ -283,28 +310,13 @@ export async function addFeed(raw: string): Promise<{ ok: boolean; error?: strin
  * Refetches every subscription.
  *
  * @remarks
- * One source failing must not break the others (§13): the error is written into that subscription
- * and the rest stay as they were.
+ * Sequential on purpose: a burst of parallel requests to the same mirror is the
+ * fastest way to be rate-limited. Each URL reports its own outcome.
  */
 export async function refreshFeeds(): Promise<void> {
-  for (const [url, current] of [...feedsState.subscriptions.entries()]) {
-    try {
-      const res = await invoke<FeedResponse>('fetch_feed', { url });
-      if (!res.items.length) continue;
-      feedsState.subscriptions.set(url, {
-        ...current,
-        title: res.title || current.title,
-        source: res.source || current.source,
-        items: res.items.slice(0, MAX_STORED_ITEMS),
-        fetchedAt: Date.now(),
-        error: '',
-      });
-    } catch (e) {
-      feedsState.subscriptions.set(url, { ...current, error: formatError(e) });
-      debug(`[feeds] refresh ${url} failed:`, e);
-    }
+  for (const url of [...feedsState.subscriptions.keys()]) {
+    await refreshFeed(url);
   }
-  persist();
 }
 
 /** Removes a subscription. Its messages were never ours, so there is nothing else to delete. */

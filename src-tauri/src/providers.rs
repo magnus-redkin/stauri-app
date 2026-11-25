@@ -269,7 +269,12 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
         // so [`validate_external_url`] remains the first line (literal
         // addresses and local names) rather than the last. Without a proxy it
         // also checks the DNS result.
-        .timeout(std::time::Duration::from_secs(25))
+        // A dead host hangs on connect, and the total timeout alone would spend its
+        // whole budget waiting for the handshake — that is what made adding a
+        // Telegram channel take almost a minute. The connect timeout fails fast,
+        // leaving the retry the chance to succeed.
+        .connect_timeout(std::time::Duration::from_secs(6))
+        .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
 

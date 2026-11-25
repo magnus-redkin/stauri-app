@@ -636,6 +636,10 @@
           <p class="text-muted-foreground text-sm italic">{i18n.t('Feed not found')}</p>
         {:else if feed.error && feed.items.length === 0}
           <p class="text-destructive text-sm">{feed.error}</p>
+        {:else if feed.items.length === 0 && !feed.error && feed.fetchedAt === 0}
+          <!-- A subscription is stored before its first fetch: the panel returns at
+               once and the app switches here while the feed is still loading. -->
+          <p class="text-muted-foreground text-sm italic">{i18n.t('Loading feed...')}</p>
         {:else if feed.items.length === 0}
           <p class="text-muted-foreground text-sm italic">{i18n.t('No items in this feed')}</p>
         {:else}
@@ -657,7 +661,7 @@
                   >
                     <div class="text-sm font-medium text-foreground">{item.title}</div>
                     <div
-                      class="text-xs text-muted-foreground mt-1 {open ? 'whitespace-pre-wrap' : 'line-clamp-4'} break-words"
+                      class="text-sm text-muted-foreground mt-1 {open ? 'whitespace-pre-wrap' : 'line-clamp-4'} break-words"
                     >
                       {item.summary}
                     </div>
