@@ -450,38 +450,38 @@ export async function loadProfileNames(): Promise<void> {
 }
 
 /**
- * Makes the ENS name the profile's display name when the profile has none of its own.
+ * Makes the ENS name the profile's preferred name.
  *
  * @param fullName - The name to use, e.g. `stauri.stateofus.eth`.
  * @remarks
- * A profile without a display name is shown everywhere under the three-word alias
- * status-go generates from the public key ("Responsible Weepy Neonbluehermitcrab"),
- * which says nothing about the person and is not what they chose. The `.eth` name
- * is chosen, and it is what contacts already address.
+ * status-go has a dedicated setting for this: `preferred-name` (see
+ * `multiaccounts/settings/structs.go`). When it is set, it takes precedence over
+ * `display-name`, so the profile is shown under its ENS name everywhere, and the
+ * value syncs to other devices as `SyncSetting_PREFERRED_NAME`. Writing the
+ * `.eth` name into `display-name` instead would overwrite whatever the user
+ * called themselves and would not travel as a preferred name.
  *
- * A name the user typed is never replaced: only an empty display name or the
- * generated alias is overwritten. The display name is stored first, then pushed to
- * contacts — `wakuext_sendContactUpdates` reads it from settings.
+ * Only an empty `preferred-name` is filled: a name the user chose is never
+ * replaced. The display name is left untouched.
  */
 async function preferEnsDisplayName(fullName: string): Promise<void> {
   if (!statusState.backendRunning || !fullName) return;
   try {
     const settings = await getSettings();
-    const current = String(settings?.result?.['display-name'] ?? '');
-    const alias = String(settings?.result?.['alias'] ?? '');
-    if (current && (!alias || current !== alias)) return;
+    const preferred = String(settings?.result?.['preferred-name'] ?? '');
+    if (preferred) return;
 
-    await saveSetting('display-name', fullName);
+    await saveSetting('preferred-name', fullName);
     statusState.alias = fullName;
     rememberProfileName(statusState.accountKeyUid, fullName);
     // The own contact record carries the name too; reread it so lists and the
     // chat header show the new one at once.
     await loadContacts(true);
     applyContacts(contactsState.items);
-    info(`[ens] display name set to ${fullName}`);
+    info(`[ens] preferred name set to ${fullName}`);
   } catch (e) {
     // Not fatal: the name is attached, only the label stays as it was.
-    warn('[ens] could not set the display name from the ENS name:', e);
+    warn('[ens] could not set the preferred name from the ENS name:', e);
   }
 }
 

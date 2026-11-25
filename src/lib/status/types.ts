@@ -23,6 +23,8 @@ export interface NodeLoginEvent extends StatusEventBase {
     settings?: {
       'key-uid': string;
       'display-name': string;
+      /** ENS name the profile chose to be known by; takes precedence over `display-name`. */
+      'preferred-name'?: string;
       'public-key': string;
       /** Compressed key, `zQ3…`, which the profile link is built from. */
       compressedKey?: string;

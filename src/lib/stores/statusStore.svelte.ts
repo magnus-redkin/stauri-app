@@ -145,12 +145,12 @@ export function processSignal(rawJson: string) {
       statusState.accountKeyUid = loginEvent.event?.settings?.['key-uid'] || statusState.accountKeyUid;
       statusState.publicKey = loginEvent.event?.settings?.['public-key'] || statusState.publicKey;
       statusState.compressedKey = loginEvent.event?.settings?.['compressedKey'] || statusState.compressedKey;
-      // `display-name` is the name the user chose; `alias` is the three-word name
-      // status-go generates from the public key ("Perfumed Fearless Marten"). Reading
-      // the alias here would show a name the user never set, and the chosen one would
-      // survive only until the next restart, because `EditProfile` writes it to state
-      // directly. The generated alias is the fallback for a profile with no name.
+      // `preferred-name` is the ENS name the profile chose to be known by; status-go
+      // gives it precedence over `display-name`. `display-name` is the name the user
+      // typed; `alias` is the three-word name status-go generates ("Perfumed Fearless
+      // Marten") and is only the last fallback.
       statusState.alias =
+        loginEvent.event?.settings?.['preferred-name'] ||
         loginEvent.event?.settings?.['display-name'] ||
         loginEvent.event?.settings?.['alias'] ||
         statusState.alias;
