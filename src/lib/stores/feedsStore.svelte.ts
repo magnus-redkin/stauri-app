@@ -52,6 +52,15 @@ export interface FeedSubscription {
   fetchedAt: number;
   /** Error from the last refresh; empty means all is well. */
   error: string;
+  /**
+   * Item URLs the user has already seen.
+   *
+   * @remarks
+   * The badge in the chat list is `items.length - seen.length`, so what counts as "new"
+   * is decided when the feed is opened, not when it was fetched. A refresh that brings
+   * five items shows "5"; opening the feed clears it.
+   */
+  seen?: string[];
 }
 
 const STORAGE_KEY = 'stauri:feeds';
@@ -118,6 +127,20 @@ export const FEED_EXAMPLES = [
   'https://changelog.com/feed',
 ] as const;
 
+/**
+ * Telegram channels offered in the dApp panel as a separate block.
+ *
+ * @remarks
+ * They are ordinary `t.me` links: `normalizeFeedUrl` turns each into an RSSHub mirror route
+ * (`telegram/channel/<name>`), because the ready `t.me/s/<name>` page is fragile to parse.
+ * Kept apart from {@link FEED_EXAMPLES} so the panel does not mix two different kinds of
+ * source under one heading.
+ */
+export const TG_CHANNELS = [
+  'https://t.me/eveningprophet',
+  'https://t.me/dovlatov_sergei',
+] as const;
+
 export const feedsState = $state({
   /**
    * Subscriptions by URL.
@@ -170,6 +193,7 @@ export function loadFeeds(): void {
         items: feed.items,
         fetchedAt: feed.fetchedAt || 0,
         error: feed.error || '',
+        seen: Array.isArray(feed.seen) ? feed.seen : [],
       });
     }
 
@@ -321,7 +345,27 @@ export function feedChatItem(feed: FeedSubscription) {
     type: 'external' as const,
     source: feed.source,
     sourceUrl: feed.url,
+    unreadCount: feed.items.filter((item) => !(feed.seen ?? []).includes(item.url)).length,
   };
+}
+
+/**
+ * Marks every item of a subscription as seen, clearing its badge.
+ *
+ * @param url - Subscription address.
+ * @remarks
+ * Called when the feed is opened. The seen list is capped so a long-lived subscription
+ * cannot grow `localStorage` without bound: items beyond the stored window are no longer
+ * reported as new anyway, since they are not kept.
+ */
+export function markFeedSeen(url: string): void {
+  const feed = feedsState.subscriptions.get(url);
+  if (!feed) return;
+  const seen = feed.items.map((item) => item.url);
+  const current = feed.seen ?? [];
+  if (seen.length === current.length && seen.every((u) => current.includes(u))) return;
+  feedsState.subscriptions.set(url, { ...feed, seen });
+  persist();
 }
 
 /** All subscriptions as list rows, freshest first. */

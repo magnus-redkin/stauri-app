@@ -37,6 +37,8 @@
     loadFeeds,
     RSSHUB_MIRROR,
     FEED_EXAMPLES,
+    TG_CHANNELS,
+    normalizeFeedUrl,
   } from '$lib/stores/feedsStore.svelte';
   import {
     communitiesState,
@@ -117,12 +119,11 @@
 
     const raw = dappsState.feedUrl.trim();
     dappsState.feedUrl = '';
-    // The address may have been normalised (`@name` → `t.me/s/name`), so the id is taken
-    // from the stored subscription rather than from the input.
-    const added = [...feedsState.subscriptions.keys()].find(
-      (url) => url === raw || url.endsWith(raw)
-    );
-    if (added) onOpenChat?.(`feed:${added}`);
+    // The key is what `normalizeFeedUrl` produced, not the text the user typed: a
+    // `t.me/<name>` link becomes an RSSHub mirror route, and comparing the raw input
+    // against stored keys never matched, so the section did not switch to the new chat.
+    const added = normalizeFeedUrl(raw) ?? raw;
+    onOpenChat?.(`feed:${added}`);
   }
 
   async function handleChannelClick(entry: any, channelId: string) {
@@ -482,6 +483,23 @@
         Examples sit below the field rather than in a tooltip: they are meant to be tried by
         hand, not read. A click fills the field; Enter then adds the feed to the chat list.
       -->
+      <div class="pt-2 border-t border-border">
+        <p class="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+          {i18n.t('TG channels')}
+        </p>
+        <div class="space-y-0.5">
+          {#each TG_CHANNELS as channel (channel)}
+            <button
+              onclick={() => { dappsState.feedUrl = channel; feedInput?.focus(); }}
+              class="block w-full text-left text-[0.6875rem] text-primary hover:underline truncate"
+              title={channel}
+            >
+              {channel}
+            </button>
+          {/each}
+        </div>
+      </div>
+
       <div class="pt-2 border-t border-border">
         <p class="text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground mb-1">
           {i18n.t('RSS examples')}

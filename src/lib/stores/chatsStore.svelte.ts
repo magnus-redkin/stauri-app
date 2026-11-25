@@ -37,7 +37,7 @@ import { scenarioLog, short } from '$lib/utils/scenario';
 import { parseKind } from '$lib/status/channelKind';
 import { ROLE_OWNER } from '$lib/status/channelRights';
 import { loadOpenedChannels, markChannelOpened } from '$lib/status/openedChannels';
-import { feedChatItems } from './feedsStore.svelte';
+import { feedChatItems, markFeedSeen } from './feedsStore.svelte';
 import { formatError } from '$lib/utils/errors';
 import type { ChatItem } from '$lib/sections/chat/ChatLeft.svelte';
 import type { Community, CommunityChat } from '$lib/status/types';
@@ -341,6 +341,10 @@ export function selectChat(chatId: string) {
     feedChatItems().find((c) => c.id === chatId) ||
     null;
   chatsState.selected = chat as ChatItem | null;
+  // Opening a feed clears its "new items" badge; the count is computed from what this
+  // screen has shown.
+  const feedUrl = chat?.id?.startsWith('feed:') ? chat.id.slice('feed:'.length) : null;
+  if (feedUrl) markFeedSeen(feedUrl);
 }
 
 /**

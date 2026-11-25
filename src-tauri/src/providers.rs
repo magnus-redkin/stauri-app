@@ -269,21 +269,45 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
         // so [`validate_external_url`] remains the first line (literal
         // addresses and local names) rather than the last. Without a proxy it
         // also checks the DNS result.
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(25))
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
 
-    let resp = fetch_following_redirects(&client, parsed.clone()).await?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::network(format!("HTTP {}", resp.status())));
+    // Public feeds and RSSHub mirrors drop the first connection now and then — the same
+    // address answers 200 on the next attempt. Three attempts with a growing pause turn
+    // that into a slower success instead of "request failed: error sending request".
+    const ATTEMPTS: u32 = 3;
+    let mut last_error: Option<AppError> = None;
+    let mut fetched: Option<Vec<u8>> = None;
+    for attempt in 1..=ATTEMPTS {
+        match fetch_following_redirects(&client, parsed.clone()).await {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    // A definite answer: retrying will not change it.
+                    return Err(AppError::network(format!("HTTP {}", resp.status())));
+                }
+                match resp.bytes().await {
+                    Ok(bytes) => {
+                        fetched = Some(bytes.to_vec());
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => last_error = Some(AppError::network(format!("body read error: {e}"))),
+                }
+            }
+            Err(e) => last_error = Some(e),
+        }
+        if attempt < ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_secs(u64::from(attempt))).await;
+        }
     }
-
-    // Size cap: read no more than the limit, discard the rest.
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| AppError::network(format!("body read error: {e}")))?;
+    let bytes = match fetched {
+        Some(bytes) => bytes,
+        None => {
+            return Err(last_error
+                .unwrap_or_else(|| AppError::network("request failed after retries")))
+        }
+    };
     let body = &bytes[..bytes.len().min(MAX_BODY_BYTES)];
     let text = String::from_utf8_lossy(body).to_string();
 

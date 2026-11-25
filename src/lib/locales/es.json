@@ -223,6 +223,7 @@
   "A working feed is added to the chat list as an external source.": "Un feed que funciona se añade a la lista de chats como fuente externa.",
   "RSS/Atom URL or a Telegram link (t.me/...)": "URL de RSS/Atom o un enlace de Telegram (t.me/...)",
   "RSS examples": "Ejemplos de RSS",
+  "TG channels": "Canales de TG",
   "The address must return RSS or Atom, or be a Telegram channel link. Use a feed source such as RSSHub for networks that do not publish one.": "La dirección debe devolver RSS o Atom, o ser un enlace a un canal de Telegram. Usa una fuente como RSSHub para las redes que no publican una.",
   "RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.": "Los enlaces de RSSHub (rsshub.app) se envían a través de un espejo, {mirror}. Los enlaces a canales de Telegram se convierten a ese espejo automáticamente; algunas redes necesitan claves y actualmente fallan.",
   "Show more": "Mostrar todo",

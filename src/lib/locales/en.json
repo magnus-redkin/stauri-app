@@ -222,6 +222,7 @@
   "A working feed is added to the chat list as an external source.": "A working feed is added to the chat list as an external source.",
   "RSS/Atom URL or a Telegram link (t.me/...)": "RSS/Atom URL or a Telegram link (t.me/...)",
   "RSS examples": "RSS examples",
+  "TG channels": "TG channels",
   "The address must return RSS or Atom, or be a Telegram channel link. Use a feed source such as RSSHub for networks that do not publish one.": "The address must return RSS or Atom, or be a Telegram channel link. Use a feed source such as RSSHub for networks that do not publish one.",
   "RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.": "RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.",
   "Show more": "Show more",
