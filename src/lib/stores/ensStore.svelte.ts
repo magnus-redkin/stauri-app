@@ -28,8 +28,13 @@ import {
   ensAddressOf,
   ensOwnerOf,
   getEnsUsernames,
+  getSettings,
+  saveSetting,
 } from '$lib/status/wallet';
 import { sendContactUpdates } from '$lib/status/messaging';
+import { rememberProfileName } from './profileNames';
+import { contactsState, loadContacts } from './contactsStore.svelte';
+import { applyContacts } from './chatsStore.svelte';
 import { debug, info, warn } from '$lib/utils/log';
 import { formatError } from '$lib/utils/errors';
 
@@ -445,6 +450,57 @@ export async function loadProfileNames(): Promise<void> {
 }
 
 /**
+ * Makes the ENS name the profile's display name when the profile has none of its own.
+ *
+ * @param fullName - The name to use, e.g. `stauri.stateofus.eth`.
+ * @remarks
+ * A profile without a display name is shown everywhere under the three-word alias
+ * status-go generates from the public key ("Responsible Weepy Neonbluehermitcrab"),
+ * which says nothing about the person and is not what they chose. The `.eth` name
+ * is chosen, and it is what contacts already address.
+ *
+ * A name the user typed is never replaced: only an empty display name or the
+ * generated alias is overwritten. The display name is stored first, then pushed to
+ * contacts — `wakuext_sendContactUpdates` reads it from settings.
+ */
+async function preferEnsDisplayName(fullName: string): Promise<void> {
+  if (!statusState.backendRunning || !fullName) return;
+  try {
+    const settings = await getSettings();
+    const current = String(settings?.result?.['display-name'] ?? '');
+    const alias = String(settings?.result?.['alias'] ?? '');
+    if (current && (!alias || current !== alias)) return;
+
+    await saveSetting('display-name', fullName);
+    statusState.alias = fullName;
+    rememberProfileName(statusState.accountKeyUid, fullName);
+    // The own contact record carries the name too; reread it so lists and the
+    // chat header show the new one at once.
+    await loadContacts(true);
+    applyContacts(contactsState.items);
+    info(`[ens] display name set to ${fullName}`);
+  } catch (e) {
+    // Not fatal: the name is attached, only the label stays as it was.
+    warn('[ens] could not set the display name from the ENS name:', e);
+  }
+}
+
+/**
+ * Applies the ENS-name display name for the profile's first name, loading the list if needed.
+ *
+ * @remarks
+ * Called when the profile editor opens, so a profile that attached its name with an
+ * older build — or before this rule existed — gets the same treatment without
+ * repeating the registration.
+ */
+export async function ensureDisplayNameFromEns(): Promise<void> {
+  if (!statusState.backendRunning) return;
+  if (ensState.profileNames.length === 0) await loadProfileNames();
+  const name = ensState.profileNames[0];
+  if (name) await preferEnsDisplayName(name);
+}
+
+/**
  * Registers the name.
  *
  * @returns `true` on success; `false` when the wallet is not ready, the password
@@ -513,6 +569,9 @@ export async function registerName(): Promise<boolean> {
       try {
         await addEnsUsername(statusState.chainId, ensState.fullName);
         await loadProfileNames();
+        // The chosen name becomes the display name when the profile has none of its
+        // own, and only then is pushed to contacts.
+        await preferEnsDisplayName(ensState.fullName);
         // Push the name to contacts: `wakuext_sendContactUpdates` is what carries
         // the ENS name into their contact records, and their client shows it
         // instead of the random alias.
@@ -641,6 +700,7 @@ export async function attachExistingName(): Promise<boolean> {
   try {
     await addEnsUsername(statusState.chainId, full);
     await loadProfileNames();
+    await preferEnsDisplayName(full);
     // Same push as after a registration: contacts learn the name the profile now uses.
     try {
       await sendContactUpdates(full);

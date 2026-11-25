@@ -12,7 +12,7 @@
   import { untrack } from 'svelte';
   import { statusState, setSeedSaved } from '$lib/stores/statusStore.svelte';
   import { rememberProfileName } from '$lib/stores/profileNames';
-  import { ensState, loadProfileNames } from '$lib/stores/ensStore.svelte';
+  import { ensState, ensureDisplayNameFromEns, loadProfileNames } from '$lib/stores/ensStore.svelte';
   import { profileAvatarState, ensureProfileAvatar } from '$lib/stores/profileStore.svelte';
   import { saveSetting } from '$lib/status/wallet';
   import { sendContactUpdates } from '$lib/status/messaging';
@@ -205,6 +205,9 @@
     untrack(async () => {
       await ensureProfileAvatar();
       await loadProfileNames();
+      // A profile whose ENS name was attached by an older build still shows the
+      // generated alias as its name; give it the chosen name once.
+      await ensureDisplayNameFromEns();
       // Baseline for the "changed" comparison: whatever the profile has now is what
       // the user started from.
       if (!ensSeen) {
