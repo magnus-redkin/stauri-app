@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aes-gcm",
  "android_logger",
