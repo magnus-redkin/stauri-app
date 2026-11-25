@@ -10,6 +10,13 @@
     onSkip,
   }: { onBack?: () => void; onSave: () => void; onSkip?: () => void } = $props();
 
+  /** Whether the phrase was just copied; the label says so for half a minute. */
+  let copied = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  onDestroy(() => {
+    if (copiedTimer) clearTimeout(copiedTimer);
+  });
+
   let wordCount = $state(0);
   let isLoading = $state(true);
   let error = $state('');
@@ -64,7 +71,23 @@
     // in component state.
     const parts: string[] = [];
     for (const w of shownWords) parts.push(w.word);
-    await navigator.clipboard.writeText(parts.join(' '));
+    try {
+      await navigator.clipboard.writeText(parts.join(' '));
+    } catch (e) {
+      // A refused write must not claim success. On a phone the clipboard can be
+      // unavailable in a sandboxed context; the phrase stays readable, which is why
+      // it is shown word by word.
+      error = formatError(e, i18n.t('Could not copy the phrase'));
+      return;
+    }
+    // The confirmation is time-limited: "Copied" that never goes away stops telling
+    // the user anything.
+    copied = true;
+    if (copiedTimer) clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => {
+      copied = false;
+      copiedTimer = null;
+    }, 30_000);
   }
 
   async function startVerification() {
@@ -122,7 +145,7 @@
         class="text-sm text-primary hover:underline flex items-center gap-1"
         title={i18n.t('Copy phrase')}
       >
-        📋 {i18n.t('Copy')}
+        📋 {copied ? i18n.t('Copied') : i18n.t('Copy')}
       </button>
     </div>
 

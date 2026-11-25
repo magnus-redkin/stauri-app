@@ -60,7 +60,7 @@
   } from '$lib/stores/walletStore.svelte';
   import { resetSend } from '$lib/stores/sendStore.svelte';
   import { resetEns } from '$lib/stores/ensStore.svelte';
-  import { startUpdatePolling } from '$lib/stores/updaterState.svelte';
+  import { runUpdateCheck, startUpdatePolling, updateState } from '$lib/stores/updaterState.svelte';
   import {
     ensureProfileAvatar,
     setProfileAvatar,
@@ -522,6 +522,23 @@
     loadFeeds();
     // A release can wait on no one: the check runs in the background and then hourly.
     startUpdatePolling();
+
+  /**
+   * Checks for a release when the profile section is opened.
+   *
+   * @remarks
+   * The profile panel is where the update banner lives, so this is the moment the user
+   * would look for it. The background check runs once a day; opening the profile is a
+   * natural second occasion. A check made within the last ten minutes is not repeated:
+   * switching sections should not become a polling loop.
+   */
+  $effect(() => {
+    const section = activeSection;
+    if (section !== 'profile') return;
+    const last = updateState.checkedAt ?? 0;
+    if (Date.now() - last < 10 * 60 * 1000) return;
+    void runUpdateCheck();
+  });
     await connect(undefined);
     if (statusState.accounts.length > 0) {
       selectedAccountKeyUid = statusState.accounts[0]["key-uid"];

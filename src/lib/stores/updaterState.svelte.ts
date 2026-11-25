@@ -3,9 +3,10 @@
  *
  * @remarks
  * The check used to be a button on the Settings screen, which meant nobody pressed it: a
- * release could sit unnoticed for weeks. It now runs once at start and then hourly, and
- * the result is shared state — the section bar marks Settings with a dot and the profile
- * panel shows a banner, so the offer appears wherever the user already is.
+ * release could sit unnoticed for weeks. It now runs once at start, whenever the profile
+ * section is opened, and once a day in the background; the result is shared state — the
+ * section bar marks Settings with a dot and the profile panel shows a banner, so the offer
+ * appears wherever the user already is.
  *
  * Checking is automatic; installing is not. The signature prevents a swapped binary but
  * not a swapped moment, and an application that holds keys should not replace itself
@@ -13,8 +14,8 @@
  */
 import { checkForUpdate, type UpdateInfo } from './updater';
 
-/** One hour between checks, as agreed: often enough to notice, rare enough to be free. */
-const INTERVAL_MS = 60 * 60 * 1000;
+/** A day between background checks: a release is not an emergency, and a request is not free. */
+const INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /** Result of the latest check. */
 export const updateState = $state<{
@@ -54,7 +55,7 @@ export async function runUpdateCheck(): Promise<void> {
 }
 
 /**
- * Starts the hourly check.
+ * Starts the check: once now, then once a day.
  *
  * @remarks
  * Idempotent: the page calls it once at startup, and a second call (a hot reload, a
