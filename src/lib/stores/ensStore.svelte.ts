@@ -29,6 +29,7 @@ import {
   ensOwnerOf,
   getEnsUsernames,
 } from '$lib/status/wallet';
+import { sendContactUpdates } from '$lib/status/messaging';
 import { debug, info, warn } from '$lib/utils/log';
 import { formatError } from '$lib/utils/errors';
 
@@ -512,6 +513,10 @@ export async function registerName(): Promise<boolean> {
       try {
         await addEnsUsername(statusState.chainId, ensState.fullName);
         await loadProfileNames();
+        // Push the name to contacts: `wakuext_sendContactUpdates` is what carries
+        // the ENS name into their contact records, and their client shows it
+        // instead of the random alias.
+        await sendContactUpdates(ensState.fullName);
       } catch (e) {
         // Do not fail the registration: the name is already on chain, and
         // repeating the transaction over an unsaved profile row would be
@@ -636,6 +641,12 @@ export async function attachExistingName(): Promise<boolean> {
   try {
     await addEnsUsername(statusState.chainId, full);
     await loadProfileNames();
+    // Same push as after a registration: contacts learn the name the profile now uses.
+    try {
+      await sendContactUpdates(full);
+    } catch (e) {
+      warn('[ens] attached, but contacts were not updated:', e);
+    }
     ensState.fullName = full;
     ensState.txHash = '';
     ensState.linked = true;

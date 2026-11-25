@@ -14,7 +14,7 @@
   import { canRecord, canComment } from '$lib/status/channelRights';
   import { chatsState, acceptRequestAndOpen, rejectRequest } from '$lib/stores/chatsStore.svelte';
   import { feedsState } from '$lib/stores/feedsStore.svelte';
-  import { formatMessageText, getDisplayName } from '$lib/utils/user';
+  import { formatMessageText, getDisplayName, samePublicKey } from '$lib/utils/user';
   import { formatError } from '$lib/utils/errors';
   import { debug, error } from '$lib/utils/log';
   import { invoke } from '@tauri-apps/api/core';
@@ -447,8 +447,11 @@
     if (!msg) return false;
     if (msg.from === 'me') return true;
     if (msg.outgoingStatus) return true;
-    const own = statusState.publicKey;
-    return !!own && msg.from === own;
+    // A direct chat is keyed by the uncompressed key, settings carry the
+    // uncompressed one, but a channel message's `from` is compressed. A string
+    // compare therefore failed inside channels and the own message was shown as
+    // a contact, under its random alias.
+    return samePublicKey(msg.from, statusState.publicKey);
   }
 
   async function send() {
