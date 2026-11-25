@@ -176,6 +176,29 @@
     else expandedItems.add(key);
   }
 
+  /** Messages (channel posts and comments) whose long text is expanded. */
+  const expandedMessages = new SvelteSet<string>();
+
+  function toggleMessage(key: string) {
+    if (expandedMessages.has(key)) expandedMessages.delete(key);
+    else expandedMessages.add(key);
+  }
+
+  /**
+   * Whether a message is long enough to be worth collapsing.
+   *
+   * @param text - Message body.
+   * @returns `true` for long or multi-line text.
+   * @remarks
+   * The decision is made by length and line count rather than by measuring the
+   * rendered element: a measurement would need a post-render pass per message and
+   * would flicker on resize.
+   */
+  function isLongText(text: string | undefined): boolean {
+    const value = text || '';
+    return value.length > 280 || (value.match(/\n/g)?.length ?? 0) > 3;
+  }
+
   /**
    * Opens a URL with the system handler.
    *
@@ -433,14 +456,19 @@
     if (!inputText.trim() || !chat || !canWrite || !statusState.backendRunning) return;
     const text = inputText;
     inputText = '';
+    // In a channel where only the author records posts, the composer at the bottom
+    // writes a comment to the last post: the user can answer there, but a new post
+    // is not theirs to make.
+    const lastPost = posts[posts.length - 1];
+    const responseTo = !canRecordHere && lastPost ? String(lastPost.id) : '';
     try {
       const res = await sendChatMessage(
         chat.id,
  text,
         communityId,
-        ''
+        responseTo
       );
-      scenarioLog('reply-sync', 'sent', { chat: short(chat.id) });
+      scenarioLog('reply-sync', 'sent', { chat: short(chat.id), comment: !!responseTo });
       // The backend returns both the new message and its parent in
       // `result.messages`. For a regular post just append an optimistic copy; a
       // reply is picked up by the next history load.
@@ -449,7 +477,13 @@
       );
       messages = [
         ...messages,
-        sent || { text, from: statusState.publicKey || 'me', timestamp: Date.now(), outgoingStatus: 'sending' },
+        sent || {
+          text,
+          from: statusState.publicKey || 'me',
+          timestamp: Date.now(),
+          outgoingStatus: 'sending',
+          ...(responseTo ? { responseTo } : {}),
+        },
       ];
     } catch (e) {
       error(`[chat] ${chat.id}: send failed`, e);
@@ -673,7 +707,7 @@
     {:else}
       <!-- Message history. Same reason for `min-h-0` and padding on the inner `div`. -->
       <ScrollArea class="flex-1 min-h-0">
-        <div class="p-4">
+        <div class="p-4 {chatsState.selected.type === 'community' ? 'bg-background min-h-full' : ''}">
         {#if isLoading}
           <p class="text-muted-foreground text-sm">{i18n.t('Loading messages...')}</p>
         {:else if posts.length === 0}
@@ -713,7 +747,14 @@
           <div class="space-y-3">
             {#each posts as post (post.id)}
               {@const replies = repliesByParent.get(post.id) || []}
-              <div class="space-y-1">
+              {@const postLong = isLongText(post.text)}
+              {@const postOpen = expandedMessages.has(post.id)}
+              <!--
+                A post is a white bubble on the section background, the same shape a
+                direct chat uses, so a channel does not look like a different kind of
+                screen.
+              -->
+              <div class="rounded-lg border border-border/60 bg-card px-3 py-2 shadow-sm space-y-1">
   {#if chatsState.selected.type === 'community'}
     <div class="relative flex justify-end">
       <button
@@ -735,7 +776,16 @@
          {/if}
   <div class="text-sm">
            <div class="font-bold">{authorNameOf(post)}</div>
-    <div class="whitespace-pre-wrap break-words">{formatMessageText(post.text, chatsState.contacts)}</div>
+    <div class="{postOpen || !postLong ? 'whitespace-pre-wrap' : 'line-clamp-4'} break-words">{formatMessageText(post.text, chatsState.contacts)}</div>
+    {#if postLong}
+      <button
+        onclick={() => toggleMessage(post.id)}
+        class="text-xs text-primary mt-1 hover:underline"
+        aria-expanded={postOpen}
+      >
+        {postOpen ? i18n.t('Show less') : i18n.t('Show more')}
+      </button>
+    {/if}
   </div>
   <button
            onclick={() => (openPostId = post.id)}
@@ -747,17 +797,29 @@
                 <!--
                   Comments under a post.
 
-                  The header shows whether comments exist, not how many: there is no
-                  server-side counter, and counting over the loaded page would lie
-                  ("7 comments" may mean "7 loaded"). See docs/ru/akk_scheme.md §9.3.
+                  Each comment carries its author: a channel has many writers, and a
+                  line without a name was indistinguishable from the post above it.
+                  Long comments collapse the same way the post does.
                 -->
                 {#if replies.length > 0}
-                  <div class="pl-4 space-y-1">
+                  <div class="pl-4 space-y-1 border-t border-border/60 pt-1">
                     {#each replies as reply (reply.id)}
+                      {@const replyLong = isLongText(reply.text)}
+                      {@const replyOpen = expandedMessages.has(reply.id)}
                       <div class="flex gap-2 text-sm">
                         <span class="text-muted-foreground shrink-0">↳</span>
-                        <div class="{isOwn(reply) ? 'text-primary' : 'text-foreground'}">
-                          {formatMessageText(reply.text, chatsState.contacts)}
+                        <div class="{isOwn(reply) ? 'text-primary' : 'text-foreground'} min-w-0">
+                          <div class="text-xs font-medium text-muted-foreground">{authorNameOf(reply)}</div>
+                          <div class="{replyOpen || !replyLong ? 'whitespace-pre-wrap' : 'line-clamp-4'} break-words">{formatMessageText(reply.text, chatsState.contacts)}</div>
+                          {#if replyLong}
+                            <button
+                              onclick={() => toggleMessage(reply.id)}
+                              class="text-xs text-primary mt-1 hover:underline"
+                              aria-expanded={replyOpen}
+                            >
+                              {replyOpen ? i18n.t('Show less') : i18n.t('Show more')}
+                            </button>
+                          {/if}
                         </div>
                       </div>
                     {/each}
@@ -770,8 +832,12 @@
         </div>
       </ScrollArea>
 
-      <!-- Feed input. The comments page has an input of its own. -->
-      {#if canRecordHere && !openPostId}
+      <!--
+        Feed input. A channel where the account cannot post still takes comments: the
+        composer writes a comment to the last post (see `send`), so it is shown
+        whenever writing is allowed at all.
+      -->
+      {#if canWrite && !openPostId}
         <div class="p-4 border-t border-border flex gap-2">
           <input
             bind:value={inputText}

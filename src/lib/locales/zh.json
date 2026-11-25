@@ -226,6 +226,7 @@
   "The address must return RSS or Atom, or be a Telegram channel link. Use a feed source such as RSSHub for networks that do not publish one.": "该地址必须返回 RSS 或 Atom，或者是 Telegram 频道链接。对于不提供订阅源的网络，请使用 RSSHub 之类的服务。",
   "RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.": "RSSHub 链接（rsshub.app）通过镜像 {mirror} 访问。Telegram 频道链接会自动转换到该镜像；部分网络需要密钥，目前不可用。",
   "Show more": "显示全部",
+  "Show less": "收起",
   "Open source": "打开来源",
   "Transaction sent": "交易已发送",
   "Open in explorer": "在区块浏览器中打开",

@@ -226,6 +226,7 @@
   "The address must return RSS or Atom, or be a Telegram channel link. Use a feed source such as RSSHub for networks that do not publish one.": "Адрес должен отдавать RSS или Atom либо быть ссылкой на канал Telegram. Для сетей без своей ленты используйте источник вроде RSSHub.",
   "RSSHub links (rsshub.app) are sent through a mirror, {mirror}. Telegram channel links are converted to that mirror automatically; some networks need keys and currently fail.": "Ссылки RSSHub (rsshub.app) уходят через зеркало {mirror}. Ссылки на каналы Telegram автоматически переводятся на это зеркало; некоторым сетям нужны ключи, и сейчас они не отдаются.",
   "Show more": "Показать полностью",
+  "Show less": "Свернуть",
   "Open source": "Открыть источник",
   "Transaction sent": "Транзакция отправлена",
   "Open in explorer": "Открыть в обозревателе",
