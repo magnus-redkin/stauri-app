@@ -529,8 +529,10 @@ fn apply_field(item: &mut FeedItem, field: &str, text: &str) {
             if item.summary.is_empty() {
                 // Entities are already expanded by the reader (see
                 // `parse_rss`), so only tags are stripped and whitespace
-                // normalized here.
-                item.summary = clean_text(text);
+                // normalized here. Line breaks survive: a post can be a poem
+                // or a list, and collapsing it into one paragraph destroys
+                // both the meaning and the shape.
+                item.summary = clean_text_lines(text);
             }
         }
         "link" => {
@@ -596,6 +598,65 @@ fn clean_text(input: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Strips tags but keeps line structure.
+///
+/// Used for the body of an entry: `<br>`, `</p>`, `</li>` and the other block
+/// boundaries become line breaks, inline tags (`<b>`, `<a>`) leave no trace, and
+/// runs of blank lines collapse into one. What the channel wrote as a poem or a
+/// list stays a poem or a list; [`clean_text`] would have joined it into a single
+/// paragraph.
+fn clean_text_lines(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut tag = String::new();
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                tag.clear();
+            }
+            '>' => {
+                in_tag = false;
+                let name = tag
+                    .trim()
+                    .trim_start_matches('/')
+                    .to_ascii_lowercase();
+                let closing = tag.trim_start().starts_with('/');
+                let block = matches!(
+                    name.as_str(),
+                    "p" | "div" | "li" | "tr" | "blockquote" | "h1" | "h2" | "h3" | "h4" | "h5"
+                        | "h6"
+                );
+                if name == "br" || (block && closing) || (name == "li" && !closing) {
+                    out.push('\n');
+                } else {
+                    // The reader trims text nodes, so `<p>Hello <b>there</b></p>`
+                    // arrives as "Hello" + "there" and an inline tag must keep the
+                    // words apart. The extra space before punctuation is removed
+                    // below.
+                    out.push(' ');
+                }
+            }
+            c if !in_tag => out.push(c),
+            _ => tag.push(ch),
+        }
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for line in out.lines() {
+        let mut trimmed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        // `<b>Hello</b>, world` lost the word boundary but gained a space before
+        // the comma; punctuation belongs to the word it follows.
+        for mark in [",", ".", ";", ":", "!", "?", ")", "]"] {
+            trimmed = trimmed.replace(&format!(" {mark}"), mark);
+        }
+        if !trimmed.is_empty() {
+            lines.push(trimmed);
+        }
+    }
+    lines.join("\n")
 }
 
 /// The same for markup delivered as plain text (an HTML page).
@@ -909,6 +970,24 @@ mod tests {
         assert_eq!(strip_tags("<b>hello</b> <i>world</i>"), "hello world");
         assert_eq!(strip_tags("a &amp; b"), "a & b");
         assert_eq!(strip_tags("  spaced   out  "), "spaced out");
+    }
+
+    #[test]
+    fn keeps_line_structure_in_summary() {
+        // A post can be a poem: joining the lines destroys it.
+        let html = "<p>Не тишина — немота.<br>Усталость и ломота:<br>голова, голова болит.</p><p>Ветер в листве.</p>";
+        assert_eq!(
+            clean_text_lines(html),
+            "Не тишина — немота.\nУсталость и ломота:\nголова, голова болит.\nВетер в листве."
+        );
+        // An inline tag is a word boundary for the trimmed text nodes: the words
+        // stay apart, and a comma after a tag is not pushed away from its word.
+        assert_eq!(clean_text_lines("сло<b>во</b>"), "сло во");
+        assert_eq!(clean_text_lines("<b>Hello</b>, world"), "Hello, world");
+        // Blank runs collapse.
+        assert_eq!(clean_text_lines("a<br><br><br>b"), "a\nb");
+        // A list keeps its items on separate lines.
+        assert_eq!(clean_text_lines("<ul><li>one</li><li>two</li></ul>"), "one\ntwo");
     }
 
     #[test]

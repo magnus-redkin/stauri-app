@@ -661,7 +661,7 @@
                   >
                     <div class="text-sm font-medium text-foreground">{item.title}</div>
                     <div
-                      class="text-sm text-muted-foreground mt-1 {open ? 'whitespace-pre-wrap' : 'line-clamp-4'} break-words"
+                      class="text-sm text-muted-foreground mt-1 {open ? 'whitespace-pre-wrap' : 'line-clamp-4 whitespace-pre-line'} break-words"
                     >
                       {item.summary}
                     </div>
