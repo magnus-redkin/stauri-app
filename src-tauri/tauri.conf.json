@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "stauri-app",
-  "mainBinaryName": "Stauri",
   "version": "0.5.4",
   "identifier": "com.magnus.stauri-app",
   "build": {
