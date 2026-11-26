@@ -152,6 +152,7 @@ sed 's/--path:"\(.*\)"/--path:\1/' nimbus-build-system.paths > "$WORK/sds-paths.
 mapfile -t SDS_PATHS < "$WORK/sds-paths.txt"
 mkdir -p build
 "$NIM" c "${SDS_PATHS[@]}" --skipUserCfg:on -d:disableMarchNative \
+  -d:noSignalHandler \
   --out:build/libsds.dll --threads:on --app:lib --opt:size --noMain --mm:refc \
   --header --nimMainPrefix:libsds --warning:Deprecated:off \
   --os:windows --cpu:amd64 -d:mingw --cc:gcc \
