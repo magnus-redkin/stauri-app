@@ -40,8 +40,71 @@ type SetSignalFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 
 // libc `free`. A string allocated by cgo is released by the caller, because
 // `libstatus.h` exports no dedicated release function.
+//
+// On Windows the matching allocator is not Rust's: see [`release`].
+#[cfg(not(target_os = "windows"))]
 unsafe extern "C" {
     fn free(ptr: *mut std::ffi::c_void);
+}
+
+/// Releases a C string returned by status-go.
+///
+/// # Remarks
+/// The string is allocated by the engine, and the host must free it in the same C
+/// runtime. On Linux and Android both sides use the system libc, so plain `free`
+/// is right. On Windows it is not: status-go is built with the mingw toolchain and
+/// allocates through `msvcrt.dll`, while Rust under MSVC links against `ucrtbase`.
+/// Freeing a `msvcrt` block with `ucrtbase`'s `free` corrupts the heap — the
+/// process dies inside `RtlValidateHeap` right after the first reply — so the
+/// Windows path takes `free` from `msvcrt.dll` itself.
+///
+/// # Safety
+/// `ptr` must be a string returned by this engine and must not be used afterwards.
+#[cfg(not(target_os = "windows"))]
+fn release(ptr: *mut c_char) {
+    // SAFETY: allocated by the same libc as `free`.
+    unsafe { free(ptr as *mut std::ffi::c_void) };
+}
+
+/// Releases a C string returned by status-go; see the other [`release`].
+///
+/// # Safety
+/// `ptr` must be a string returned by this engine and must not be used afterwards.
+#[cfg(target_os = "windows")]
+fn release(ptr: *mut c_char) {
+    type FreeFn = unsafe extern "C" fn(*mut std::ffi::c_void);
+    static MSVCRT_FREE: OnceLock<Option<FreeFn>> = OnceLock::new();
+
+    let free = MSVCRT_FREE.get_or_init(|| {
+        // SAFETY: `msvcrt.dll` is a system module and `free` has the C signature.
+        unsafe {
+            let lib = match Library::new("msvcrt.dll") {
+                Ok(lib) => lib,
+                Err(e) => {
+                    tracing::warn!("msvcrt.dll not usable: {e}");
+                    return None;
+                }
+            };
+            let symbol: Symbol<FreeFn> = match lib.get(b"free\0") {
+                Ok(symbol) => symbol,
+                Err(e) => {
+                    tracing::warn!("msvcrt.dll exports no free: {e}");
+                    return None;
+                }
+            };
+            let entry = *symbol;
+            // The module must stay loaded while its `free` is callable.
+            Box::leak(Box::new(lib));
+            Some(entry)
+        }
+    });
+
+    match free {
+        // SAFETY: the block was allocated by this very allocator.
+        Some(entry) => unsafe { entry(ptr as *mut std::ffi::c_void) },
+        // Leaking one reply is survivable; freeing it into the wrong heap is not.
+        None => tracing::warn!("status-go reply not released: no msvcrt free"),
+    }
 }
 
 /// Reply of `start_backend`, shaped as the frontend expects.
@@ -412,7 +475,7 @@ impl InProcessBackend {
             .to_string_lossy()
             .into_owned();
         // SAFETY: out is no longer used after the copy.
-        unsafe { free(out as *mut std::ffi::c_void) };
+        release(out);
         Ok(text)
     }
 
@@ -444,7 +507,7 @@ impl InProcessBackend {
             .to_string_lossy()
             .into_owned();
         // SAFETY: out is no longer used after the copy.
-        unsafe { free(out as *mut std::ffi::c_void) };
+        release(out);
         Ok(text)
     }
 
@@ -690,7 +753,7 @@ fn owned_reply(out: *mut c_char) -> AppResult<String> {
         .to_string_lossy()
         .into_owned();
     // SAFETY: out is no longer used after the copy.
-    unsafe { free(out as *mut std::ffi::c_void) };
+    release(out);
     Ok(text)
 }
 
