@@ -32,9 +32,6 @@
     }
   },
   "bundle": {
-    "resources": {
-      "binaries/libsds.so": "libsds.so"
-    },
     "active": true,
     "targets": [],
     "icon": [
