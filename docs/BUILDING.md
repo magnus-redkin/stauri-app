@@ -285,10 +285,45 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
 
 ## 9. Windows
 
-Не собран. Что известно: `libsds.dll` через `nim c --os:windows` с MinGW не
-находит `chronos`; флейк `nim-sds` для `packages.x86_64-windows` падает на
-`buildInputs`. Сборка запланирована на Windows 11
-(KVM).
+Состояние: готовится. В Windows 11 (KVM) поставлены VS Build Tools, Rust MSVC и
+Node/pnpm. Что осталось до первой сборки:
+
+1. **`libsds.dll`** — известный блокер: `nim c --os:windows` с MinGW не находит
+   `chronos`, а флейк `nim-sds` для `packages.x86_64-windows` падает на
+   `buildInputs`. Рабочая попытка — собирать не флейком, а Nim напрямую с явными
+   `--path` до зависимостей и `--cc:vcc`:
+   ```
+   nim c --cc:vcc --app:lib --out:libsds.dll -d:release \
+       --path:<nim-sds>/src --path:<chronos> --path:<results> --path:<stew> \
+       <nim-sds>/src/sds
+   ```
+2. **`libstatus.dll`** из нашего форка `status-go`
+   (`magnus-redkin/status-go:stauri/close-accounts`). Цель `statusgo-shared-library`
+   в Makefile даёт `build/bin/libstatus.dll`; для cgo нужен `gcc` (MinGW-64).
+   Патч лежит в `mobile/status.go`, cbindings генерируются из него, поэтому
+   `CloseAccounts` попадает в DLL сам. Проверка:
+   ```
+   dumpbin /exports build\bin\libstatus.dll | findstr CloseAccounts
+   ```
+3. Обе DLL — в `src-tauri/binaries/` (`libstatus.dll`, `libsds.dll`).
+
+Затем:
+
+```
+pnpm install
+powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Version 0.5.4
+```
+
+Tauri сам накладывает `src-tauri/tauri.windows.conf.json` поверх основного
+конфига: цель сборки NSIS, ресурсы берутся как `libsds.dll`. `build.rs` копирует
+`.dll` рядом с exe так же, как `.so` на Linux, поэтому `tauri dev` и release
+ведут себя одинаково.
+
+Порядок проверки на Windows: создание профиля, чат с Linux-соседом в обе
+стороны, смена сети без перезапуска (то, ради чего патч), кошелёк и балансы,
+`.eth`-имя, лента Telegram, автообновление. Ключ автообновления и общий
+`latest.json` остаются на Linux-хосте: установщик и `.sig` переносятся туда, а
+ключ платформы в манифесте — `windows-x86_64`.
 
 ## Известные проблемы
 

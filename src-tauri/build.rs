@@ -9,7 +9,21 @@
 use std::path::{Path, PathBuf};
 
 /// Libraries copied next to the executable on desktop.
-const LIBRARIES: &[&str] = &["libstatus.so", "libsds.so"];
+///
+/// The names differ per platform: `.dll` on Windows, `.so` everywhere else we build
+/// for. `inprocess::library_path` resolves the same names at runtime, and the
+/// bundled resources (`tauri.conf.json`, `tauri.windows.conf.json`) carry them into
+/// the installer, so all three places must agree.
+const LIBRARIES_UNIX: &[&str] = &["libstatus.so", "libsds.so"];
+const LIBRARIES_WINDOWS: &[&str] = &["libstatus.dll", "libsds.dll"];
+
+fn libraries_for(target: &str) -> &'static [&'static str] {
+    if target.contains("windows") {
+        LIBRARIES_WINDOWS
+    } else {
+        LIBRARIES_UNIX
+    }
+}
 
 fn main() {
     tauri_build::build();
@@ -30,7 +44,7 @@ fn main() {
         return;
     };
 
-    for name in LIBRARIES {
+    for name in libraries_for(&target) {
         let src = manifest_dir.join("binaries").join(name);
         println!("cargo:rerun-if-changed={}", src.display());
         copy_if_present(&src, &profile_dir.join(name));
