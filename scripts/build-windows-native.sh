@@ -156,6 +156,7 @@ mkdir -p build
   --header --nimMainPrefix:libsds --warning:Deprecated:off \
   --os:windows --cpu:amd64 -d:mingw --cc:gcc \
   --gcc.exe:"$CC" --gcc.linkerexe:"$CC" \
+  --passL:"-static-libgcc" \
   -d:git_version="\"$NIM_SDS_TAG\"" library/libsds.nim >/dev/null
 [ -f build/libsds.dll ] || die "libsds.dll не собрался"
 ok "libsds.dll: $(du -h build/libsds.dll | cut -f1)"
@@ -198,7 +199,9 @@ ok "cbindings с CloseAccounts"
 step "libstatus.dll (кросс-сборка)"
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC="$CC"
 export CGO_CFLAGS="-I$WORK/nim-sds/library"
-export CGO_LDFLAGS="-L$WORK/nim-sds/build -lsds"
+# -static-libgcc: без него и libstatus.dll, и libsds.dll тянут libgcc_s_seh-1.dll,
+# которой в Windows нет, и LoadLibrary падает с «the backend is not running».
+export CGO_LDFLAGS="-L$WORK/nim-sds/build -lsds -static-libgcc"
 export TKL_BASE_CGO_CFLAGS="$CGO_CFLAGS"
 export TKL_BASE_CGO_LDFLAGS="$CGO_LDFLAGS"
 export NIM_TKL_INC_DIR="$WORK/nim-token-lists/abi"
@@ -213,6 +216,15 @@ bash scripts/tkl_env.sh go build -tags gowaku_no_rln \
 x86_64-w64-mingw32-objdump -p build/bin/libstatus.dll | grep -q CloseAccounts \
   || die "CloseAccounts отсутствует в экспортах libstatus.dll"
 ok "libstatus.dll: $(du -h build/bin/libstatus.dll | cut -f1), CloseAccounts на месте"
+
+# Обе DLL должны обходиться без mingw-рантайма: libgcc_s_seh-1.dll в Windows нет,
+# и её отсутствие видно только при запуске, как «the backend is not running».
+for dll in build/bin/libstatus.dll "$WORK/nim-sds/build/libsds.dll"; do
+  if x86_64-w64-mingw32-objdump -p "$dll" | grep -q 'libgcc_s'; then
+    die "$(basename "$dll") зависит от libgcc_s — проверьте -static-libgcc"
+  fi
+done
+ok "внешних зависимостей mingw нет"
 
 # ---------- В src-tauri/binaries ----------
 

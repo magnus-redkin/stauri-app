@@ -308,6 +308,7 @@ MSVC, Node и pnpm. Всё, что связано с Nim, делается на 
 | `scripts/build_lib.sh` с `EXTRA_NIMFLAGS`, а не `make lib` | `make` в этом репозитории не передаёт `NIM_PARAMS`, и архив получается ELF вместо COFF |
 | `isolate_lib.sh` + `libtkl.target` | символы Nim-рантайма делаются локальными, чтобы не столкнуться с рантаймом `libsds`; `tkl.target` сообщает status-go, для какой платформы архив |
 | `--skipUserCfg:on` для `nim-sds` | `~/.config/nim/nim.cfg` с `legacy:laxEffects` включает строгие эффекты, и сборка падает на `sds_lifecycle_request.nim` с `Exception can raise an unlisted exception` |
+| `--passL:"-static-libgcc"` (Nim) и `-static-libgcc` в `CGO_LDFLAGS` | иначе обе DLL зависят от `libgcc_s_seh-1.dll`, которой в Windows нет; `LoadLibrary` падает, и приложение пишет «the backend is not running» |
 | `-tags gowaku_no_rln` | RLN-пакет собран для Linux (`-ldl`, `.llvmbc`); в Windows не нужен и в Makefile status-go отключён по умолчанию |
 | Генераторы (`protoc`, `go-bindata`, моки, `messenger_handlers.go`, файлы `go:embed`) | этих файлов нет в Git, без них `go build` не видит пакетов `*/migrations` и методов `Messenger` |
 
