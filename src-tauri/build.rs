@@ -44,6 +44,12 @@ fn main() {
         return;
     };
 
+    // Watch the directory, not only the files: `rerun-if-changed` on a path that did
+    // not exist at the previous run does not wake the script when the file appears, and
+    // then a freshly built library never reaches the profile directory. That is how a
+    // Windows build produced an executable without `libstatus.dll` next to it.
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("binaries").display());
+
     for name in libraries_for(&target) {
         let src = manifest_dir.join("binaries").join(name);
         println!("cargo:rerun-if-changed={}", src.display());
