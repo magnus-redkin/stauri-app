@@ -285,45 +285,63 @@ adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед н�
 
 ## 9. Windows
 
-Состояние: готовится. В Windows 11 (KVM) поставлены VS Build Tools, Rust MSVC и
-Node/pnpm. Что осталось до первой сборки:
+Проверенный путь: **приложение собирается в Windows, нативные библиотеки — на
+Linux**. В Windows нужны только VS Build Tools (рабочая нагрузка C++), Rust
+MSVC, Node и pnpm. Всё, что связано с Nim, делается на Linux-хосте.
 
-1. **`libsds.dll`** — известный блокер: `nim c --os:windows` с MinGW не находит
-   `chronos`, а флейк `nim-sds` для `packages.x86_64-windows` падает на
-   `buildInputs`. Рабочая попытка — собирать не флейком, а Nim напрямую с явными
-   `--path` до зависимостей и `--cc:vcc`:
-   ```
-   nim c --cc:vcc --app:lib --out:libsds.dll -d:release \
-       --path:<nim-sds>/src --path:<chronos> --path:<results> --path:<stew> \
-       <nim-sds>/src/sds
-   ```
-2. **`libstatus.dll`** из нашего форка `status-go`
-   (`magnus-redkin/status-go:stauri/close-accounts`). Цель `statusgo-shared-library`
-   в Makefile даёт `build/bin/libstatus.dll`; для cgo нужен `gcc` (MinGW-64).
-   Патч лежит в `mobile/status.go`, cbindings генерируются из него, поэтому
-   `CloseAccounts` попадает в DLL сам. Проверка:
-   ```
-   dumpbin /exports build\bin\libstatus.dll | findstr CloseAccounts
-   ```
-3. Обе DLL — в `src-tauri/binaries/` (`libstatus.dll`, `libsds.dll`).
+### 9.1 Нативные библиотеки (на Linux)
 
-Затем:
+```
+./scripts/build-windows-native.sh --check          # что есть на машине
+./scripts/build-windows-native.sh                  # собрать в ~/ETH/stauri/winbuild
+./scripts/build-windows-native.sh --work /tmp/wb   # другое место
+```
+
+Скрипт клонирует три репозитория в рабочую папку (не в репозиторий Stauri) и
+кладёт результат в `src-tauri/binaries/libstatus.dll` и `libsds.dll`.
+
+Что именно он делает и почему:
+
+| Шаг | Причина |
+|---|---|
+| `nim-token-lists` на ревизии из `status-go/scripts/tkl.version` | `go.mod` ссылается на этот коммит; на другой ревизии `tkl.h` не содержит `tkl_load_stored`, и сборка падает на cgo |
+| `scripts/build_lib.sh` с `EXTRA_NIMFLAGS`, а не `make lib` | `make` в этом репозитории не передаёт `NIM_PARAMS`, и архив получается ELF вместо COFF |
+| `isolate_lib.sh` + `libtkl.target` | символы Nim-рантайма делаются локальными, чтобы не столкнуться с рантаймом `libsds`; `tkl.target` сообщает status-go, для какой платформы архив |
+| `--skipUserCfg:on` для `nim-sds` | `~/.config/nim/nim.cfg` с `legacy:laxEffects` включает строгие эффекты, и сборка падает на `sds_lifecycle_request.nim` с `Exception can raise an unlisted exception` |
+| `-tags gowaku_no_rln` | RLN-пакет собран для Linux (`-ldl`, `.llvmbc`); в Windows не нужен и в Makefile status-go отключён по умолчанию |
+| Генераторы (`protoc`, `go-bindata`, моки, `messenger_handlers.go`, файлы `go:embed`) | этих файлов нет в Git, без них `go build` не видит пакетов `*/migrations` и методов `Messenger` |
+
+Проверка результата:
+
+```
+x86_64-w64-mingw32-objdump -p src-tauri/binaries/libstatus.dll | grep CloseAccounts
+```
+
+`CloseAccounts` должен быть в экспортах — это наш патч.
+
+### 9.2 Сборка приложения (Windows)
 
 ```
 pnpm install
-powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Version 0.5.4
+pnpm tauri build --no-bundle                     # проверка: exe рядом с двумя DLL
+powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Version <версия>
 ```
 
-Tauri сам накладывает `src-tauri/tauri.windows.conf.json` поверх основного
-конфига: цель сборки NSIS, ресурсы берутся как `libsds.dll`. `build.rs` копирует
-`.dll` рядом с exe так же, как `.so` на Linux, поэтому `tauri dev` и release
-ведут себя одинаково.
+`src-tauri/tauri.windows.conf.json` накладывается поверх основного конфига:
+цель NSIS, ресурс `libsds.dll` вместо `libsds.so`. `build.rs` копирует `.dll`
+рядом с exe так же, как `.so` на Linux.
 
-Порядок проверки на Windows: создание профиля, чат с Linux-соседом в обе
-стороны, смена сети без перезапуска (то, ради чего патч), кошелёк и балансы,
-`.eth`-имя, лента Telegram, автообновление. Ключ автообновления и общий
-`latest.json` остаются на Linux-хосте: установщик и `.sig` переносятся туда, а
-ключ платформы в манифесте — `windows-x86_64`.
+Если приложение падает при старте с «the backend is not running», первым делом
+проверить, что `libsds.dll` лежит рядом с exe — загрузчик ищет её в каталоге
+процесса, а не в PATH.
+
+### 9.3 Что проверить на Windows
+
+Создание профиля и вход, чат с Linux-соседом в обе стороны, смена сети без
+перезапуска (то, ради чего патч), кошелёк и балансы, `.eth`-имя, лента
+Telegram, автообновление. Ключ автообновления и общий `latest.json` остаются на
+Linux-хосте: установщик и `.sig` переносятся туда, ключ платформы в манифесте —
+`windows-x86_64`.
 
 ## Известные проблемы
 
