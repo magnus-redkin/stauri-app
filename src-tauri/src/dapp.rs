@@ -157,7 +157,7 @@ pub async fn open_doc(app: tauri::AppHandle, name: String) -> AppResult<String> 
         return Ok(label);
     }
     let title = name.rsplit('/').next().unwrap_or(&name).to_string();
-    // Each document has a small generated page next to it (scripts/sync-docs.sh);
+    // Each document has a small generated page next to it (scripts/sync-docs.mjs);
     // it loads the viewer with the document name in the script tag.
     let page = format!("{}.html", name.strip_suffix(".md").unwrap_or(&name));
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(format!("docs/{page}").into()))

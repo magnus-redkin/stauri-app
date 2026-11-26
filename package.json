@@ -4,8 +4,8 @@
   "description": "Stauri - lightweight Status client",
   "type": "module",
   "scripts": {
-    "dev": "bash scripts/sync-docs.sh && vite dev",
-    "build": "bash scripts/sync-docs.sh && vite build",
+    "dev": "node scripts/sync-docs.mjs && vite dev",
+    "build": "node scripts/sync-docs.mjs && vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",

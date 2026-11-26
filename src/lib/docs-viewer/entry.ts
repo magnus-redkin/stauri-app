@@ -2,7 +2,7 @@ import { renderMarkdown } from '../utils/markdown';
 
 // The document name comes from the script tag that loaded this file, not from
 // the address: `WebviewUrl::App` takes a path, and a query string in it is not
-// reliable. Every document has a small generated page (scripts/sync-docs.sh).
+// reliable. Every document has a small generated page (scripts/sync-docs.mjs).
 const doc = document.currentScript?.getAttribute('data-doc') ?? '';
 const target = document.getElementById('doc')!;
 

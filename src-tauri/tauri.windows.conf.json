@@ -3,7 +3,8 @@
   "bundle": {
     "targets": ["nsis"],
     "resources": {
-      "binaries/libsds.dll": "libsds.dll"
+      "binaries/libsds.dll": "libsds.dll",
+      "binaries/libsds.so": null
     }
   },
   "build": {
