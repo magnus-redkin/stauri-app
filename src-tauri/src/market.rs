@@ -52,8 +52,18 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
         &price_change_percentage=24h";
 
     // 3. Request
+    //
+    //    The User-Agent is not decoration: CoinGecko answers 403 with "Please
+    //    add a descriptive User-Agent to your request" when it is missing, and
+    //    reqwest sends none by default. The address and the version make the
+    //    requests identifiable, which is what the service asks for.
     let client = reqwest::Client::builder()
         .no_proxy()
+        .user_agent(concat!(
+            "stauri-app/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://github.com/magnus-redkin/stauri-app)"
+        ))
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
