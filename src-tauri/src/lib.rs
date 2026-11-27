@@ -18,6 +18,41 @@
 
 use tauri::Manager;
 
+/// Fits the main window to the current monitor.
+///
+/// The configured 1200×900 is larger than the work area of a 1280×800 VM display.
+/// Windows keeps the requested size, so the lower part of the window — the chat
+/// composer in particular — ends up under the taskbar and cannot be reached. The
+/// window is shrunk and centred only when it does not fit; a larger display keeps
+/// the configured size.
+#[cfg(desktop)]
+fn fit_window_to_monitor(window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let screen = monitor.size().to_logical::<f64>(scale);
+    let Ok(outer) = window.outer_size() else {
+        return;
+    };
+    let outer = outer.to_logical::<f64>(scale);
+
+    // Leave room for the taskbar or dock and for the window frame.
+    let max_width = screen.width * 0.9;
+    let max_height = screen.height * 0.85;
+    if outer.width <= max_width && outer.height <= max_height {
+        return;
+    }
+
+    let width = outer.width.min(max_width);
+    let height = outer.height.min(max_height);
+    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
+        tracing::warn!(error = %e, "не удалось подогнать окно под экран");
+        return;
+    }
+    let _ = window.center();
+}
+
 mod appdirs;
 // The safety core: keys, envelopes, status-go FFI, pairing. See `core/mod.rs` for what
 // belongs there and what deliberately does not.
@@ -77,6 +112,11 @@ pub fn run() {
                 }
                 core::trace::set_dir(dir.clone());
                 appdirs::set_data_dir(dir.clone());
+            }
+
+            #[cfg(desktop)]
+            if let Some(window) = app.get_webview_window("main") {
+                fit_window_to_monitor(&window);
             }
 
             // status-go lives in this process, so its signals reach the webview
