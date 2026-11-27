@@ -31,8 +31,8 @@ import {
   type CreateChannelParams,
 } from '$lib/status/akk';
 import { ensPublicKeyOf } from '$lib/status/wallet';
-import { getDisplayName } from '$lib/utils/user';
-import { isMutual } from '$lib/status/contactState';
+import { getDisplayName, samePublicKey } from '$lib/utils/user';
+import { isIncomingRequest, isMutual } from '$lib/status/contactState';
 import { scenarioLog, short } from '$lib/utils/scenario';
 import { parseKind } from '$lib/status/channelKind';
 import { ROLE_OWNER } from '$lib/status/channelRights';
@@ -100,13 +100,25 @@ function buildItems(
   contacts: any[],
   communities: Community[]
 ): ChatItem[] {
-  // A request still waits for an answer only while the contact is not accepted. After Accept the
-  // chat preview may keep reporting the old state (active=false, contactRequestState=1) for a few
-  // seconds; without this check the chat would stay "pending" forever.
-  const isStillPending = (chat: any) => {
+  // The preview marks a request with `contactRequestState === 1`, but it does not say who sent
+  // it: our own outgoing request produces the same record (`active=false`, state 1). Only an
+  // incoming one is something to accept or reject; the outgoing one was shown with Accept/Reject
+  // on the chat that had just been opened after sending it.
+  const requestDirection = (chat: any): 'incoming' | 'outgoing' | null => {
+    if (chat.active !== false || chat.lastMessage?.contactRequestState !== 1) return null;
     const contact = contacts.find((ct: any) => ct.id === chat.id);
-    if (contact && isMutual(contact)) return false;
-    return chat.active === false && chat.lastMessage?.contactRequestState === 1;
+    if (contact) {
+      // Mutual is an accepted contact whose preview has not caught up yet.
+      if (isMutual(contact)) return null;
+      return isIncomingRequest(contact) ? 'incoming' : 'outgoing';
+    }
+    // The contacts reply may not include the record yet (the request was just sent), so the
+    // author of the request message decides. A missing key means we cannot tell: keep the old
+    // behaviour and offer the answer buttons rather than hide a real request.
+    const fromUs =
+      !!chat.lastMessage?.outgoingStatus ||
+      samePublicKey(chat.lastMessage?.from, statusState.publicKey);
+    return fromUs ? 'outgoing' : 'incoming';
   };
 
   const nameFor = (chat: any) => {
@@ -137,8 +149,11 @@ function buildItems(
   for (const chat of previews) {
     if (ownKey && String(chat.id).toLowerCase() === ownKey.toLowerCase()) continue;
     // An inactive chat was removed (`deactivateChat`) and must not return to the list. The
-    // exception is an incoming contact request: it also arrives inactive, yet has to be shown so
-    // it can be accepted.
+    // exception is a contact request: it also arrives inactive, yet has to be shown — incoming
+    // so it can be accepted, outgoing so the user keeps the chat they just started. The accepted
+    // contact above may still carry the stale preview, so loading stays keyed to the raw flag;
+    // only the Accept/Reject flag depends on the direction.
+    const request = requestDirection(chat);
     const pendingContactRequest = chat.lastMessage?.contactRequestState === 1;
     if (chat.active === false && !pendingContactRequest) {
       // Inactive without a request means removed; log it so hidden chats stay visible in logs.
@@ -146,8 +161,8 @@ function buildItems(
       scenarioLog('reply-sync', 'hidden-inactive', { chat: short(chat.id), type: chat.chatType }, 'info');
       continue;
     }
-    if (pendingContactRequest) {
-      scenarioLog('reply-sync', 'incoming-request', { chat: short(chat.id), type: chat.chatType }, 'info');
+    if (request) {
+      scenarioLog('reply-sync', `${request}-request`, { chat: short(chat.id), type: chat.chatType }, 'info');
     }
 
     if (isCommunityChat(chat)) {
@@ -184,7 +199,8 @@ function buildItems(
       type: isDirectMessage(chat) ? 'direct' : 'channel',
       categoryId: chat.categoryId || undefined,
       unreadCount: chat.unviewedMessagesCount || 0,
-      isPendingRequest: isStillPending(chat),
+      isPendingRequest: request === 'incoming',
+      isRequestSent: request === 'outgoing',
     });
   }
 

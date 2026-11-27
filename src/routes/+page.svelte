@@ -34,7 +34,7 @@
   import { chatsState, loadChats, selectChat, resetChats, setRightPanel, applyContacts, mergeSignalContacts } from '$lib/stores/chatsStore.svelte';
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
-  import { loadFeeds, resetFeeds } from '$lib/stores/feedsStore.svelte';
+  import { loadFeeds, resetFeeds, startFeedPolling } from '$lib/stores/feedsStore.svelte';
   import {
     loadUiPreferences,
     increaseFontSize,
@@ -520,6 +520,9 @@
     // list needs them, not only the dApp section. A read error must not block
     // connecting; a corrupted store is left with an empty list.
     loadFeeds();
+    // Feeds are pull sources: the stored items would stay there until the app closed
+    // for good. The first stale pass runs now, then every FEED_REFRESH_MS.
+    startFeedPolling();
     // A release can wait on no one: the check runs in the background and then hourly.
     startUpdatePolling();
 

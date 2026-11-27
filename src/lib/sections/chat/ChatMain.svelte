@@ -13,7 +13,7 @@
   import { channelInviteLink } from '$lib/status/invite';
   import { canRecord, canComment } from '$lib/status/channelRights';
   import { chatsState, acceptRequestAndOpen, rejectRequest } from '$lib/stores/chatsStore.svelte';
-  import { feedsState } from '$lib/stores/feedsStore.svelte';
+  import { feedsState, feedUrlFromChatId, refreshFeed, FEED_REFRESH_MS } from '$lib/stores/feedsStore.svelte';
   import { formatMessageText, getDisplayName, samePublicKey } from '$lib/utils/user';
   import { formatError } from '$lib/utils/errors';
   import { debug, error } from '$lib/utils/log';
@@ -294,6 +294,9 @@
     !!chatsState.selected &&
       chatsState.selected.type !== 'external' &&
       !chatsState.selected.isPendingRequest &&
+      // Our own request is not accepted yet: the other side cannot read our
+      // messages before that, so the composer stays closed.
+      !chatsState.selected.isRequestSent &&
       canComment(chatsState.selected.canPost)
   );
 
@@ -328,6 +331,26 @@
     if (!chat || chat.type !== 'external') return null;
     const url = chat.sourceUrl || chat.id.replace(/^feed:/, '');
     return feedsState.subscriptions.get(url) ?? null;
+  });
+
+  /**
+   * Refetches the open subscription when its stored items are old.
+   *
+   * @remarks
+   * The background poll covers the app as a whole; this catches the case the user
+   * actually notices — opening a feed that has not been updated since yesterday.
+   * The subscription is read through `untrack`: without it the write of the failed
+   * fetch (the record changes, `fetchedAt` stays old) would re-run this effect and
+   * the failed source would be requested in a loop.
+   */
+  $effect(() => {
+    const chat = chatsState.selected;
+    if (!chat || chat.type !== 'external') return;
+    const url = feedUrlFromChatId(chat.id);
+    if (!url) return;
+    const stored = untrack(() => feedsState.subscriptions.get(url));
+    if (stored && Date.now() - stored.fetchedAt < FEED_REFRESH_MS) return;
+    void refreshFeed(url);
   });
 
   // Input diagnostics: on chat selection logs which conditions open or close the
@@ -549,7 +572,7 @@
   {:else if chatsState.rightPanel === 'contacts' || !chatsState.selected}
     <ContactsSearchPanel />
   {:else}
-    <div class="p-4 border-b border-border flex items-center gap-2">
+    <div class="shrink-0 p-4 border-b border-border flex items-center gap-2">
       <span class="font-bold text-primary truncate">{chatsState.selected.name}</span>
       {#if chatsState.selected.type === 'community' && chatsState.selected.communityId}
         <div class="relative ml-auto">
@@ -878,7 +901,7 @@
         whenever writing is allowed at all.
       -->
       {#if canWrite && !openPostId}
-        <div class="p-4 border-t border-border flex gap-2">
+        <div class="shrink-0 p-4 border-t border-border flex gap-2">
           <input
             bind:value={inputText}
             placeholder={i18n.t('Type a message...')}
@@ -891,8 +914,16 @@ if (e.key === 'Enter') send();
             {i18n.t('Send')}
           </button>
         </div>
+      {:else if chatsState.selected.isRequestSent}
+        <!--
+          Our own request: no Accept/Reject (they belong to the other side) and no
+          composer until the contact answers.
+        -->
+        <div class="shrink-0 p-4 border-t border-border text-sm text-muted-foreground">
+          {i18n.t('Contact request sent. Waiting for acceptance.')}
+        </div>
       {:else if chatsState.selected.canPost === false}
-        <div class="p-4 border-t border-border text-sm text-muted-foreground">
+        <div class="shrink-0 p-4 border-t border-border text-sm text-muted-foreground">
           {i18n.t('You cannot post in this channel')}
         </div>
       {/if}

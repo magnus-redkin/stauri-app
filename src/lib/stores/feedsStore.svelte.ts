@@ -321,6 +321,62 @@ export async function refreshFeeds(): Promise<void> {
   }
 }
 
+/**
+ * Age after which a subscription is refreshed without being asked.
+ *
+ * @remarks
+ * Feeds are not push sources: without a refresh the chat row keeps the items from the
+ * moment the subscription was added. Fifteen minutes is short enough that the row is
+ * current during a session and long enough not to hammer a public mirror.
+ */
+export const FEED_REFRESH_MS = 15 * 60 * 1000;
+
+let polling: ReturnType<typeof setInterval> | null = null;
+let stalePassRunning = false;
+
+/**
+ * Refetches subscriptions not refreshed for `maxAgeMs`.
+ *
+ * @remarks
+ * Sequential, like {@link refreshFeeds}. A pass already running is not started again: the
+ * caller may be the timer and the user opening a feed at the same moment.
+ */
+export async function refreshStaleFeeds(maxAgeMs = FEED_REFRESH_MS): Promise<void> {
+  if (stalePassRunning) return;
+  stalePassRunning = true;
+  try {
+    const now = Date.now();
+    for (const url of [...feedsState.subscriptions.keys()]) {
+      const feed = feedsState.subscriptions.get(url);
+      if (!feed) continue;
+      if (feed.fetchedAt && now - feed.fetchedAt < maxAgeMs) continue;
+      await refreshFeed(url);
+    }
+  } finally {
+    stalePassRunning = false;
+  }
+}
+
+/**
+ * Starts the background refresh: stale subscriptions at once, then once per interval.
+ *
+ * @remarks
+ * Called once when the main interface mounts. The timer lives for the session; a
+ * subscription added later is picked up by the next pass.
+ */
+export function startFeedPolling(): void {
+  if (polling !== null) return;
+  void refreshStaleFeeds();
+  polling = setInterval(() => void refreshStaleFeeds(), FEED_REFRESH_MS);
+}
+
+/** Stops the background refresh (tests and a full app reset). */
+export function stopFeedPolling(): void {
+  if (polling === null) return;
+  clearInterval(polling);
+  polling = null;
+}
+
 /** Removes a subscription. Its messages were never ours, so there is nothing else to delete. */
 export function removeFeed(url: string): void {
   if (!feedsState.subscriptions.delete(url)) return;

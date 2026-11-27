@@ -56,10 +56,14 @@ vi.mock('$lib/status/wallet', async (importOriginal) => {
   return { ...actual, ensPublicKeyOf: vi.fn() };
 });
 
-vi.mock('$lib/utils/user', () => ({
-  getDisplayName: (entity: any) =>
-    entity.displayName || entity.alias || entity.name || entity.id.slice(0, 8),
-}));
+vi.mock('$lib/utils/user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/utils/user')>();
+  return {
+    ...actual,
+    getDisplayName: (entity: any) =>
+      entity.displayName || entity.alias || entity.name || entity.id.slice(0, 8),
+  };
+});
 
 // chatType values from internal/protocol/chat.go
 const TYPE_ONE_TO_ONE = 1;
@@ -745,5 +749,33 @@ describe('ожидающая заявка: статус контакта важ�
     await loadChats(true);
     const item = chatsState.items.find((c) => c.id === CID);
     expect(item!.isPendingRequest).toBe(true);
+  });
+
+  it('свой отправленный запрос не предлагает принять: контакт уже помечен как «отправлено»', async () => {
+    (getChats as any).mockResolvedValue([
+      { id: CID, name: 'Stauri User', active: false, chatType: TYPE_ONE_TO_ONE,
+        lastMessage: { contactRequestState: 1, text: 'Hi', timestamp: 1 }, unviewedMessagesCount: 0 },
+    ]);
+    (getContacts as any).mockResolvedValue({
+      result: [{ id: CID, displayName: 'Stauri User', contactRequestLocalState: 2, contactRequestRemoteState: 0 }],
+    });
+    await loadChats(true);
+    const item = chatsState.items.find((c) => c.id === CID);
+    expect(item).toBeDefined();
+    expect(item!.isPendingRequest).toBe(false);
+    expect(item!.isRequestSent).toBe(true);
+  });
+
+  it('свой запрос без записи контакта распознаётся по автору сообщения', async () => {
+    (getChats as any).mockResolvedValue([
+      { id: CID, name: 'Stauri User', active: false, chatType: TYPE_ONE_TO_ONE,
+        lastMessage: { contactRequestState: 1, text: 'Hi', timestamp: 1, from: '0xownkey' }, unviewedMessagesCount: 0 },
+    ]);
+    (getContacts as any).mockResolvedValue({ result: [] });
+    await loadChats(true);
+    const item = chatsState.items.find((c) => c.id === CID);
+    expect(item).toBeDefined();
+    expect(item!.isPendingRequest).toBe(false);
+    expect(item!.isRequestSent).toBe(true);
   });
 });

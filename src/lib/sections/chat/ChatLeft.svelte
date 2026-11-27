@@ -22,6 +22,15 @@
      */
     type: 'direct' | 'channel' | 'community' | 'external';
     isPendingRequest?: boolean;
+    /**
+     * Our own contact request is waiting for the other side to accept it.
+     *
+     * @remarks
+     * The preview marks both directions the same way (`active=false`,
+     * `contactRequestState=1`), so ChatMain needs the distinction: an outgoing
+     * request must not offer Accept/Reject and must not open the composer.
+     */
+    isRequestSent?: boolean;
     /** Last activity time in ms, used to sort the list by date. */
     sortTs?: number;
     unreadCount?: number;
