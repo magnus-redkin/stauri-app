@@ -70,6 +70,7 @@ mod profile;
 mod providers;
 mod router;
 mod swap;
+mod sysproxy;
 mod transfer;
 mod updater;
 

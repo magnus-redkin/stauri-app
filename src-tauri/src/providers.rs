@@ -258,7 +258,7 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
     let parsed = validate_external_url(&url)?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
 
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // Redirects are handled here so every next address passes the same
         // filter as user input. See [`fetch_following_redirects`].
         .redirect(reqwest::redirect::Policy::none())
@@ -279,7 +279,20 @@ pub async fn fetch_feed(url: String) -> AppResult<FeedResponse> {
         // Telegram channel take almost a minute. The connect timeout fails fast,
         // leaving the retry the chance to succeed.
         .connect_timeout(std::time::Duration::from_secs(6))
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(20));
+
+    // A desktop application started from a session menu carries no proxy environment
+    // variables, so reqwest would go direct even though the desktop is configured for a
+    // proxy. On a network that requires it, the direct route answers the headers and
+    // then stalls mid-body — reported as "body read error". `sysproxy` reads the desktop
+    // settings; an environment proxy still wins and is handled by reqwest itself.
+    if let Some(proxy) = crate::sysproxy::proxy_url() {
+        match reqwest::Proxy::all(&proxy) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(e) => tracing::warn!(error = %e, "system proxy ignored"),
+        }
+    }
+    let client = builder
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
 

@@ -57,14 +57,24 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
     //    add a descriptive User-Agent to your request" when it is missing, and
     //    reqwest sends none by default. The address and the version make the
     //    requests identifiable, which is what the service asks for.
-    let client = reqwest::Client::builder()
-        .no_proxy()
+    let mut builder = reqwest::Client::builder()
         .user_agent(concat!(
             "Stauri/",
             env!("CARGO_PKG_VERSION"),
             " (+https://github.com/magnus-redkin/stauri-app)"
         ))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(10));
+
+    // `.no_proxy()` used to be unconditional: on a machine whose only route is the
+    // desktop proxy the market then failed with "request failed". The system proxy is
+    // read from the desktop settings when the environment carries none; see sysproxy.
+    if let Some(proxy) = crate::sysproxy::proxy_url() {
+        match reqwest::Proxy::all(&proxy) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(e) => tracing::warn!(error = %e, "system proxy ignored"),
+        }
+    }
+    let client = builder
         .build()
         .map_err(|e| AppError::internal(format!("client build error: {e}")))?;
 
