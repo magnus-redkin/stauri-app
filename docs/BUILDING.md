@@ -1,99 +1,101 @@
-# Сборка Stauri
+# Building Stauri
 
-Документ описывает сборку `libstatus.so` и `libsds.so` (десктоп и Android) и
-самого Stauri. `status-go` работает внутри процесса приложения, отдельного
-бэкенд-бинарника больше нет. Состояние на 2026-11-22: десктоп собирается и
-запускается, вход по PIN, создание профиля, переключение сетей без перезапуска,
-чаты, контакты и сообщения проверены; Android собирается, вход, создание профиля
-и переключение сетей проверены на устройстве, кошелёк в работе; Windows не
-собран.
+This document describes building `libstatus.so` and `libsds.so` (desktop and
+Android) and Stauri itself. `status-go` runs inside the application process;
+there is no separate backend binary any more. Status as of 2026-11-22: the
+desktop build compiles and runs, PIN sign-in, profile creation, network
+switching without a restart, chats, contacts and messages have been verified;
+Android builds, and sign-in, profile creation and network switching have been
+verified on a device, the wallet is in progress; Windows has not been built.
 
-## Пререквизиты
+## Prerequisites
 
-- **Nix** (flakes), пользователь добавлен в `trusted-users` (`/etc/nix/nix.conf`).
-  Без этого Nix игнорирует кэш `nix-cache.status.im` из `nixConfig` флейков.
-- **Rust** ≥ 1.85 (edition 2024), цель `aarch64-linux-android` для Android.
+- **Nix** (flakes), with the user added to `trusted-users` (`/etc/nix/nix.conf`).
+  Without that Nix ignores the `nix-cache.status.im` cache from the flakes'
+  `nixConfig`.
+- **Rust** ≥ 1.85 (edition 2024), target `aarch64-linux-android` for Android.
 - **Node.js** ≥ 20 + **pnpm**.
-- **Системные пакеты Tauri на Linux**:
+- **Tauri system packages on Linux**:
   `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf`.
-- Для Android: JDK 17, Android SDK (platform 35, build-tools 35.0.0),
+- For Android: JDK 17, Android SDK (platform 35, build-tools 35.0.0),
   NDK **27.2.12479018**, `tauri-cli` 2.x.
 
-## Важно: переменные окружения
+## Important: environment variables
 
-Перед любой сборкой `status-go` и `libsds` убери переменные локальных
-экспериментов (vosk, whisper, portaudio, onnxruntime). Они подмешивают
-системные библиотеки и дают SIGSEGV при запуске `nix develop`:
+Before any build of `status-go` and `libsds`, remove the variables of local
+experiments (vosk, whisper, portaudio, onnxruntime). They mix system libraries
+into the build and cause a SIGSEGV when `nix develop` starts:
 
 ```bash
 unset CGO_LDFLAGS CGO_CFLAGS LD_LIBRARY_PATH LIBRARY_PATH
-# или, для одной команды:
-env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH <команда>
+# or, for a single command:
+env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH <command>
 ```
 
-## Патч Stauri к `status-go`
+## Stauri's patch to `status-go`
 
-Строгая сборка Stauri — это **upstream + один коммит**, не чистый upstream.
+A strict Stauri build is **upstream + one commit**, not plain upstream.
 
-- Закреплённый коммит: `766535cf3` (проверен, `develop`).
-- Патч: `src-tauri/status-go/stauri-close-accounts.patch` (файл `git format-patch`,
-  2 файла: `pkg/backend/geth_backend.go` и `mobile/status.go`).
-- Форк с веткой `stauri/close-accounts`: `magnus-redkin/status-go`.
+- Pinned commit: `766535cf3` (tested, `develop`).
+- Patch: `src-tauri/status-go/stauri-close-accounts.patch` (a `git format-patch`
+  file, 2 files: `pkg/backend/geth_backend.go` and `mobile/status.go`).
+- Fork with the `stauri/close-accounts` branch: `magnus-redkin/status-go`.
 
-Почему: `status-go` открывает `accounts.sql` один раз за процесс
-(`OpenAccounts` после первого открытия выходит сразу), поэтому смена сети
-внутри процесса возвращает чужой список профилей. Патч добавляет
-`CloseAccounts` — метод, который закрывает эту БД, чтобы следующий
-`InitializeApplication` открыл нужный каталог. Без патча переключение
-сетей деградирует до «перезапустите приложение» и команда `switch_network`
-отвечает ошибкой; остальные сценарии работают.
+Why: `status-go` opens `accounts.sql` once per process (`OpenAccounts` returns
+immediately after the first open), so switching networks inside the process
+returns another profile list. The patch adds `CloseAccounts` — a method that
+closes this database so the next `InitializeApplication` opens the right
+directory. Without the patch, network switching degrades to "restart the
+application" and the `switch_network` command answers with an error; the rest of
+the scenarios work.
 
-Патч **добавляет** один экспорт `CloseAccounts`; ничего не меняет и не
-удаляет. Ванильный `libstatus.so` загружается и работает в Stauri как есть.
+The patch **adds** one export, `CloseAccounts`; it changes and removes nothing.
+A vanilla `libstatus.so` loads and works in Stauri as is.
 
-`build/bin/statusgo-lib/main.go`, который компилируется в `libstatus`,
-собирает генератор `tools/generate-cbindings` из `mobile/status.go`, поэтому
-третьего файла в патче нет — экспорт появляется сам.
+`build/bin/statusgo-lib/main.go`, which is compiled into `libstatus`, is produced
+by the generator `tools/generate-cbindings` from `mobile/status.go`, so there is
+no third file in the patch — the export appears by itself.
 
-## 1. Сборка `libstatus.so` в Nix (десктоп)
+## 1. Building `libstatus.so` in Nix (desktop)
 
 ```bash
 git clone https://github.com/status-im/status-go.git ~/ETH/github.status-go
 cd ~/ETH/github.status-go
-git checkout 766535cf3   # протестированный коммит
-# патч Stauri (один коммит):
+git checkout 766535cf3   # tested commit
+# Stauri patch (one commit):
 git apply ~/ETH/stauri/stauri-app/src-tauri/status-go/stauri-close-accounts.patch
 
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
   nix develop --extra-experimental-features 'nix-command flakes' --command make statusgo-shared-library
 ```
 
-Результат: `build/bin/libstatus.so` и `build/bin/libstatus.so.0` (SONAME).
-Stauri берёт `libstatus.so.0` и кладёт под именем `libstatus.so`.
+Result: `build/bin/libstatus.so` and `build/bin/libstatus.so.0` (SONAME).
+Stauri takes `libstatus.so.0` and places it under the name `libstatus.so`.
 
-Проверьте, что патч собрался:
+Check that the patch made it into the build:
 
 ```bash
 nm -D --defined-only build/bin/libstatus.so | grep -w CloseAccounts
-# ожидается строка вида «… T CloseAccounts»
+# expect a line like "… T CloseAccounts"
 ```
 
-Цель `make statusgo-library` даёт статическую `libstatus.a` — она Stauri не
-нужна. Для настольной сборки нужна именно `statusgo-shared-library`.
+The `make statusgo-library` target produces a static `libstatus.a` — Stauri does
+not need it. The desktop build needs `statusgo-shared-library`.
 
-## 2. `libsds.so` для десктопа
+## 2. `libsds.so` for the desktop
 
-`libsds.so` берётся из Nix store — из того же окружения, что и библиотека
-(одна glibc, один ABI). Путь виден в логе сборки (`-L/nix/store/…-nim-sds-…/lib -lsds`):
+`libsds.so` comes from the Nix store — from the same environment as the library
+(one glibc, one ABI). The path is visible in the build log
+(`-L/nix/store/…-nim-sds-…/lib -lsds`):
 
 ```bash
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
   nix develop --extra-experimental-features 'nix-command flakes' --command bash -c 'echo $LIBSDS'
 ```
 
-Проверенный путь: `/nix/store/gczmis7bgww5azpihnzlsyfz3yjgsbjc-nim-sds-d317821f/lib/libsds.so`.
+Verified path: `/nix/store/gczmis7bgww5azpihnzlsyfz3yjgsbjc-nim-sds-d317821f/lib/libsds.so`.
 
-## 3. Скопировать артефакты в Stauri
+## 3. Copy the artifacts into Stauri
 
 ```bash
 cp ~/ETH/github.status-go/build/bin/libstatus.so.0 \
@@ -102,11 +104,11 @@ cp /nix/store/gczmis7bgww5azpihnzlsyfz3yjgsbjc-nim-sds-d317821f/lib/libsds.so \
    ~/ETH/stauri/stauri-app/src-tauri/binaries/libsds.so
 ```
 
-При `cargo build` (в том числе `tauri dev`) `src-tauri/build.rs` копирует оба
-файла рядом с исполняемым файлом (`target/debug` или `target/release`).
-Библиотека ищется именно там; переменная `STAURI_LIBSTATUS` задаёт другой путь.
+On `cargo build` (including `tauri dev`), `src-tauri/build.rs` copies both files
+next to the executable (`target/debug` or `target/release`). The library is
+looked up exactly there; the `STAURI_LIBSTATUS` variable sets a different path.
 
-## 4. Проверка
+## 4. Verification
 
 ```bash
 cd ~/ETH/stauri/stauri-app/src-tauri
@@ -114,11 +116,11 @@ cargo build
 cmp target/debug/libstatus.so binaries/libstatus.so && echo "copied"
 ```
 
-Полная проверка — запуск приложения: в логе должна появиться строка
-`start_backend called`, затем `InitializeApplication ok`. Если библиотеки
-нет, `start_backend` вернёт ошибку `cannot load …/libstatus.so`.
+A full check is running the application: the log should contain the line
+`start_backend called`, then `InitializeApplication ok`. If the library is
+missing, `start_backend` returns `cannot load …/libstatus.so`.
 
-## 5. Запуск Stauri (десктоп)
+## 5. Running Stauri (desktop)
 
 ```bash
 cd ~/ETH/stauri/stauri-app
@@ -126,93 +128,95 @@ pnpm install
 pnpm tauri dev
 ```
 
-### Чистый профиль при проверке релиза
+### Clean profile when checking a release
 
-Профиль (ключи, базы, чаты) лежит в каталоге данных приложения. Запуск
-релизной сборки как есть подхватывает ваш рабочий профиль и пароль, поэтому
-проверять вход и создание профиля на ней бессмысленно. Для этого есть
-`scripts/clean-env.sh`: он задаёт свои каталоги через `STAURI_DATA_DIR` и
-`STAURI_CONFIG_DIR`, а сборка при этом остаётся настоящей.
+The profile (keys, databases, chats) lives in the application data directory.
+Running the release build as is picks up your working profile and password, so
+checking sign-in and profile creation on it is pointless. `scripts/clean-env.sh`
+exists for that: it sets its own directories through `STAURI_DATA_DIR` and
+`STAURI_CONFIG_DIR`, while the build itself stays real.
 
 ```bash
 ./scripts/clean-env.sh /tmp/upd-check/beta.AppImage
-# или с постоянным каталогом (нужен, чтобы проверить повторный вход):
+# or with a persistent directory (needed to check signing in again):
 ./scripts/clean-env.sh /tmp/upd-check/beta.AppImage --keep-dir /tmp/stauri-clean-1
 ```
 
-Каталоги по умолчанию: `/tmp/stauri-clean/<имя>-<время>`. Рабочий профиль в
-`~/.local/share/com.magnus.stauri-app/` не затрагивается.
+Default directories: `/tmp/stauri-clean/<name>-<time>`. The working profile in
+`~/.local/share/com.magnus.stauri-app/` is not touched.
 
-Переменные (см. `src-tauri/src/appdirs.rs`):
+Variables (see `src-tauri/src/appdirs.rs`):
 
-| Переменная | Что задаёт |
+| Variable | What it sets |
 |---|---|
-| `STAURI_DATA_DIR` | каталог профиля и логов (абсолютный путь) |
-| `STAURI_CONFIG_DIR` | каталог конфигурации: `rpc-proxy.secret` и прочее |
-| `STAURI_DEBUG_TRACE=1` | подробная трасса моста (ответы до 4000 символов) |
-| `STAURI_NETWORK` | сеть: `mainnet` (по умолчанию), `sepolia`, `holesky` |
-| `STAURI_CONFIG_PATH` | путь к JSON-конфигу вместо переменных |
+| `STAURI_DATA_DIR` | directory for the profile and logs (absolute path) |
+| `STAURI_CONFIG_DIR` | configuration directory: `rpc-proxy.secret` and so on |
+| `STAURI_DEBUG_TRACE=1` | verbose bridge trace (replies up to 4000 characters) |
+| `STAURI_NETWORK` | network: `mainnet` (default), `sepolia`, `holesky` |
+| `STAURI_CONFIG_PATH` | path to a JSON config instead of the variables |
 
-Относительный путь в `STAURI_DATA_DIR` игнорируется с предупреждением в логе:
-при запуске AppImage текущий каталог неочевиден.
+A relative path in `STAURI_DATA_DIR` is ignored with a warning in the log: when
+an AppImage is started, the current directory is not obvious.
 
-## 6. Сборка AppImage
+## 6. Building the AppImage
 
 ```bash
 cd ~/ETH/stauri/stauri-app
 ./scripts/release.sh 0.2.0
 ```
 
-`release.sh` собирает AppImage нативно (Ubuntu 24.04+), копирует `libstatus.so`
-в `AppDir/usr/bin/` (рядом с исполняемым файлом), `libsds.so` в `AppDir/usr/lib/`,
-задаёт `RPATH=$ORIGIN` и запускает linuxdeploy. Требует `TAURI_SIGNING_PRIVATE_KEY_PATH` (без ключа
-подписи скрипт останавливается — AppImage без подписи не получит обновлений).
+`release.sh` builds the AppImage natively (Ubuntu 24.04+), copies `libstatus.so`
+into `AppDir/usr/bin/` (next to the executable), `libsds.so` into `AppDir/usr/lib/`,
+sets `RPATH=$ORIGIN` and runs linuxdeploy. Requires
+`TAURI_SIGNING_PRIVATE_KEY_PATH` (without the signing key the script stops — an
+unsigned AppImage will not receive updates).
 
-## 7. Android: `libsds.so` и `libstatus.so`
+## 7. Android: `libsds.so` and `libstatus.so`
 
-Android-библиотеки собираются отдельно от десктопных.
+Android libraries are built separately from the desktop ones.
 
-**libsds (arm64).** Через флейк `nim-sds` (не через `make` напрямую — прямой
-`make` падает на `unlisted exception` в `sds_lifecycle_request.nim:41`):
+**libsds (arm64).** Through the `nim-sds` flake (not through `make` directly — a
+direct `make` fails with `unlisted exception` in `sds_lifecycle_request.nim:41`):
 
 ```bash
-cd ~/ETH/nim-sds   # локальная копия с submodules
+cd ~/ETH/nim-sds   # local copy with submodules
 env -u CGO_LDFLAGS -u CGO_CFLAGS -u LD_LIBRARY_PATH -u LIBRARY_PATH \
   nix build --no-accept-flake-config --no-link --print-out-paths \
   --option substituters '' \
   'git+file:///home/michael/ETH/nim-sds?submodules=1#libsds-android-arm64'
 ```
 
-Результат: `<out>/jni/libsds.so` (AArch64, bionic). `--option substituters ''`
-нужен, если `nix-cache.status.im` недоступен (HTTP 522): без него Nix ждёт кэш.
+Result: `<out>/jni/libsds.so` (AArch64, bionic). `--option substituters ''` is
+needed when `nix-cache.status.im` is unreachable (HTTP 522): without it Nix
+waits for the cache.
 
-**libstatus.so (arm64).** Нужен Nim **2.2.10** (его использует Nix-рецепт `libtkl`);
-системный 2.2.4 и store-сборки 2.2.4 падают на `libtkl.nim:148`
+**libstatus.so (arm64).** Requires Nim **2.2.10** (the Nix recipe for `libtkl`
+uses it); the system 2.2.4 and the store builds of 2.2.4 fail at `libtkl.nim:148`
 (`GC_fullCollect() can raise an unlisted exception`):
 
 ```bash
 cd ~/ETH/github.status-go
 NDK=$HOME/Android/sdk/ndk/27.2.12479018
-P=<out libsds из предыдущего шага>      # путь с jni/libsds.so
+P=<out libsds from the previous step>   # path with jni/libsds.so
 PATH=$HOME/.local/nim-2.2.10/bin:$PATH \
 ANDROID_NDK_ROOT=$NDK NIM_SDS_LIB_DIR=$P/jni \
 NIM_SDS_INC_DIR=/nix/store/gczmis7bgww5azpihnzlsyfz3yjgsbjc-nim-sds-d317821f/include \
 ARCH=arm64 make -o build-libsds-android statusgo-android-library
 ```
 
-`-o build-libsds-android` пропускает пересборку `libsds` внутри `make`
-(иначе он вызывает `nim-sds` через NDK). Результат: `build/bin/libstatus.so` (AArch64,
-экспорт `CallRPC`, `InitializeApplication`, `CloseAccounts`, `LoginAccount`,
-`CreateAccountAndLogin`, `Logout`, `SetSignalEventCallback`). Патч из §1
-применяется так же: репо `github.status-go` с веткой или `git apply` до этой
-команды.
+`-o build-libsds-android` skips rebuilding `libsds` inside `make` (otherwise it
+calls `nim-sds` through the NDK). Result: `build/bin/libstatus.so` (AArch64,
+exports `CallRPC`, `InitializeApplication`, `CloseAccounts`, `LoginAccount`,
+`CreateAccountAndLogin`, `Logout`, `SetSignalEventCallback`). The patch from §1
+is applied the same way: a `github.status-go` repo with the branch, or
+`git apply` before this command.
 
-`$P` — **только** результат предыдущего шага (arm64, bionic). Десктопная
-`libsds` из Nix store (`gczmis…/lib`) здесь не подойдёт: линковщик
-падает с `libsds.so is incompatible with aarch64linux`. Если `P` утерян,
-пересобери `libsds` командой выше и возьми `<out>/jni`.
+`$P` is **only** the result of the previous step (arm64, bionic). The desktop
+`libsds` from the Nix store (`gczmis…/lib`) will not do here: the linker fails
+with `libsds.so is incompatible with aarch64linux`. If `P` is lost, rebuild
+`libsds` with the command above and take `<out>/jni`.
 
-Копирование в проект — в `src-tauri/binaries/android/`, **не** в `gen/`:
+Copy into the project — into `src-tauri/binaries/android/`, **not** into `gen/`:
 
 ```bash
 mkdir -p ~/ETH/stauri/stauri-app/src-tauri/binaries/android/arm64-v8a
@@ -220,23 +224,24 @@ cp -L <out>/jni/libsds.so      ~/ETH/stauri/stauri-app/src-tauri/binaries/androi
 cp -L build/bin/libstatus.so.0 ~/ETH/stauri/stauri-app/src-tauri/binaries/android/arm64-v8a/libstatus.so
 ```
 
-Почему не в `gen/android`: этот каталог в `.gitignore`, `tauri android init`
-пересоздаёт его целиком, и всё, что лежало в `jniLibs`, пропадает. Именно так
-сборка однажды выпустила APK без `libstatus.so` — приложение запускалось, но
-бэкенд не загружался и создание профиля падало с «the backend is not running».
+Why not into `gen/android`: this directory is in `.gitignore`, `tauri android
+init` recreates it entirely, and everything that was in `jniLibs` disappears.
+That is exactly how a build once produced an APK without `libstatus.so` — the
+application started, but the backend did not load and profile creation failed
+with "the backend is not running".
 
-`scripts/sync-android-native.sh` копирует файлы из
-`src-tauri/binaries/android/<abi>/` в `gen/android/app/src/main/jniLibs/<abi>/`
-при каждой сборке (его вызывает `beforeBuildCommand`), а если
-`arm64-v8a/libstatus.so` нет — останавливает сборку с ошибкой, а не выпускает
-нерабочий APK. `src-tauri/binaries/*` игнорируется git (см. `.gitignore`),
-поэтому сами библиотеки в репозиторий не попадают: их нужно получить по
-инструкции выше на каждой машине.
+`scripts/sync-android-native.sh` copies the files from
+`src-tauri/binaries/android/<abi>/` into `gen/android/app/src/main/jniLibs/<abi>/`
+on every build (it is called by `beforeBuildCommand`), and if
+`arm64-v8a/libstatus.so` is missing, it stops the build with an error instead of
+producing a broken APK. `src-tauri/binaries/*` is ignored by git (see
+`.gitignore`), so the libraries themselves do not end up in the repository: they
+have to be obtained following the instructions above on each machine.
 
 ## 8. Android: APK
 
-Один раз: `cargo tauri android init` (создаёт `src-tauri/gen/android`, каталог
-игнорируется git). Далее:
+Once: `cargo tauri android init` (creates `src-tauri/gen/android`, the directory
+is ignored by git). Then:
 
 ```bash
 cd ~/ETH/stauri/stauri-app
@@ -246,186 +251,193 @@ cargo tauri android build --debug --apk --target aarch64
 
 APK: `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`.
 
-Замечания:
-- Первая сборка Rust под Android компилирует ~305 крейтов и занимает заметное
-  время; дальше инкрементальная.
-- Не запускай две сборки одновременно: второй `gradlew` ждёт блокировку
-  (`Blocking waiting for file lock on Android`). Простаивающий демон можно
-  остановить: `cd src-tauri/gen/android && ./gradlew --stop`.
-- `src-tauri/tauri.android.conf.json` очищает `resources` для Android: на телефон
-  `libsds.so` кладётся через `jniLibs`, а не как ресурс бандла.
+Notes:
+- The first Rust build for Android compiles ~305 crates and takes a noticeable
+  amount of time; afterwards it is incremental.
+- Do not run two builds at once: the second `gradlew` waits for the lock
+  (`Blocking waiting for file lock on Android`). An idle daemon can be stopped:
+  `cd src-tauri/gen/android && ./gradlew --stop`.
+- `src-tauri/tauri.android.conf.json` clears `resources` for Android: on a phone
+  `libsds.so` is placed through `jniLibs`, not as a bundle resource.
 
-Установка на телефон (USB, отладка включена, «Установка через USB» разрешена на MIUI):
+Installing on a phone (USB, debugging enabled, "Install via USB" allowed on MIUI):
 
 ```bash
 export PATH="$HOME/Android/sdk/platform-tools:$PATH"
-adb devices         # устройство должно быть в статусе "device"
+adb devices         # the device must be in the "device" state
 adb install -r "$APK"
 adb shell am start -n com.magnus.stauri_app/.MainActivity
 ```
 
-Логи:
+Logs:
 
 ```bash
-adb logcat -s stauri:V     # Rust (logcat-логгер, тег stauri)
+adb logcat -s stauri:V     # Rust (logcat logger, tag stauri)
 adb logcat -d | grep -i "libstatus\|UnsatisfiedLink\|FATAL\|AndroidRuntime"
 ```
 
-Трасса моста (тестовая, до релиза не отключается). Файл `bridge-trace.log` лежит
-в каталоге данных приложения и пишется при каждом вызове `status_call` (`call`, `ok`, `err`)
-и заметках фронтенда (`note`). `run-as` работает только в debug-сборке:
+Bridge trace (a test feature, not disabled before release). The file
+`bridge-trace.log` lives in the application data directory and is written on
+every `status_call` (`call`, `ok`, `err`) and on frontend notes (`note`).
+`run-as` works only in a debug build:
 
 ```bash
 adb shell run-as com.magnus.stauri_app tail -n 50 bridge-trace.log
-adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # перед новым прогоном
+adb shell run-as com.magnus.stauri_app rm -f bridge-trace.log   # before a new run
 ```
 
-В трассу не попадает пароль: только его длина и первые 16 символов SHA-256.
-Ответ `CallRPC` — это конверт JSON-RPC (`{"jsonrpc","id","result"}`), поля настроек лежат в `result`.
+The trace does not contain the password: only its length and the first 16
+characters of SHA-256. The `CallRPC` reply is a JSON-RPC envelope
+(`{"jsonrpc","id","result"}`); the settings fields are inside `result`.
 
 ## 9. Windows
 
-Проверенный путь: **приложение собирается в Windows, нативные библиотеки — на
-Linux**. В Windows нужны только VS Build Tools (рабочая нагрузка C++), Rust
-MSVC, Node и pnpm. Всё, что связано с Nim, делается на Linux-хосте.
+The verified path: **the application is built on Windows, the native libraries
+on Linux**. Windows needs only VS Build Tools (C++ workload), Rust MSVC, Node
+and pnpm. Everything related to Nim is done on the Linux host.
 
-### 9.1 Нативные библиотеки (на Linux)
+### 9.1 Native libraries (on Linux)
 
 ```
-./scripts/build-windows-native.sh --check          # что есть на машине
-./scripts/build-windows-native.sh                  # собрать в ~/ETH/stauri/winbuild
-./scripts/build-windows-native.sh --work /tmp/wb   # другое место
+./scripts/build-windows-native.sh --check          # what is available on the machine
+./scripts/build-windows-native.sh                  # build into ~/ETH/stauri/winbuild
+./scripts/build-windows-native.sh --work /tmp/wb   # another location
 ```
 
-Скрипт клонирует три репозитория в рабочую папку (не в репозиторий Stauri) и
-кладёт результат в `src-tauri/binaries/libstatus.dll` и `libsds.dll`.
+The script clones three repositories into the work directory (not into the
+Stauri repository) and puts the result into `src-tauri/binaries/libstatus.dll`
+and `libsds.dll`.
 
-Что именно он делает и почему:
+What exactly it does and why:
 
-| Шаг | Причина |
+| Step | Reason |
 |---|---|
-| `nim-token-lists` на ревизии из `status-go/scripts/tkl.version` | `go.mod` ссылается на этот коммит; на другой ревизии `tkl.h` не содержит `tkl_load_stored`, и сборка падает на cgo |
-| `scripts/build_lib.sh` с `EXTRA_NIMFLAGS`, а не `make lib` | `make` в этом репозитории не передаёт `NIM_PARAMS`, и архив получается ELF вместо COFF |
-| `isolate_lib.sh` + `libtkl.target` | символы Nim-рантайма делаются локальными, чтобы не столкнуться с рантаймом `libsds`; `tkl.target` сообщает status-go, для какой платформы архив |
-| `--skipUserCfg:on` для `nim-sds` | `~/.config/nim/nim.cfg` с `legacy:laxEffects` включает строгие эффекты, и сборка падает на `sds_lifecycle_request.nim` с `Exception can raise an unlisted exception` |
-| `--passL:"-static-libgcc"` (Nim) и `-static-libgcc` в `CGO_LDFLAGS` | иначе обе DLL зависят от `libgcc_s_seh-1.dll`, которой в Windows нет; `LoadLibrary` падает, и приложение пишет «the backend is not running» |
-| `-tags gowaku_no_rln` | RLN-пакет собран для Linux (`-ldl`, `.llvmbc`); в Windows не нужен и в Makefile status-go отключён по умолчанию |
-| Генераторы (`protoc`, `go-bindata`, моки, `messenger_handlers.go`, файлы `go:embed`) | этих файлов нет в Git, без них `go build` не видит пакетов `*/migrations` и методов `Messenger` |
+| `nim-token-lists` at the revision from `status-go/scripts/tkl.version` | `go.mod` refers to this commit; at another revision `tkl.h` does not contain `tkl_load_stored`, and the build fails in cgo |
+| `scripts/build_lib.sh` with `EXTRA_NIMFLAGS`, not `make lib` | `make` in this repository does not pass `NIM_PARAMS`, and the archive comes out as ELF instead of COFF |
+| `isolate_lib.sh` + `libtkl.target` | Nim runtime symbols are made local so they do not collide with the `libsds` runtime; `tkl.target` tells status-go which platform the archive is for |
+| `--skipUserCfg:on` for `nim-sds` | `~/.config/nim/nim.cfg` with `legacy:laxEffects` enables strict effects, and the build fails at `sds_lifecycle_request.nim` with `Exception can raise an unlisted exception` |
+| `--passL:"-static-libgcc"` (Nim) and `-static-libgcc` in `CGO_LDFLAGS` | otherwise both DLLs depend on `libgcc_s_seh-1.dll`, which does not exist on Windows; `LoadLibrary` fails and the application reports "the backend is not running" |
+| `-tags gowaku_no_rln` | the RLN package is built for Linux (`-ldl`, `.llvmbc`); it is not needed on Windows and is disabled by default in the status-go Makefile |
+| Generators (`protoc`, `go-bindata`, mocks, `messenger_handlers.go`, `go:embed` files) | these files are not in Git; without them `go build` cannot see the `*/migrations` packages and the `Messenger` methods |
 
-Проверка результата:
+Checking the result:
 
 ```
 x86_64-w64-mingw32-objdump -p src-tauri/binaries/libstatus.dll | grep CloseAccounts
 ```
 
-`CloseAccounts` должен быть в экспортах — это наш патч.
+`CloseAccounts` must be among the exports — that is our patch.
 
-### 9.2 Сборка приложения (Windows)
+### 9.2 Building the application (Windows)
 
 ```
 pnpm install
-pnpm tauri build --no-bundle                     # проверка: exe рядом с двумя DLL
-powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Version <версия>
+pnpm tauri build --no-bundle                     # check: the exe next to the two DLLs
+powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1 -Version <version>
 ```
 
-`src-tauri/tauri.windows.conf.json` накладывается поверх основного конфига:
-цель NSIS, ресурс `libsds.dll` вместо `libsds.so`. `build.rs` копирует `.dll`
-рядом с exe так же, как `.so` на Linux.
+`src-tauri/tauri.windows.conf.json` is merged over the main config: NSIS target,
+`libsds.dll` resource instead of `libsds.so`. `build.rs` copies the `.dll` next
+to the exe the same way it copies the `.so` on Linux.
 
-Если приложение падает при старте с «the backend is not running», первым делом
-проверить, что `libsds.dll` лежит рядом с exe — загрузчик ищет её в каталоге
-процесса, а не в PATH.
+If the application crashes at startup with "the backend is not running", first
+check that `libsds.dll` is next to the exe — the loader looks for it in the
+process directory, not in PATH.
 
-### 9.3 Что проверить на Windows
+### 9.3 What to check on Windows
 
-Создание профиля и вход, чат с Linux-соседом в обе стороны, смена сети без
-перезапуска (то, ради чего патч), кошелёк и балансы, `.eth`-имя, лента
-Telegram, автообновление. Ключ автообновления и общий `latest.json` остаются на
-Linux-хосте: установщик и `.sig` переносятся туда, ключ платформы в манифесте —
-`windows-x86_64`.
+Profile creation and sign-in, a chat with a Linux peer in both directions,
+network switching without a restart (the reason for the patch), the wallet and
+balances, the `.eth` name, a Telegram feed, auto-update. The update key and the
+shared `latest.json` stay on the Linux host: the installer and `.sig` are moved
+there and `scripts/release-windows-assets.sh` signs the installer when needed,
+merges `windows-x86_64` into the manifest and uploads all three. The platform
+key in the manifest is `windows-x86_64`.
 
-## Известные проблемы
+## Known issues
 
-- **`nix develop` падает с SIGSEGV (код 139)** — почти всегда из-за
-  `LD_LIBRARY_PATH`/`CGO_*` от локальных экспериментов. Решение — `env -u …` (см. выше).
-- **Nix не использует кэш `nix-cache.status.im`** — пользователь не в `trusted-users`,
-  либо сервер недоступен (HTTP 522). Решения: `trusted-users` или
-  `--option substituters ''` (локальная сборка, дольше).
-- **`libsds` d317821 не собирается с системным Nim 2.2.4** (`unlisted exception`
-  в `sds_lifecycle_request.nim:41`). Собирается через флейк `nim-sds` (Nix-путь).
-- **`libtkl.nim:148` не собирается с Nim 2.2.4** — нужен Nim 2.2.10.
-- **Управляемая копия `nim-token-lists` защищена от правок** (`scripts/tkl_native.sh`
-  проверяет `git diff`). Локальный патч там не работает — нужна правка upstream или
-  решение о снятии проверки.
-- **patchelf assertion `splitIndex != -1`** на некоторых бинарниках. Обход:
-  `--remove-rpath` + `--set-rpath`, либо не патчить RPATH (`libsds.so` рядом, `RPATH=$ORIGIN`).
-- **ldd segfault на библиотеке** при linuxdeploy. Обход: обёртка `/tmp/bin/ldd`,
-  которая для `libstatus.so` отвечает «statically linked».
-- **`dApp`-окна и `open_dapp` на Android** не поддерживаются (заглушка).
-- **`wakuext_*` недоступен в `libstatus.so`** (`method does not exist`): после входа
-  `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` не отвечают. Чаты и каналы
-  на телефоне пока не работают.
+- **`nix develop` crashes with SIGSEGV (code 139)** — almost always because of
+  `LD_LIBRARY_PATH`/`CGO_*` from local experiments. The fix is `env -u …` (see
+  above).
+- **Nix does not use the `nix-cache.status.im` cache** — the user is not in
+  `trusted-users`, or the server is unreachable (HTTP 522). Fixes:
+  `trusted-users` or `--option substituters ''` (local build, slower).
+- **`libsds` d317821 does not build with the system Nim 2.2.4** (`unlisted
+  exception` in `sds_lifecycle_request.nim:41`). It builds through the `nim-sds`
+  flake (Nix path).
+- **`libtkl.nim:148` does not build with Nim 2.2.4** — Nim 2.2.10 is required.
+- **The managed copy of `nim-token-lists` is protected from edits**
+  (`scripts/tkl_native.sh` checks `git diff`). A local patch does not work there
+  — an upstream change or a decision to drop the check is needed.
+- **patchelf assertion `splitIndex != -1`** on some binaries. Workaround:
+  `--remove-rpath` + `--set-rpath`, or do not patch RPATH (`libsds.so` next to
+  it, `RPATH=$ORIGIN`).
+- **ldd segfaults on the library** during linuxdeploy. Workaround: a
+  `/tmp/bin/ldd` wrapper that answers "statically linked" for `libstatus.so`.
+- **`dApp` windows and `open_dapp` on Android** are not supported (stub).
+- **`wakuext_*` is unavailable in `libstatus.so`** (`method does not exist`):
+  after sign-in, `wakuext_chats`, `wakuext_communities`, `wakuext_contacts` do
+  not answer. Chats and channels on the phone do not work yet.
 
-## Интеграционные тесты (отдельно, не в CI)
+## Integration tests (separate, not in CI)
 
-Тесты лежат в `tests/integration/` и проверяют клиент на двух-трёх нодах.
-Каждая нода — отдельный процесс `tests/integration/libstatus_node.py`: это
-небольшой HTTP-фасад над `libstatus.so` (через `ctypes`), тот же код, что
-загружает приложение. Нужны `src-tauri/binaries/libstatus.so` и `libsds.so`
-(см. шаги 1–3 выше) и сеть.
+The tests live in `tests/integration/` and exercise the client on two or three
+nodes. Each node is a separate process of `tests/integration/libstatus_node.py`:
+a small HTTP facade over `libstatus.so` (through `ctypes`), the same code the
+application loads. Requires `src-tauri/binaries/libstatus.so` and `libsds.so`
+(see steps 1–3 above) and a network.
 
-Перед первой отправкой нода ждёт `WARMUP` секунд (по умолчанию 60): сообщение,
-отправленное до подключения к relay-пирам, теряется без ошибки.
+Before the first send, a node waits `WARMUP` seconds (60 by default): a message
+sent before connecting to relay peers is lost without an error.
 
 ```bash
-./tests/integration/contact.sh   # приглашение в контакты (pnpm test:integration)
-./tests/integration/chat.sh      # личный чат: сообщение и ответ
-./tests/integration/channel.sh   # каналы news / request / issues
-./tests/integration/wallet.sh    # перевод между нодами на локальной цепи
+./tests/integration/contact.sh   # contact invitation (pnpm test:integration)
+./tests/integration/chat.sh      # direct chat: message and reply
+./tests/integration/channel.sh   # news / request / issues channels
+./tests/integration/wallet.sh    # transfer between nodes on a local chain
 ```
 
-Общая обвязка — `tests/integration/lib.sh`: запуск ноды, создание профиля,
-вход, вызовы `CallRPC`. Переменные: `BASE_PORT` (порты нод, по умолчанию
-34500 и 34501), `TIMEOUT` (доставка через Waku, по умолчанию 120 с),
-`PASSWORD`, `KEEP=1` (не удалять каталог с логами нод после прогона).
+The shared harness is `tests/integration/lib.sh`: starting a node, creating a
+profile, signing in, `CallRPC` calls. Variables: `BASE_PORT` (node ports, 34500
+and 34501 by default), `TIMEOUT` (delivery through Waku, 120 s by default),
+`PASSWORD`, `KEEP=1` (do not delete the directory with node logs after the run).
 
-**Каналы** (`channel.sh`). Порядок шагов важен: сначала участник вступает,
-потом автор пишет посты. В этой сборке нет догоняющего запроса истории
-(`wakuext_requestCommunityInfoFromMailserver` отсутствует), поэтому посты,
-отправленные до вступления, участник не увидит. Типы:
-`news` — auto-accept; `request` и `issues` — по заявке (`MANUAL_ACCEPT`),
-владелец принимает её вызовом `wakuext_acceptRequestToJoinCommunity`.
-Право «посты пишет только автор» живёт в интерфейсе (`channelRights.ts`):
-status-go его не различает, поэтому на уровне API не проверяется.
+**Channels** (`channel.sh`). The order of the steps matters: first the
+participant joins, then the author writes posts. This build has no catching-up
+history request (`wakuext_requestCommunityInfoFromMailserver` is absent), so
+posts sent before joining are not seen by the participant. Types: `news` —
+auto-accept; `request` and `issues` — by request (`MANUAL_ACCEPT`), the owner
+accepts it by calling `wakuext_acceptRequestToJoinCommunity`. The "only the
+author writes posts" right lives in the interface (`channelRights.ts`):
+status-go does not distinguish it, so it is not enforced at the API level.
 
-**Кошелёк** (`wallet.sh`). Используется локальная цепь `anvil` с
-Sepolia-совместимым `chain-id 11155111` и подменённым RPC-провайдером
-(`networks_setChainUserRpcProviders`, `type: "user"`), поэтому реальная
-сеть и реальные средства не задействованы. Путь перевода — тот же, что в
-`src-tauri/src/transfer.rs`:
-`wallet_buildTransaction` → `wallet_signMessage` → `wallet_sendTransactionWithSignature`
-(подпись возвращается с `0x`, префикс надо снять). Проверка идёт в самой
-цепи (`cast balance`, `cast receipt status=1`). Кэш балансов в ноде на
-локальной цепи не обновляется: нода наполняет его своим встроенным
-провайдером сети, поэтому шаг «баланс в ноде» информационный.
+**Wallet** (`wallet.sh`). A local `anvil` chain with a Sepolia-compatible
+`chain-id 11155111` and a substituted RPC provider
+(`networks_setChainUserRpcProviders`, `type: "user"`) is used, so the real
+network and real funds are not involved. The transfer path is the same as in
+`src-tauri/src/transfer.rs`: `wallet_buildTransaction` → `wallet_signMessage` →
+`wallet_sendTransactionWithSignature` (the signature comes back with `0x`, the
+prefix has to be stripped). Verification happens in the chain itself
+(`cast balance`, `cast receipt status=1`). The balance cache in the node is not
+updated on a local chain: the node fills it with its built-in network provider,
+so the "balance in the node" step is informational.
 
-Для mainnet (`CHAIN_ID=1`) путь не работает: нода ходит только в свои
-встроенные провайдеры (Infura/Grove) и возвращает 401 — подменённый URL
-она для mainnet не использует.
+For mainnet (`CHAIN_ID=1`) the path does not work: the node only talks to its
+built-in providers (Infura/Grove) and returns 401 — it does not use the
+substituted URL for mainnet.
 
-**Доставка и код возврата.** Всё, что идёт через Waku, может не успеть за
-`TIMEOUT` — это сеть, а не ошибка формата. Поэтому тесты не входят ни в
-`pnpm test`, ни в CI: запускать отдельной командой.
+**Delivery and exit code.** Everything that goes through Waku may not finish
+within `TIMEOUT` — that is the network, not a format error. That is why the
+tests are in neither `pnpm test` nor CI: run them as a separate command.
 
-**Чего эти тесты не проверяют.** Интерфейс. Ошибки вида «чат остаётся
-pending после Accept», порядок сообщений, скрытые системные события — это
-уровень Svelte, для него есть `vitest` и ручные прогоны по
-`tests/scenarios/`.
+**What these tests do not check.** The interface. Errors like "the chat stays
+pending after Accept", message order, hidden system events — that is the Svelte
+level, served by `vitest` and manual runs through `tests/scenarios/`.
 
-## Проверка сборки (CI)
+## Build checks (CI)
 
-В CI (`.github/workflows/ci.yml`) сейчас: `pnpm check`, `pnpm lint`, `pnpm test`,
-`pnpm build`, AppStream-валидация, `cargo fmt --check`, `cargo clippy -D warnings`,
-`cargo test`. Артефакты Nix (`libstatus.so`, `libsds.so`) в CI **не собираются**:
-туда кладутся пустые файлы-заглушки, чтобы `tauri-build` проходил. Android-сборка в CI
-пока не настроена.
+CI (`.github/workflows/ci.yml`) currently runs: `pnpm check`, `pnpm lint`,
+`pnpm test`, `pnpm build`, AppStream validation, `cargo fmt --check`,
+`cargo clippy -D warnings`, `cargo test`. The Nix artifacts (`libstatus.so`,
+`libsds.so`) are **not built** in CI: empty stub files are put there so that
+`tauri-build` passes. The Android build is not configured in CI yet.
