@@ -1,4 +1,4 @@
-# release-windows.ps1 — установщик Stauri для Windows (NSIS).
+﻿# release-windows.ps1 — установщик Stauri для Windows (NSIS).
 #
 # Запуск из корня репозитория в Windows:
 #   .\scripts\release-windows.ps1 -Version 0.5.4
