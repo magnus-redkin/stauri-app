@@ -71,10 +71,13 @@ else
       fail "нет ассета: $need"
     fi
   done
-  if grep -qE "^stauri-app_${VERSION}_aarch64\.apk$" <<<"$NAMES"; then
-    ok "ассет: stauri-app_${VERSION}_aarch64.apk"
+  # The product is "Stauri"; releases up to 0.5.5 shipped `stauri-app_…` and the
+  # check stays tolerant so an old draft can still be completed.
+  APK_NAME="$(grep -Eo "(Stauri|stauri-app)_${VERSION}_aarch64\.apk" <<<"$NAMES" | head -1 || true)"
+  if [[ -n "$APK_NAME" ]]; then
+    ok "ассет: $APK_NAME"
   else
-    fail "нет ассета: stauri-app_${VERSION}_aarch64.apk"
+    fail "нет ассета: Stauri_${VERSION}_aarch64.apk"
   fi
   # Windows is a shipped platform: an installer without its signature leaves
   # Windows users without updates. RELEASE_ALLOW_MISSING_WINDOWS=1 publishes a

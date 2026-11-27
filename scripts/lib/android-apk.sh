@@ -85,7 +85,7 @@ if [[ ! -f "$APK_SRC" ]]; then
   echo "ERROR: APK не собран: $APK_SRC" >&2
   exit 1
 fi
-APK_PATH="$ROOT/src-tauri/target/release/bundle/apk/stauri-app_${VERSION}_aarch64.apk"
+APK_PATH="$ROOT/src-tauri/target/release/bundle/apk/Stauri_${VERSION}_aarch64.apk"
 mkdir -p "$(dirname "$APK_PATH")"
 cp "$APK_SRC" "$APK_PATH"
 echo "  apk: $(basename "$APK_PATH")"

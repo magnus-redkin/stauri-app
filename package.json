@@ -1,5 +1,5 @@
 {
-  "name": "tauri-app",
+  "name": "stauri",
   "version": "0.5.5",
   "description": "Stauri - lightweight Status client",
   "type": "module",

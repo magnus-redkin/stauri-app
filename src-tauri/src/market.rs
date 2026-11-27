@@ -60,7 +60,7 @@ pub async fn fetch_market_data() -> AppResult<Vec<MarketCoin>> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .user_agent(concat!(
-            "stauri-app/",
+            "Stauri/",
             env!("CARGO_PKG_VERSION"),
             " (+https://github.com/magnus-redkin/stauri-app)"
         ))

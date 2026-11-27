@@ -105,7 +105,7 @@ echo "  ANDROID_HOME=$ANDROID_HOME"
 # takes that path with RELEASE_ONLY_ANDROID=1, skipping everything but 7a.
 RELEASE_ONLY_ANDROID=1 ./scripts/release.sh "$VERSION"
 
-APK="$ROOT/src-tauri/target/release/bundle/apk/stauri-app_${VERSION}_aarch64.apk"
+APK="$ROOT/src-tauri/target/release/bundle/apk/Stauri_${VERSION}_aarch64.apk"
 if [[ ! -f "$APK" ]]; then
   echo "ERROR: APK не найден после сборки: $APK" >&2
   exit 1

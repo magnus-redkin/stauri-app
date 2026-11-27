@@ -310,7 +310,7 @@ echo "  libsds.so:  OK"
 echo
 echo "[5/8] Creating AppDir manually"
 
-APPDIR="$ROOT/src-tauri/target/release/bundle/appimage/stauri-app.AppDir"
+APPDIR="$ROOT/src-tauri/target/release/bundle/appimage/Stauri.AppDir"
 rm -rf "$APPDIR"
 # Remove the AppImage from a previous build: otherwise, if linuxdeploy fails,
 # the step-7 check finds the old file and reports success, shipping the previous
@@ -322,7 +322,7 @@ mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
 
 # Binaries
-cp "$TAURI_BIN"   "$APPDIR/usr/bin/stauri-app"
+cp "$TAURI_BIN"   "$APPDIR/usr/bin/Stauri"
 # libstatus is loaded by name from the executable's directory (`library_path`
 # in inprocess.rs), and libsds sits in usr/lib, reached through its RUNPATH.
 cp "$STATUS_LIB"  "$APPDIR/usr/bin/libstatus.so"
@@ -379,7 +379,7 @@ echo "  no /nix/store in dynamic section"
 # validation with `metainfo-filename-cid-mismatch` and `desktop-file-not-found`,
 # and linuxdeploy refuses to build the image.
 #
-# The icon is referenced by the bare name `stauri-app`, without a path, which is
+# The icon is referenced by the bare name `Stauri`, without a path, which is
 # how the window manager looks it up.
 DESKTOP_ID="com.magnus.stauri-app"
 cat > "$APPDIR/usr/share/applications/$DESKTOP_ID.desktop" << 'EOF'
@@ -388,12 +388,12 @@ Type=Application
 Name=Stauri
 GenericName=Status client
 Comment=Лёгкий клиент Status: чаты и кошелёк
-Exec=stauri-app %U
-Icon=stauri-app
+Exec=Stauri %U
+Icon=Stauri
 Terminal=false
 Categories=Network;InstantMessaging;
 Keywords=status;messenger;waku;ethereum;wallet;
-StartupWMClass=stauri-app
+StartupWMClass=Stauri
 EOF
 
 if [[ -n "$(command -v desktop-file-validate || true)" ]]; then
@@ -425,8 +425,8 @@ fi
 # only an identifier, not the text.
 LICENSE_FILE="$ROOT/LICENSE.md"
 if [[ -f "$LICENSE_FILE" ]]; then
-  mkdir -p "$APPDIR/usr/share/licenses/stauri-app"
-  cp "$LICENSE_FILE" "$APPDIR/usr/share/licenses/stauri-app/LICENSE.md"
+  mkdir -p "$APPDIR/usr/share/licenses/Stauri"
+  cp "$LICENSE_FILE" "$APPDIR/usr/share/licenses/Stauri/LICENSE.md"
   echo "  license: installed"
 else
   echo "  WARNING: LICENSE.md отсутствует — текст лицензии не попадёт в пакет" >&2
@@ -443,14 +443,14 @@ for size in 32 128 256 512; do
   esac
   if [[ -f "$src" ]]; then
     mkdir -p "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps"
-    cp "$src" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/stauri-app.png"
+    cp "$src" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/Stauri.png"
   fi
 done
 
 # Root icon: linuxdeploy uses it to tell that the AppDir is packaged correctly.
 ICON="$ROOT/src-tauri/icons/128x128.png"
 if [[ -f "$ICON" ]]; then
-  cp "$ICON" "$APPDIR/stauri-app.png"
+  cp "$ICON" "$APPDIR/Stauri.png"
 fi
 
 # AppRun: LD_LIBRARY_PATH to usr/lib (where libsds.so lives) and start tauri-app.
@@ -463,7 +463,7 @@ cat > "$APPDIR/AppRun" << 'EOF'
 HERE="$(dirname "$(readlink -f "${0}")")"
 unset LD_LIBRARY_PATH
 export LD_LIBRARY_PATH="$HERE/usr/lib"
-exec "$HERE/usr/bin/stauri-app" "$@"
+exec "$HERE/usr/bin/Stauri" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 

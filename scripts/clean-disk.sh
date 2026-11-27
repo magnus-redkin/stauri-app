@@ -98,7 +98,7 @@ human() {
 }
 
 RUNNING=""
-for p in stauri-app tauri-app cargo rustc; do
+for p in Stauri stauri-app tauri-app cargo rustc; do
   pgrep -x "$p" >/dev/null 2>&1 && RUNNING="$RUNNING $p"
 done
 if [[ -n "$RUNNING" ]]; then
