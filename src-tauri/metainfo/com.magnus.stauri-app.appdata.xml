@@ -66,6 +66,11 @@
 
   <releases>
     <!-- Версия подставляется release.sh из аргумента сборки. -->
+    <release version="0.5.5" date="2026-11-27">
+      <description>
+        <p>Сборка для Windows, автообновление лент и исправление запросов в контакты.</p>
+      </description>
+    </release>
     <release version="0.5.4" date="2026-11-25">
       <description>
         <p>Ленты Telegram с сохранением вёрстки, быстрый вход в профиль и исправления имён.</p>

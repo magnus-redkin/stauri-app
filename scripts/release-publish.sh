@@ -13,7 +13,10 @@
 #
 # Preconditions (always checked):
 #   - release v<VERSION> exists and is a draft;
-#   - the draft holds every asset: AppImage, .sha256, .sig, latest.json, APK;
+#   - the draft holds every asset: AppImage, .sha256, .sig, latest.json, APK,
+#     and the Windows installer with its .sig; latest.json carries the
+#     windows-x86_64 platform. RELEASE_ALLOW_MISSING_WINDOWS=1 turns the
+#     Windows assets into a printed warning (a Linux+Android release on purpose);
 #   - local tag v<VERSION> points at the application code in HEAD;
 #   - tag v<VERSION> is not on origin yet (or already points at the same commit);
 #   - the tree is clean.
@@ -72,6 +75,40 @@ else
     ok "ассет: stauri-app_${VERSION}_aarch64.apk"
   else
     fail "нет ассета: stauri-app_${VERSION}_aarch64.apk"
+  fi
+  # Windows is a shipped platform: an installer without its signature leaves
+  # Windows users without updates. RELEASE_ALLOW_MISSING_WINDOWS=1 publishes a
+  # Linux+Android release on purpose.
+  SETUP="$(grep -E -- '-setup\.exe$' <<<"$NAMES" | head -1 || true)"
+  if [[ -z "$SETUP" ]]; then
+    if [[ "${RELEASE_ALLOW_MISSING_WINDOWS:-0}" == "1" ]]; then
+      echo "  ! Windows-установщика нет (RELEASE_ALLOW_MISSING_WINDOWS=1: пропускаю)" >&2
+    else
+      fail "нет Windows-установщика (*-setup.exe) — соберите его на Windows и загрузите: scripts/release-windows-assets.sh $VERSION"
+    fi
+  else
+    ok "ассет: $SETUP"
+    if grep -qx "${SETUP}.sig" <<<"$NAMES"; then
+      ok "ассет: ${SETUP}.sig"
+    else
+      fail "нет ассета: ${SETUP}.sig"
+    fi
+    TMP_MANIFEST="$(mktemp)"
+    if gh release download "$TAG" --pattern latest.json --output "$TMP_MANIFEST" --clobber >/dev/null 2>&1; then
+      if python3 - "$TMP_MANIFEST" <<'PY'
+import json, sys
+platforms = json.load(open(sys.argv[1], encoding='utf-8')).get('platforms', {})
+sys.exit(0 if 'windows-x86_64' in platforms else 1)
+PY
+      then
+        ok "latest.json содержит windows-x86_64"
+      else
+        fail "latest.json без windows-x86_64 (запустите scripts/release-windows-assets.sh $VERSION)"
+      fi
+    else
+      fail "не удалось скачать latest.json из draft"
+    fi
+    rm -f "$TMP_MANIFEST"
   fi
 fi
 

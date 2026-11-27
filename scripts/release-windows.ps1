@@ -126,10 +126,12 @@ Write-Host "Артефакты в $outDir"
 Get-ChildItem $outDir | ForEach-Object { Write-Host ("  {0}  {1:N0} байт" -f $_.Name, $_.Length) }
 Write-Host ""
 if ($signed) {
-    Write-Host "На хосте: слейте latest.windows.json с linux-овским latest.json (тот же"
-    Write-Host "формат, объединяются только platforms) и выгрузите установщик, .sig и"
-    Write-Host "latest.json в draft; ключ платформы остаётся windows-x86_64."
+    Write-Host "На хосте: scripts/release-windows-assets.sh <версия> подпишет (если нужно),"
+    Write-Host "добавит windows-x86_64 в latest.json и выгрузит установщик, .sig и манифест"
+    Write-Host "в draft. Ключ платформы остаётся windows-x86_64."
 } else {
-    Write-Host "Подпишите установщик на хосте и добавьте строку windows-x86_64:"
-    Write-Host "  tauri signer sign -f ~/.tauri/stauri.key <installer>.exe"
+    Write-Host "Подпись обновления здесь не создана. Скопируйте установщик на Linux-хост"
+    Write-Host "в dist/windows-<версия>/ и запустите scripts/release-windows-assets.sh <версия>:"
+    Write-Host "он подпишет его ключом ~/.tauri/stauri.key и добавит windows-x86_64 в latest.json."
 }
+
