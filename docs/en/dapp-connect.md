@@ -98,3 +98,13 @@ The spike confirmed it: Extism 1.41 runs on `aarch64-linux-android` — the host
 4. `http:*` permissions: per-dApp host lists; whether to show concrete addresses to the user.
 5. Lifecycle: one window/page per dApp; background calls are deferred.
 6. A module signature separate from the manifest (Extism checks `hash`; a signature is ours).
+
+## 11. What is implemented (0.5.6-dev)
+
+- The dApps section: a "dApp manifest URL" field, install, the installed list with versions, Open and Remove.
+- Install: manifest over HTTPS → SHA-256 check of the module and `ui.tar.gz` → extraction that refuses absolute paths and `..` → atomic write to `dapps/<id>/<version>/` with a `current` pointer.
+- Run: Extism, WASI off, `allowed_hosts` empty, the memory cap from the manifest (256 pages by default), fuel per call, one host function `http_get_json` limited to the hosts in the `http:<host>` permissions, with a 60-second cache.
+- UI: served by a loopback server on a random port with a per-session token in the path, a network-less CSP; the bridge is `POST api/call` with `{function, input}`.
+- Extism needs rustc 1.96: the project pins it in `rust-toolchain.toml`.
+
+Not yet: an ed25519 manifest signature, a name registry and ENS, dApp windows on Android (desktop only for now), consent prompts for future "dangerous" host functions.
