@@ -39,7 +39,7 @@ libloading = "0.7"
 # reqwest с rustls: в дереве уже есть ring/rustls, поэтому сборка идёт офлайн
 # без openssl. Фича http2 не нужна — прокси работает по HTTP/1.1.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json", "blocking"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ansi", "time"] }
 tracing-appender = "0.2.5"
@@ -76,6 +76,13 @@ zeroize = "1"
 # зависимости, sha2 — тоже, поэтому сборка идёт офлайн.
 bs58 = "0.5"
 sha2 = "0.10"
+
+# dApp-плагины: модуль выполняется в песочнице Extism (src/dapps.rs), UI-бандл
+# отдаётся со своего origin по локальному HTTP.
+extism = "1.41"
+tar = "0.4"
+flate2 = "1"
+tiny_http = "0.12"
 
 # Рукопожатие в локальной сети (src/lanpair.rs).
 #

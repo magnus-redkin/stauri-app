@@ -60,6 +60,7 @@ mod commands;
 mod config;
 mod core;
 mod dapp;
+mod dapps;
 mod ens;
 mod env;
 mod invite;
@@ -157,6 +158,10 @@ pub fn run() {
             commands::status_rpc,
             commands::log_frontend,
             market::fetch_market_data,
+            dapps::dapp_install,
+            dapps::dapp_list,
+            dapps::dapp_open,
+            dapps::dapp_remove,
             core::seed::fetch_seed_phrase,
             core::seed::seed_word,
             core::seed::seed_challenge,

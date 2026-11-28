@@ -49,8 +49,15 @@
     channelTree,
   } from '$lib/stores/communitiesStore.svelte';
   import JoinCommunity from './JoinCommunity.svelte';
+  import { pluginsState, loadPlugins, installPlugin, openPlugin, removePlugin } from '$lib/stores/pluginsStore.svelte';
 
   const entries = $derived(filteredEntries());
+
+  // Installed dApp plugins are read once when the panel opens; install, open and remove
+  // refresh the list themselves.
+  $effect(() => {
+    if (!pluginsState.loaded) void loadPlugins();
+  });
 
   /**
    * Communities expanded into a channel tree.
@@ -204,6 +211,52 @@
         <p class="text-[0.6875rem] text-muted-foreground">
           {i18n.t('External dApps open in a separate window and cannot reach Stauri or your keys.')}
         </p>
+      </div>
+
+      <div class="p-4 border-b border-border">
+        <span class="font-bold text-primary">{i18n.t('Installed plugins')}</span>
+        <div class="mt-2 flex gap-2">
+          <input
+            bind:value={pluginsState.manifestUrl}
+            placeholder={i18n.t('dApp manifest URL (https://...)')}
+            onkeydown={(e) => { if (e.key === 'Enter') installPlugin(); }}
+            class="flex-1 h-9 border border-input rounded-md px-3 text-sm bg-background"
+          />
+          <button
+            onclick={() => installPlugin()}
+            disabled={pluginsState.isInstalling || !pluginsState.manifestUrl.trim()}
+            class="h-9 px-3 rounded-md bg-primary text-primary-foreground text-xs disabled:opacity-50 shrink-0"
+          >
+            {pluginsState.isInstalling ? i18n.t('Installing...') : i18n.t('Install')}
+          </button>
+        </div>
+        {#if pluginsState.error}
+          <p class="text-xs text-destructive mt-1">{pluginsState.error}</p>
+        {/if}
+        {#if pluginsState.items.length === 0}
+          <p class="text-xs text-muted-foreground mt-2">{i18n.t('No plugins installed')}</p>
+        {:else}
+          <ul class="mt-2 space-y-1">
+            {#each pluginsState.items as dapp (dapp.id)}
+              <li class="flex items-center gap-2 text-sm">
+                <span class="truncate">{dapp.name}</span>
+                <span class="text-xs text-muted-foreground">v{dapp.version}</span>
+                <button
+                  onclick={() => openPlugin(dapp.id)}
+                  class="ml-auto text-xs text-primary hover:underline"
+                >
+                  {i18n.t('Open')}
+                </button>
+                <button
+                  onclick={() => removePlugin(dapp.id)}
+                  class="text-xs text-muted-foreground hover:text-destructive"
+                >
+                  {i18n.t('Remove')}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
 
       <div class="p-4 border-b border-border">
