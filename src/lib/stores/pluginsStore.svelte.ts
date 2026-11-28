@@ -8,6 +8,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { formatError } from '$lib/utils/errors';
+import { warn } from '$lib/utils/log';
 
 /** One row of the section. Matches `DappEntry` in `src-tauri/src/dapps.rs`. */
 export interface DappEntry {
@@ -82,6 +83,7 @@ export async function openDapp(entry: DappEntry): Promise<void> {
     pluginsState.selected = entry;
   } catch (e) {
     pluginsState.error = formatError(e);
+    warn(`[dapp] open ${entry.id} failed:`, e);
   }
 }
 

@@ -33,6 +33,10 @@
     </button>
   </div>
 
+  {#if pluginsState.error}
+    <p class="px-3 pb-2 text-xs text-destructive">{pluginsState.error}</p>
+  {/if}
+
   <ScrollArea class="flex-1 min-h-0">
     <div class="p-2 space-y-1">
       <div class="px-2 pt-2 text-[0.6875rem] uppercase text-muted-foreground">{i18n.t('Added dApps')}</div>
