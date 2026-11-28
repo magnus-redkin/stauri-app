@@ -31,7 +31,7 @@
   import { contactsState, resetContacts, loadContacts, mergeContacts } from '$lib/stores/contactsStore.svelte';
   import { getChats } from '$lib/status/messaging';
   import { scenarioLog, short } from '$lib/utils/scenario';
-  import { chatsState, loadChats, selectChat, resetChats, setRightPanel, applyContacts, mergeSignalContacts } from '$lib/stores/chatsStore.svelte';
+  import { chatsState, loadChats, selectChat, resetChats, setRightPanel, setSelectedChat, applyContacts, mergeSignalContacts } from '$lib/stores/chatsStore.svelte';
   import { loadCommunities, resetCommunities } from '$lib/stores/communitiesStore.svelte';
   import { resetDapps, resetDappsView } from '$lib/stores/dappsStore.svelte';
   import { loadFeeds, resetFeeds, startFeedPolling } from '$lib/stores/feedsStore.svelte';
@@ -143,7 +143,23 @@
   let mobileEditProfile = $state(false);
   let mobileWalletAccounts = $state(false);
 
-  const noHistory = { canBack: false, canForward: false, back: () => {}, forward: () => {} };
+  /**
+   * History of the sections that have a second screen on a phone.
+   *
+   * @remarks
+   * A phone shows one pane, and the Chat section is two panes on a wide screen. Without
+   * a back step an opened chat replaced the list for good: the section had no history,
+   * the header had no arrow, and re-tapping the Chat item did nothing, so there was no
+   * way back to the list at all. Back closes the open chat and returns to the list.
+   */
+  const mobileHistoryBack = {
+    get canBack() {
+      return activeSection === 'chat' && !!chatsState.selected;
+    },
+    canForward: false,
+    back: () => setSelectedChat(null),
+    forward: () => {},
+  };
 
   const SECTION_TITLES: Record<string, string> = {
     home: 'Home', profile: 'Profile', chat: 'Chat', wallet: 'All accounts',
@@ -160,7 +176,12 @@
    * repeats the title.
    */
   const mobileTitle = $derived(
-    activeSection === 'profile' && mobileEditProfile ? i18n.t('Edit Profile') : sectionTitle(activeSection)
+    activeSection === 'profile' && mobileEditProfile
+      ? i18n.t('Edit Profile')
+      // With a chat open the header names it, next to the back arrow that returns to the list.
+      : activeSection === 'chat' && chatsState.selected
+        ? chatsState.selected.name || i18n.t('Chat')
+        : sectionTitle(activeSection)
   );
   // Open subsection of the About menu on Home; the right panel follows it.
   // null: Home shows only the two main buttons.
@@ -1745,9 +1766,13 @@
       pairingDigits = '';
       pairingError = '';
     }
-    // Chat always opens on search on the right, even if the section is already open
-    // (otherwise an invite or another form stays). An open chat is left untouched.
-    if (id === 'chat' && !chatsState.selected) setRightPanel('contacts');
+    // Chat always opens at its start: the list of chats. Tapping the item again while a
+    // chat is open returns to the list instead of doing nothing — a phone has no other
+    // way back, and without this the section stayed on one conversation for good.
+    if (id === 'chat') {
+      if (chatsState.selected) setSelectedChat(null);
+      else setRightPanel('contacts');
+    }
     if (id !== activeSection) return;
     if (id === 'dapps') resetDappsView();
   }
@@ -2151,7 +2176,7 @@ onSave={() => {
         content={mobileContent}
  actions={activeSection === 'chat' ? chatActions : activeSection === 'wallet' ? walletActions : activeSection === 'profile' ? profileActions : undefined}
  title={mobileTitle}
- history={noHistory}
+ history={mobileHistoryBack}
       />
     {:else}
     <div class="flex h-screen overflow-hidden">
