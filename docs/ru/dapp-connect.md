@@ -1,6 +1,6 @@
 # Подключение dApp-плагина к Stauri
 
-> Черновик, 2026-11-28. Реализации в Stauri ещё нет; процесс описан по итогам спайка на Android и первого плагина — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp).
+> Черновик, 2026-11-28. Реализации в Stauri ещё нет; процесс описан по итогам спайка на Android и первого плагина — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps).
 
 Дополняет `dapp-plugin.md`: там — требования и модель угроз, здесь — конкретный процесс подключения и контракт рантайма. Рантайм выбран — **Extism** (поверх wasmtime). Разделы 3–5 старого документа (собственный ABI) заменены разделом «Контракт» ниже.
 
@@ -58,7 +58,7 @@
 
 ## 6. Разработка плагина
 
-Репозиторий [stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp) — шаблон:
+Репозиторий [stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps) — шаблон:
 
 ```
 plugin/      Rust + extism-pdk: market_list() -> JSON

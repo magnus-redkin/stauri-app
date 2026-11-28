@@ -1,6 +1,6 @@
 # Ужесточение механизма dApp-плагинов
 
-> План, 2026-11-28. Исходные документы: `dapp-connect.md` (процесс и контракт), `dapp-plugin.md` (требования и модель угроз), `dapp-plugins.md` — по мере появления. Пример — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp).
+> План, 2026-11-28. Исходные документы: `dapp-connect.md` (процесс и контракт), `dapp-plugin.md` (требования и модель угроз), `dapp-plugins.md` — по мере появления. Пример — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps).
 
 ## 1. Где мы сейчас
 

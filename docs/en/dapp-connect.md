@@ -1,6 +1,6 @@
 # Connecting a dApp plugin to Stauri
 
-> Draft, 2026-11-28. Nothing is implemented in Stauri yet; the process follows the Android spike and the first plugin — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp).
+> Draft, 2026-11-28. Nothing is implemented in Stauri yet; the process follows the Android spike and the first plugin — [stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps).
 
 Complements `dapp-plugin.md`: that document holds the requirements and the threat model, this one the concrete connection process and the runtime contract. The runtime is chosen — **Extism** (on wasmtime). Sections 3–5 of the older document (a hand-written ABI) are superseded by "The contract" below.
 
@@ -58,7 +58,7 @@ v1 implements and exercises only `http_get_json` (Market); the rest arrives as n
 
 ## 6. Developing a plugin
 
-[stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp) is the template:
+[stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps) is the template:
 
 ```
 plugin/      Rust + extism-pdk: market_list() -> JSON

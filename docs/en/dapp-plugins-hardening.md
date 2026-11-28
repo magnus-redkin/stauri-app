@@ -1,6 +1,6 @@
 # Hardening the dApp plugin mechanism
 
-> Plan, 2026-11-28. Source documents: `dapp-connect.md` (process and contract), `dapp-plugin.md` (requirements and threat model). Example: [stauri-market-dapp](https://github.com/magnus-redkin/stauri-market-dapp).
+> Plan, 2026-11-28. Source documents: `dapp-connect.md` (process and contract), `dapp-plugin.md` (requirements and threat model). Example: [stauri-market-dapp](https://github.com/magnus-redkin/stauri-dapps).
 
 ## 1. Where we are
 
