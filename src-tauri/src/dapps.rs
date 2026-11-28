@@ -40,6 +40,8 @@ const DEFAULT_MAX_PAGES: u32 = 256;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a host-function response is reused.
 const CACHE_TTL: Duration = Duration::from_secs(60);
+/// Local addresses never go through the system proxy.
+const LOOPBACK: &str = "127.0.0.1,localhost,::1";
 
 /// The parts of an Extism manifest Stauri reads. Unknown fields are ignored so a
 /// dApp may carry its own data.
@@ -181,7 +183,7 @@ fn http_client() -> AppResult<reqwest::Client> {
         ));
     if let Some(proxy) = crate::sysproxy::proxy_url() {
         if let Ok(proxy) = reqwest::Proxy::all(&proxy) {
-            builder = builder.proxy(proxy);
+            builder = builder.proxy(proxy.no_proxy(reqwest::NoProxy::from_string(LOOPBACK)));
         }
     }
     builder
@@ -304,6 +306,15 @@ pub async fn dapp_install(manifest_url: String) -> AppResult<InstalledDapp> {
         let ui_dir = staging.join("ui");
         std::fs::create_dir_all(&ui_dir).map_err(|e| AppError::io(format!("ui: {e}")))?;
         extract_tar_gz(archive, &ui_dir)?;
+    }
+    // The module must instantiate in the same sandbox it will run in. A file whose hash
+    // matches but which does not load would install silently and fail only when opened.
+    if let Err(e) = build_plugin_at(&staging, Arc::new(Mutex::new(HashMap::new()))) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(AppError::network(format!(
+            "module does not load in the sandbox: {}",
+            e.message
+        )));
     }
     if target.exists() {
         std::fs::remove_dir_all(&target).map_err(|e| AppError::io(format!("{}: {e}", target.display())))?;
@@ -567,9 +578,19 @@ fn call_plugin(state: &ServerState, id: &str, function: &str, input: &str) -> Ap
     }
 }
 
-/// Builds the sandbox: WASI off, one host function, limits from the manifest.
+/// Builds the sandbox for an installed dApp.
 fn build_plugin(id: &str, cache: Arc<Mutex<HashMap<String, (Instant, String)>>>) -> AppResult<Plugin> {
-    let dir = dapp_dir(id)?;
+    build_plugin_at(&dapp_dir(id)?, cache)
+}
+
+/// Builds the sandbox from a directory that holds `module.wasm` and `manifest.json`.
+///
+/// WASI off, one host function, limits from the manifest. Used both on the installed
+/// copy and on a staged install, where it doubles as the "the module loads" check.
+fn build_plugin_at(
+    dir: &Path,
+    cache: Arc<Mutex<HashMap<String, (Instant, String)>>>,
+) -> AppResult<Plugin> {
     let manifest_bytes = std::fs::read(dir.join("manifest.json"))
         .map_err(|e| AppError::io(format!("manifest: {e}")))?;
     let manifest: DappManifest = serde_json::from_slice(&manifest_bytes)
@@ -641,7 +662,7 @@ fn blocking_fetch(url: &str) -> Result<String, Error> {
         .user_agent(concat!("Stauri/", env!("CARGO_PKG_VERSION")));
     if let Some(proxy) = crate::sysproxy::proxy_url() {
         if let Ok(proxy) = reqwest::Proxy::all(&proxy) {
-            builder = builder.proxy(proxy);
+            builder = builder.proxy(proxy.no_proxy(reqwest::NoProxy::from_string(LOOPBACK)));
         }
     }
     let client = builder.build().map_err(|e| Error::msg(format!("client: {e}")))?;
@@ -759,6 +780,147 @@ mod tests {
         extract_tar_gz(&gz, &dir).unwrap();
         assert_eq!(std::fs::read(dir.join("index.html")).unwrap(), b"hello");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---------- Negative scenarios ----------
+
+    use std::collections::HashMap as MapView;
+
+    /// A temporary data directory, set once for the whole test binary.
+    fn test_data_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stauri-dapp-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        appdirs::set_data_dir(dir.clone());
+        dir
+    }
+
+    /// Serves the given files over loopback and returns the base URL.
+    fn serve(files: MapView<String, Vec<u8>>) -> String {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                match files.get(&request.url().to_string()) {
+                    Some(body) => {
+                        let _ = request.respond(Response::from_data(body.clone()).with_status_code(200));
+                    }
+                    None => {
+                        let _ = request.respond(Response::from_data(b"missing".to_vec()).with_status_code(404));
+                    }
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn manifest(id: &str, wasm_url: &str, wasm_hash: &str, permissions: &str) -> Vec<u8> {
+        format!(
+            r#"{{"name":"{id}","version":"0.0.1","wasm":[{{"url":"{wasm_url}","hash":"{wasm_hash}"}}],"memory":{{"max_pages":256}},"stauri":{{"id":"{id}","permissions":[{permissions}],"exports":["market_list"]}}}}"#
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn a_wrong_hash_is_refused_and_nothing_is_installed() {
+        let root = test_data_dir();
+        let module = b"pretend wasm".to_vec();
+        let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
+        let bad = "0".repeat(64);
+        let body = manifest("badhash", &format!("{base}/module.wasm"), &bad, "");
+        let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
+        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        assert!(err.message.contains("hash mismatch"), "{}", err.message);
+        assert!(!root.join("dapps").join("badhash").exists());
+    }
+
+    #[tokio::test]
+    async fn a_missing_hash_is_refused() {
+        let _ = test_data_dir();
+        let module = b"pretend wasm".to_vec();
+        let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
+        let body = manifest("nohash", &format!("{base}/module.wasm"), "", "");
+        let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
+        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        assert!(err.message.contains("hash is missing"), "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn a_module_that_does_not_load_is_refused() {
+        let root = test_data_dir();
+        let module = b"this is not a wasm module".to_vec();
+        let digest = hex(&Sha256::digest(&module));
+        let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
+        let body = manifest("garbage", &format!("{base}/module.wasm"), &digest, "");
+        let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
+        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        assert!(err.message.contains("does not load"), "{}", err.message);
+        assert!(!root.join("dapps").join("garbage").join("current").exists());
+    }
+
+    #[tokio::test]
+    async fn a_manifest_404_is_refused() {
+        let _ = test_data_dir();
+        let base = serve(MapView::new());
+        let err = dapp_install(format!("{base}/absent.json")).await.unwrap_err();
+        assert!(err.message.contains("HTTP 404"), "{}", err.message);
+    }
+
+    #[test]
+    fn an_unknown_import_keeps_the_module_from_loading() {
+        // (module (type (func)) (import "env" "boom" (func (type 0))))
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        wasm.extend_from_slice(&[0x01, 0x05, 0x01, 0x60, 0x00, 0x00]);
+        wasm.extend_from_slice(&[0x02, 0x0c, 0x01, 0x03]);
+        wasm.extend_from_slice(b"env");
+        wasm.extend_from_slice(&[0x04]);
+        wasm.extend_from_slice(b"boom");
+        wasm.extend_from_slice(&[0x00, 0x00]);
+        let result = PluginBuilder::new(WasmManifest::new([Wasm::data(wasm)])).build();
+        assert!(result.is_err(), "a module with an unknown import must not load");
+    }
+
+    #[test]
+    fn a_wasi_import_keeps_the_module_from_loading() {
+        // (import "wasi_snapshot_preview1" "fd_write" ...) with WASI off.
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        wasm.extend_from_slice(&[0x01, 0x05, 0x01, 0x60, 0x00, 0x00]);
+        wasm.extend_from_slice(&[0x02, 0x23, 0x01, 0x16]);
+        wasm.extend_from_slice(b"wasi_snapshot_preview1");
+        wasm.extend_from_slice(&[0x08]);
+        wasm.extend_from_slice(b"fd_write");
+        wasm.extend_from_slice(&[0x00, 0x00]);
+        let result = PluginBuilder::new(WasmManifest::new([Wasm::data(wasm)])).build();
+        assert!(result.is_err(), "a WASI import must not load with WASI off");
+    }
+
+    #[tokio::test]
+    async fn a_host_not_listed_in_permissions_is_refused_at_call_time() {
+        // The Market module is a real plugin that calls http_get_json. Installed without the
+        // `http:` permission, the same call must fail rather than reach the network. Skipped
+        // when the sibling repository has not been built.
+        let wasm_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../stauri-market-dapp/dist/stauri-market-dapp.wasm");
+        let Ok(module) = std::fs::read(&wasm_path) else {
+            eprintln!("skipping: {} is absent", wasm_path.display());
+            return;
+        };
+        let _ = test_data_dir();
+        let digest = hex(&Sha256::digest(&module));
+        let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
+        let body = manifest("denied", &format!("{base}/module.wasm"), &digest, "");
+        let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
+        dapp_install(format!("{base2}/manifest.json")).await.unwrap();
+        let plugin = build_plugin("denied", Arc::new(Mutex::new(HashMap::new())))
+            .expect("sandbox builds");
+        let mut plugin = plugin;
+        let err = plugin.call::<&str, String>("market_list", "").unwrap_err();
+        // Extism's Display shows the wasm backtrace; the host reason is in the source chain.
+        let text = err
+            .chain()
+            .map(|cause| cause.to_string())
+            .collect::<Vec<_>>()
+            .join(": ");
+        assert!(text.contains("host not allowed"), "{text}");
     }
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {
