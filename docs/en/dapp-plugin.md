@@ -1,6 +1,8 @@
 # Stauri dApp plugins: sandbox and binary contract
 
 > Draft for discussion, 2026-11-27. Nothing is implemented; everything below is a proposal except section 0.
+>
+> The runtime is chosen — **Extism**; the module contract and the connection process are in `dapp-connect.md`. Sections 3–5 below are the original requirements, superseded by `dapp-connect.md`.
 
 ## 0. Decisions already made
 
