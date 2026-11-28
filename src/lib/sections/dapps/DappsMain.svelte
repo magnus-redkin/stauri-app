@@ -128,6 +128,12 @@
       Common: the plugin's own page in a frame. The page is served by Rust from the dApp
       directory on its own origin with a per-session token, so the frame cannot reach the
       Stauri DOM; the sandbox attribute removes top navigation and popups as well.
+
+      `allow-same-origin` is required, not optional. Without it the document gets the origin
+      `null`, and the bundle — a module script with `crossorigin`, which is what Vite emits —
+      is fetched as a cross-origin request and blocked by CORS: the panel stays blank. The
+      frame is still a different origin from the application, which is the boundary that
+      matters; the sandbox keeps blocking top navigation and popups.
     -->
     <div class="flex flex-col h-full min-h-0">
       <div class="shrink-0 p-3 border-b border-border flex items-center gap-2">
@@ -152,7 +158,7 @@
           class="flex-1 w-full border-0 bg-background"
           src={pluginsState.frameUrl}
           title={pluginsState.selected.name}
-          sandbox="allow-scripts allow-forms"
+          sandbox="allow-scripts allow-forms allow-same-origin"
         ></iframe>
       {:else}
         <p class="p-4 text-muted-foreground text-sm">{i18n.t('Opening...')}</p>
