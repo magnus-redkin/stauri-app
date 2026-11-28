@@ -1956,6 +1956,12 @@
         {/if}
       {:else if activeSection === 'wallet' && mobileWalletAccounts}
         <WalletLeft />
+      {:else if activeSection === 'dapps'}
+        {#if pluginsState.selected || pluginsState.view === 'add'}
+          {@render rightPane()}
+        {:else}
+          {@render leftPane()}
+        {/if}
       {:else}
  {@render rightPane()}
       {/if}
@@ -1981,11 +1987,7 @@
         {:else if activeSection === 'chat'}
                  <ChatLeft compact={isMobile} onSelectChat={(chat) => selectChat(chat.id)} />
  {:else if activeSection === 'dapps'}
-        {#if pluginsState.selected || pluginsState.view === 'add'}
-          {@render rightPane()}
-        {:else}
-          {@render leftPane()}
-        {/if}
+   <DappsLeft />
         {:else}
    <ProfileLeft
      compact={isMobile}
