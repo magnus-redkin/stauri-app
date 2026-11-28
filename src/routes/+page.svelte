@@ -134,6 +134,7 @@
   import ChatHeaderIcons from "$lib/sections/chat/ChatHeaderIcons.svelte";
   import ChatMain from "$lib/sections/chat/ChatMain.svelte";
   import DappsLeft from "$lib/sections/dapps/DappsLeft.svelte";
+  import { pluginsState, closeDapp } from '$lib/stores/pluginsStore.svelte';
   import DappsMain from "$lib/sections/dapps/DappsMain.svelte";
   import SectionPane from "$lib/sections/layout/SectionPane.svelte";
   import MobileShell from "$lib/sections/layout/MobileShell.svelte";
@@ -154,10 +155,18 @@
    */
   const mobileHistoryBack = {
     get canBack() {
-      return activeSection === 'chat' && !!chatsState.selected;
+      if (activeSection === 'chat') return !!chatsState.selected;
+      if (activeSection === 'dapps') return !!pluginsState.selected || pluginsState.view === 'add';
+      return false;
     },
     canForward: false,
-    back: () => setSelectedChat(null),
+    back: () => {
+      if (activeSection === 'chat') setSelectedChat(null);
+      if (activeSection === 'dapps') {
+        closeDapp();
+        pluginsState.view = 'list';
+      }
+    },
     forward: () => {},
   };
 
@@ -181,7 +190,11 @@
       // With a chat open the header names it, next to the back arrow that returns to the list.
       : activeSection === 'chat' && chatsState.selected
         ? chatsState.selected.name || i18n.t('Chat')
-        : sectionTitle(activeSection)
+        : activeSection === 'dapps' && pluginsState.selected
+          ? pluginsState.selected.name
+          : activeSection === 'dapps' && pluginsState.view === 'add'
+            ? i18n.t('Add a dApp')
+            : sectionTitle(activeSection)
   );
   // Open subsection of the About menu on Home; the right panel follows it.
   // null: Home shows only the two main buttons.
@@ -1773,6 +1786,11 @@
       if (chatsState.selected) setSelectedChat(null);
       else setRightPanel('contacts');
     }
+    // Same rule for dApps: the section opens at its list, not on the last plugin.
+    if (id === 'dapps') {
+      closeDapp();
+      pluginsState.view = 'list';
+    }
     if (id !== activeSection) return;
     if (id === 'dapps') resetDappsView();
   }
@@ -1963,7 +1981,11 @@
         {:else if activeSection === 'chat'}
                  <ChatLeft compact={isMobile} onSelectChat={(chat) => selectChat(chat.id)} />
  {:else if activeSection === 'dapps'}
-   <DappsLeft />
+        {#if pluginsState.selected || pluginsState.view === 'add'}
+          {@render rightPane()}
+        {:else}
+          {@render leftPane()}
+        {/if}
         {:else}
    <ProfileLeft
      compact={isMobile}

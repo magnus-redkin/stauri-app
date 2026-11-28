@@ -159,6 +159,7 @@ pub fn run() {
             commands::log_frontend,
             market::fetch_market_data,
             dapps::dapp_install,
+            dapps::dapp_add,
             dapps::dapp_list,
             dapps::dapp_open,
             dapps::dapp_remove,

@@ -27,7 +27,6 @@
   import {
     dappsState,
     dappExamples,
-    activateExample,
     resetDappsView,
   } from '$lib/stores/dappsStore.svelte';
   import {
@@ -48,15 +47,10 @@
     channelTree,
   } from '$lib/stores/communitiesStore.svelte';
   import JoinCommunity from './JoinCommunity.svelte';
-  import { pluginsState, loadPlugins, installPlugin, openPlugin, removePlugin } from '$lib/stores/pluginsStore.svelte';
+  import { pluginsState, addDapp, closeDapp, removeDapp, PLUGIN_EXAMPLES } from '$lib/stores/pluginsStore.svelte';
 
   const entries = $derived(filteredEntries());
 
-  // Installed dApp plugins are read once when the panel opens; install, open and remove
-  // refresh the list themselves.
-  $effect(() => {
-    if (!pluginsState.loaded) void loadPlugins();
-  });
 
   /**
    * Communities expanded into a channel tree.
@@ -129,59 +123,73 @@
 </script>
 
 <div class="h-full flex flex-col bg-card">
-  {#if dappsState.active === null}
+  {#if pluginsState.selected}
+    <!--
+      Common: the plugin's own page in a frame. The page is served by Rust from the dApp
+      directory on its own origin with a per-session token, so the frame cannot reach the
+      Stauri DOM; the sandbox attribute removes top navigation and popups as well.
+    -->
+    <div class="flex flex-col h-full min-h-0">
+      <div class="shrink-0 p-3 border-b border-border flex items-center gap-2">
+        <button
+          onclick={() => closeDapp()}
+          class="p-1.5 rounded-md border border-border hover:bg-secondary"
+          aria-label={i18n.t('Back')}
+          title={i18n.t('Back')}
+        >
+          ←
+        </button>
+        <span class="font-bold text-primary truncate">{pluginsState.selected.name}</span>
+        <button
+          onclick={() => pluginsState.selected && removeDapp(pluginsState.selected)}
+          class="ml-auto text-xs text-muted-foreground hover:text-destructive"
+        >
+          {i18n.t('Remove')}
+        </button>
+      </div>
+      {#if pluginsState.frameUrl}
+        <iframe
+          class="flex-1 w-full border-0 bg-background"
+          src={pluginsState.frameUrl}
+          title={pluginsState.selected.name}
+          sandbox="allow-scripts allow-forms"
+        ></iframe>
+      {:else}
+        <p class="p-4 text-muted-foreground text-sm">{i18n.t('Opening...')}</p>
+      {/if}
+    </div>
+  {:else if dappsState.active === null}
     <div class="flex-1 flex flex-col min-h-0">
       <div class="p-4 border-b border-border">
-        <span class="font-bold text-lg text-primary">{i18n.t('dApps')}</span>
+        <span class="font-bold text-lg text-primary">{i18n.t('Add a dApp')}</span>
         <p class="text-xs text-muted-foreground mt-1">
-          {i18n.t('Built-in ones stay in Stauri; external ones open in a separate window.')}
+          {i18n.t('A manifest installs a plugin; any other address opens in its own window.')}
         </p>
       </div>
 
-      <div class="p-4 border-b border-border">
-        <span class="font-bold text-primary">{i18n.t('Installed plugins')}</span>
-        <div class="mt-2 flex gap-2">
+      <div class="p-2 border-b border-border space-y-2">
+        <div class="flex gap-2">
           <input
-            bind:value={pluginsState.manifestUrl}
-            placeholder={i18n.t('dApp manifest URL (https://...)')}
-            onkeydown={(e) => { if (e.key === 'Enter') installPlugin(); }}
+            bind:value={pluginsState.addUrl}
+            placeholder={i18n.t('dApp address (https://...)')}
+            onkeydown={(e) => { if (e.key === 'Enter') addDapp(); }}
             class="flex-1 h-9 border border-input rounded-md px-3 text-sm bg-background"
           />
           <button
-            onclick={() => installPlugin()}
-            disabled={pluginsState.isInstalling || !pluginsState.manifestUrl.trim()}
+            onclick={() => addDapp()}
+            disabled={pluginsState.isAdding || !pluginsState.addUrl.trim()}
             class="h-9 px-3 rounded-md bg-primary text-primary-foreground text-xs disabled:opacity-50 shrink-0"
           >
-            {pluginsState.isInstalling ? i18n.t('Installing...') : i18n.t('Install')}
+            {pluginsState.isAdding ? i18n.t('Adding...') : i18n.t('Add')}
           </button>
         </div>
         {#if pluginsState.error}
-          <p class="text-xs text-destructive mt-1">{pluginsState.error}</p>
+          <p class="text-xs text-destructive">{pluginsState.error}</p>
         {/if}
-        {#if pluginsState.items.length === 0}
-          <p class="text-xs text-muted-foreground mt-2">{i18n.t('No plugins installed')}</p>
-        {:else}
-          <ul class="mt-2 space-y-1">
-            {#each pluginsState.items as dapp (dapp.id)}
-              <li class="flex items-center gap-2 text-sm">
-                <span class="truncate">{dapp.name}</span>
-                <span class="text-xs text-muted-foreground">v{dapp.version}</span>
-                <button
-                  onclick={() => openPlugin(dapp.id)}
-                  class="ml-auto text-xs text-primary hover:underline"
-                >
-                  {i18n.t('Open')}
-                </button>
-                <button
-                  onclick={() => removePlugin(dapp.id)}
-                  class="text-xs text-muted-foreground hover:text-destructive"
-                >
-                  {i18n.t('Remove')}
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
+        <!-- Non-dismissible: a plugin runs sandboxed, an external dApp never reaches Stauri. -->
+        <p class="text-[0.6875rem] text-muted-foreground">
+          {i18n.t('Plugins run sandboxed inside Stauri; external dApps open in a separate window without access to Stauri or your keys.')}
+        </p>
       </div>
 
       <div class="p-4 border-b border-border">
@@ -190,20 +198,31 @@
 
       <ScrollArea class="flex-1 min-h-0">
         <div class="p-2 space-y-1">
-          {#each dappExamples as example (example.id)}
+          {#each PLUGIN_EXAMPLES as example (example.id)}
             <button
-              onclick={() => activateExample(example)}
+              onclick={() => { pluginsState.addUrl = example.url; }}
+              class="w-full text-left p-3 rounded-md hover:bg-secondary transition-colors"
+            >
+              <div class="flex items-center gap-2">
+                <span class="text-base shrink-0">{example.icon}</span>
+                <span class="font-medium text-foreground truncate">{example.title}</span>
+                <span class="text-[0.625rem] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+                  {i18n.t('Plugin')}
+                </span>
+              </div>
+              <div class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{example.sub}</div>
+            </button>
+          {/each}
+          {#each dappExamples.filter((example) => example.kind === 'external') as example (example.id)}
+            <button
+              onclick={() => { pluginsState.addUrl = example.url ?? ''; }}
               class="w-full text-left p-3 rounded-md hover:bg-secondary transition-colors"
             >
               <div class="flex items-center gap-2">
                 <span class="text-base shrink-0">{example.icon}</span>
                 <span class="font-medium text-foreground truncate">{i18n.t(example.title)}</span>
                 <span class="text-[0.625rem] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
-                  {example.kind === 'builtin'
-                    ? i18n.t('Built-in')
-                    : example.kind === 'external'
-                      ? i18n.t('External')
-                      : i18n.t('Provider')}
+                  {i18n.t('External')}
                 </span>
               </div>
               <div class="text-xs text-muted-foreground mt-0.5 line-clamp-2">

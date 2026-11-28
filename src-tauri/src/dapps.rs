@@ -334,48 +334,161 @@ pub async fn dapp_install(manifest_url: String) -> AppResult<InstalledDapp> {
     })
 }
 
-/// Lists installed dApps with what the frontend needs to show them.
+/// One row of the dApps section: a connected plugin or an external dApp.
+#[derive(Debug, Clone, Serialize)]
+pub struct DappEntry {
+    pub id: String,
+    /// `plugin` — installed from a manifest; `external` — opened in its own window.
+    pub kind: String,
+    pub name: String,
+    pub version: Option<String>,
+    /// External dApps only: the address the window opens.
+    pub url: String,
+    pub has_ui: bool,
+}
+
+/// External dApps the user added. Stored next to the installed plugins, not inside
+/// them: an external dApp has no package, only an address.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExternalEntry {
+    id: String,
+    name: String,
+    url: String,
+}
+
+fn externals_path() -> AppResult<PathBuf> {
+    let base = appdirs::data_dir().ok_or_else(|| AppError::config("no application data directory"))?;
+    Ok(base.join("dapp_entries.json"))
+}
+
+fn read_externals() -> Vec<ExternalEntry> {
+    std::fs::read(externals_path().unwrap_or_default())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_externals(entries: &[ExternalEntry]) -> AppResult<()> {
+    let path = externals_path()?;
+    let bytes = serde_json::to_vec_pretty(entries)
+        .map_err(|e| AppError::internal(format!("external dApps: {e}")))?;
+    std::fs::write(&path, bytes).map_err(|e| AppError::io(format!("{}: {e}", path.display())))
+}
+
+/// Prefix that tells an external id from a plugin id.
+const EXTERNAL_PREFIX: &str = "ext-";
+
+/// A stable id for an external dApp: its host, with a prefix that keeps the two kinds
+/// apart. The host characters are already allowed by [`checked_id`].
+fn external_id(url: &url::Url) -> String {
+    let host = url.host_str().unwrap_or("dapp").to_ascii_lowercase();
+    format!("{EXTERNAL_PREFIX}{host}")
+}
+
+/// Whether an address is a manifest rather than a dApp page. Manifests are JSON; a dApp
+/// page is not. The extension is a hint, and a wrong one gives a clear install error.
+fn looks_like_manifest(url: &url::Url) -> bool {
+    url.path().trim_end_matches('/').ends_with(".json")
+}
+
+/// Lists plugins and external dApps in one list, alphabetical.
 #[tauri::command]
-pub fn dapp_list() -> AppResult<Vec<InstalledDapp>> {
-    let root = match dapps_root() {
-        Ok(root) => root,
-        Err(_) => return Ok(Vec::new()),
-    };
+pub fn dapp_list() -> AppResult<Vec<DappEntry>> {
     let mut result = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&root) else {
-        return Ok(result);
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
+    if let Ok(root) = dapps_root() {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let Ok(current) = std::fs::read_to_string(dir.join("current")) else {
+                    continue;
+                };
+                let version_dir = dir.join(current.trim());
+                let Ok(bytes) = std::fs::read(version_dir.join("manifest.json")) else {
+                    continue;
+                };
+                let Ok(manifest) = serde_json::from_slice::<DappManifest>(&bytes) else {
+                    continue;
+                };
+                result.push(DappEntry {
+                    id: manifest.stauri.id.clone(),
+                    kind: "plugin".into(),
+                    name: manifest.name,
+                    version: Some(manifest.version),
+                    url: String::new(),
+                    has_ui: manifest.stauri.ui.is_some(),
+                });
+            }
         }
-        let Ok(current) = std::fs::read_to_string(dir.join("current")) else {
-            continue;
-        };
-        let version_dir = dir.join(current.trim());
-        let Ok(bytes) = std::fs::read(version_dir.join("manifest.json")) else {
-            continue;
-        };
-        let Ok(manifest) = serde_json::from_slice::<DappManifest>(&bytes) else {
-            continue;
-        };
-        result.push(InstalledDapp {
-            id: manifest.stauri.id.clone(),
-            name: manifest.name,
-            version: manifest.version,
-            permissions: manifest.stauri.permissions,
-            exports: manifest.stauri.exports,
-            has_ui: manifest.stauri.ui.is_some(),
+    }
+    for external in read_externals() {
+        result.push(DappEntry {
+            id: external.id,
+            kind: "external".into(),
+            name: external.name,
+            version: None,
+            url: external.url,
+            has_ui: false,
         });
     }
     result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(result)
 }
 
-/// Removes a dApp: its code and its stored versions.
+/// Adds a dApp from the one address field.
+///
+/// # Errors
+/// `Config`/`Network` from the install when the address is a manifest; `Config` for a
+/// foreign address that is not a valid external dApp URL.
+#[tauri::command]
+pub async fn dapp_add(url: String) -> AppResult<DappEntry> {
+    let parsed = url::Url::parse(url.trim()).map_err(|e| AppError::config(format!("address: {e}")))?;
+    if looks_like_manifest(&parsed) {
+        let installed = dapp_install(url.trim().to_string()).await?;
+        return Ok(DappEntry {
+            id: installed.id,
+            kind: "plugin".into(),
+            name: installed.name,
+            version: Some(installed.version),
+            url: String::new(),
+            has_ui: installed.has_ui,
+        });
+    }
+    let parsed = crate::providers::validate_external_url(url.trim())?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let entry = ExternalEntry {
+        id: external_id(&parsed),
+        name: host.clone(),
+        url: parsed.to_string(),
+    };
+    let mut entries = read_externals();
+    entries.retain(|e| e.id != entry.id);
+    entries.push(entry.clone());
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    write_externals(&entries)?;
+    Ok(DappEntry {
+        id: entry.id,
+        kind: "external".into(),
+        name: entry.name,
+        version: None,
+        url: entry.url,
+        has_ui: false,
+    })
+}
+
+/// Removes a dApp: a plugin with all its versions, or an external entry.
 #[tauri::command]
 pub fn dapp_remove(id: String) -> AppResult<()> {
+    if let Some(rest) = id.strip_prefix(EXTERNAL_PREFIX) {
+        if rest.is_empty() {
+            return Err(AppError::config("invalid dApp id"));
+        }
+        let mut entries = read_externals();
+        entries.retain(|e| e.id != id);
+        return write_externals(&entries);
+    }
     let id = checked_id(&id)?;
     let dir = dapps_root()?.join(&id);
     if dir.exists() {
@@ -675,23 +788,18 @@ fn blocking_fetch(url: &str) -> Result<String, Error> {
 
 // ---------- Opening a dApp ----------
 
-/// Opens a dApp page in its own window and returns the address.
+/// Opens a dApp: creates a session and returns the page address for the in-app frame.
 ///
 /// # Errors
-/// `Config` when the dApp is unknown or has no UI bundle, `Internal` when the window or
-/// the loopback server cannot be created.
+/// `Config` when the dApp is unknown or has no UI bundle, `Internal` when the loopback
+/// server cannot be created.
 #[tauri::command]
-pub fn dapp_open(app: tauri::AppHandle, id: String) -> AppResult<String> {
+pub fn dapp_open(id: String) -> AppResult<String> {
     let id = checked_id(&id)?;
     let dir = dapp_dir(&id)?;
     if !dir.join("ui").join("index.html").is_file() {
         return Err(AppError::config(format!("dApp {id} has no UI bundle")));
     }
-    let manifest_bytes = std::fs::read(dir.join("manifest.json"))
-        .map_err(|e| AppError::io(format!("manifest: {e}")))?;
-    let manifest: DappManifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| AppError::config(format!("manifest: {e}")))?;
-
     let state = server()?;
     let token = new_token(&state);
     state
@@ -699,30 +807,60 @@ pub fn dapp_open(app: tauri::AppHandle, id: String) -> AppResult<String> {
         .lock()
         .map_err(|_| AppError::internal("dApp session lock poisoned"))?
         .insert(token.clone(), id.clone());
-    let url = format!("http://127.0.0.1:{}/s/{}/index.html", state.port, token);
-
-    #[cfg(desktop)]
-    {
-        use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-        let label = format!("dapp-{id}");
-        if let Some(window) = app.get_webview_window(&label) {
-            let _ = window.close();
-        }
-        let target = url
-            .parse()
-            .map_err(|e| AppError::internal(format!("dApp url: {e}")))?;
-        WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(target))
-            .title(format!("{} — Stauri dApp", manifest.name))
-            .inner_size(900.0, 700.0)
-            .build()
-            .map_err(|e| AppError::internal(format!("dApp window: {e}")))?;
-    }
-    Ok(url)
+    Ok(format!(
+        "http://127.0.0.1:{}/s/{}/index.html",
+        state.port, token
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap as MapView;
+
+    fn test_data_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("stauri-dapp-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        appdirs::set_data_dir(dir.clone());
+        dir
+    }
+
+    /// Serves the given files over loopback and returns the base URL.
+    fn serve(files: MapView<String, Vec<u8>>) -> String {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                match files.get(&request.url().to_string()) {
+                    Some(body) => {
+                        let _ = request
+                            .respond(Response::from_data(body.clone()).with_status_code(200));
+                    }
+                    None => {
+                        let _ = request
+                            .respond(Response::from_data(b"missing".to_vec()).with_status_code(404));
+                    }
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn manifest(id: &str, wasm_url: &str, wasm_hash: &str, permissions: &str) -> Vec<u8> {
+        format!(
+            r#"{{"name":"{id}","version":"0.0.1","wasm":[{{"url":"{wasm_url}","hash":"{wasm_hash}"}}],"memory":{{"max_pages":256}},"stauri":{{"id":"{id}","permissions":[{permissions}],"exports":["market_list"]}}}}"#
+        )
+        .into_bytes()
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
 
     #[test]
     fn ids_cannot_escape_the_data_directory() {
@@ -770,7 +908,9 @@ mod tests {
             header.set_size(5);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, "index.html", &b"hello"[..]).unwrap();
+            builder
+                .append_data(&mut header, "index.html", &b"hello"[..])
+                .unwrap();
             builder.finish().unwrap();
         }
         let gz = gzip(&tar);
@@ -782,44 +922,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---------- Negative scenarios ----------
-
-    use std::collections::HashMap as MapView;
-
-    /// A temporary data directory, set once for the whole test binary.
-    fn test_data_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("stauri-dapp-tests-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        appdirs::set_data_dir(dir.clone());
-        dir
-    }
-
-    /// Serves the given files over loopback and returns the base URL.
-    fn serve(files: MapView<String, Vec<u8>>) -> String {
-        let server = Server::http("127.0.0.1:0").unwrap();
-        let port = server.server_addr().to_ip().unwrap().port();
-        std::thread::spawn(move || {
-            for request in server.incoming_requests() {
-                match files.get(&request.url().to_string()) {
-                    Some(body) => {
-                        let _ = request.respond(Response::from_data(body.clone()).with_status_code(200));
-                    }
-                    None => {
-                        let _ = request.respond(Response::from_data(b"missing".to_vec()).with_status_code(404));
-                    }
-                }
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    fn manifest(id: &str, wasm_url: &str, wasm_hash: &str, permissions: &str) -> Vec<u8> {
-        format!(
-            r#"{{"name":"{id}","version":"0.0.1","wasm":[{{"url":"{wasm_url}","hash":"{wasm_hash}"}}],"memory":{{"max_pages":256}},"stauri":{{"id":"{id}","permissions":[{permissions}],"exports":["market_list"]}}}}"#
-        )
-        .into_bytes()
-    }
-
     #[tokio::test]
     async fn a_wrong_hash_is_refused_and_nothing_is_installed() {
         let root = test_data_dir();
@@ -828,7 +930,9 @@ mod tests {
         let bad = "0".repeat(64);
         let body = manifest("badhash", &format!("{base}/module.wasm"), &bad, "");
         let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
-        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        let err = dapp_install(format!("{base2}/manifest.json"))
+            .await
+            .unwrap_err();
         assert!(err.message.contains("hash mismatch"), "{}", err.message);
         assert!(!root.join("dapps").join("badhash").exists());
     }
@@ -840,7 +944,9 @@ mod tests {
         let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
         let body = manifest("nohash", &format!("{base}/module.wasm"), "", "");
         let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
-        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        let err = dapp_install(format!("{base2}/manifest.json"))
+            .await
+            .unwrap_err();
         assert!(err.message.contains("hash is missing"), "{}", err.message);
     }
 
@@ -852,9 +958,15 @@ mod tests {
         let base = serve(MapView::from([("/module.wasm".to_string(), module)]));
         let body = manifest("garbage", &format!("{base}/module.wasm"), &digest, "");
         let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
-        let err = dapp_install(format!("{base2}/manifest.json")).await.unwrap_err();
+        let err = dapp_install(format!("{base2}/manifest.json"))
+            .await
+            .unwrap_err();
         assert!(err.message.contains("does not load"), "{}", err.message);
-        assert!(!root.join("dapps").join("garbage").join("current").exists());
+        assert!(!root
+            .join("dapps")
+            .join("garbage")
+            .join("current")
+            .exists());
     }
 
     #[tokio::test]
@@ -881,7 +993,6 @@ mod tests {
 
     #[test]
     fn a_wasi_import_keeps_the_module_from_loading() {
-        // (import "wasi_snapshot_preview1" "fd_write" ...) with WASI off.
         let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         wasm.extend_from_slice(&[0x01, 0x05, 0x01, 0x60, 0x00, 0x00]);
         wasm.extend_from_slice(&[0x02, 0x23, 0x01, 0x16]);
@@ -895,11 +1006,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_host_not_listed_in_permissions_is_refused_at_call_time() {
-        // The Market module is a real plugin that calls http_get_json. Installed without the
-        // `http:` permission, the same call must fail rather than reach the network. Skipped
-        // when the sibling repository has not been built.
         let wasm_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stauri-market-dapp/dist/stauri-market-dapp.wasm");
+            .join("../stauri-dapps/market/dist/market.wasm");
         let Ok(module) = std::fs::read(&wasm_path) else {
             eprintln!("skipping: {} is absent", wasm_path.display());
             return;
@@ -910,11 +1018,9 @@ mod tests {
         let body = manifest("denied", &format!("{base}/module.wasm"), &digest, "");
         let base2 = serve(MapView::from([("/manifest.json".to_string(), body)]));
         dapp_install(format!("{base2}/manifest.json")).await.unwrap();
-        let plugin = build_plugin("denied", Arc::new(Mutex::new(HashMap::new())))
-            .expect("sandbox builds");
-        let mut plugin = plugin;
+        let mut plugin =
+            build_plugin("denied", Arc::new(Mutex::new(HashMap::new()))).expect("sandbox builds");
         let err = plugin.call::<&str, String>("market_list", "").unwrap_err();
-        // Extism's Display shows the wasm backtrace; the host reason is in the source chain.
         let text = err
             .chain()
             .map(|cause| cause.to_string())
@@ -923,12 +1029,17 @@ mod tests {
         assert!(text.contains("host not allowed"), "{text}");
     }
 
-    fn gzip(bytes: &[u8]) -> Vec<u8> {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
-        use std::io::Write;
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(bytes).unwrap();
-        encoder.finish().unwrap()
+    #[test]
+    fn an_address_ending_with_json_is_a_manifest() {
+        let manifest_url = url::Url::parse("https://example.com/x/manifest.json").unwrap();
+        let page = url::Url::parse("https://remix.ethereum.org").unwrap();
+        assert!(looks_like_manifest(&manifest_url));
+        assert!(!looks_like_manifest(&page));
+    }
+
+    #[test]
+    fn an_external_id_is_prefixed_and_stable() {
+        let url = url::Url::parse("https://remix.ethereum.org/#code").unwrap();
+        assert_eq!(external_id(&url), "ext-remix.ethereum.org");
     }
 }
