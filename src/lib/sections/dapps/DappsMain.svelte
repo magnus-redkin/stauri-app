@@ -27,7 +27,6 @@
   import {
     dappsState,
     dappExamples,
-    openDapp,
     activateExample,
     resetDappsView,
   } from '$lib/stores/dappsStore.svelte';
@@ -87,18 +86,6 @@
   let joining = $state(false);
 
   /**
-   * The dApp address input.
-   *
-   * It takes focus as soon as the examples screen is shown: that is the first thing done in
-   * this section, and an extra click is pointless. The `$effect` also runs when returning
-   * from the directory — the section stays the same while the screen changes.
-   */
-  let dappInput = $state<HTMLInputElement | null>(null);
-  $effect(() => {
-    if (dappsState.active === null) dappInput?.focus();
-  });
-
-  /**
    * The feed address input.
    *
    * Same principle: opening the provider puts the cursor in the field so a URL can be
@@ -144,72 +131,10 @@
 <div class="h-full flex flex-col bg-card">
   {#if dappsState.active === null}
     <div class="flex-1 flex flex-col min-h-0">
-      <!--
-        The address bar belongs to the examples screen only. Sharing it with the feed
-        provider puts two address inputs side by side, and a Telegram channel link ends up
-        in the dApp field. The field is part of "choose what to open", not a header for the
-        whole section.
-      -->
-      <div class="p-2 border-b border-border space-y-2">
-        <div class="flex gap-2">
-          <input
-            bind:value={dappsState.dappUrl}
-            placeholder={i18n.t('dApp address (https://...)')}
-            onkeydown={(e) => { if (e.key === 'Enter') openDapp(); }}
-            class="flex-1 h-9 border border-input rounded-md px-3 text-sm bg-background"
-          />
-          <button
-            onclick={() => openDapp()}
-            disabled={!dappsState.dappUrl.trim()}
-            class="h-9 px-3 rounded-md bg-primary text-primary-foreground text-xs disabled:opacity-50 shrink-0"
-          >
-            {i18n.t('Open')}
-          </button>
-        </div>
-        {#if dappsState.dappError}
-          <p class="text-xs text-destructive">{dappsState.dappError}</p>
-        {/if}
-        <!--
-          The warning cannot be dismissed (docs §12): the user must know that a foreign
-          window cannot reach Stauri, but that the app is also not responsible for what that
-          window shows. It is always visible rather than shown once — "don't ask again" here
-          would mean "forget that this is foreign code".
-        -->
-        <p class="text-[0.6875rem] text-muted-foreground">
-          {i18n.t('External dApps open in a separate window and cannot reach Stauri or your keys.')}
-        </p>
-      </div>
-
       <div class="p-4 border-b border-border">
         <span class="font-bold text-lg text-primary">{i18n.t('dApps')}</span>
         <p class="text-xs text-muted-foreground mt-1">
           {i18n.t('Built-in ones stay in Stauri; external ones open in a separate window.')}
-        </p>
-      </div>
-
-      <div class="p-2 border-b border-border space-y-2">
-        <div class="flex gap-2">
-          <input
-            bind:value={dappsState.dappUrl}
-            bind:this={dappInput}
-            placeholder={i18n.t('dApp address (https://...)')}
-            onkeydown={(e) => { if (e.key === 'Enter') openDapp(); }}
-            class="flex-1 h-9 border border-input rounded-md px-3 text-sm bg-background"
-          />
-          <button
-            onclick={() => openDapp()}
-            disabled={!dappsState.dappUrl.trim()}
-            class="h-9 px-3 rounded-md bg-primary text-primary-foreground text-xs disabled:opacity-50 shrink-0"
-          >
-            {i18n.t('Open')}
-          </button>
-        </div>
-        {#if dappsState.dappError}
-          <p class="text-xs text-destructive">{dappsState.dappError}</p>
-        {/if}
-        <!-- Same non-dismissible warning as the block above. -->
-        <p class="text-[0.6875rem] text-muted-foreground">
-          {i18n.t('External dApps open in a separate window and cannot reach Stauri or your keys.')}
         </p>
       </div>
 
